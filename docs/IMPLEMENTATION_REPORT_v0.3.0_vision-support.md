@@ -174,7 +174,9 @@ Compose continues to use `image: letta-vision:latest` (operator rebuilds after p
 
 3. **Docker image pinning** — Compose still uses `letta-vision:latest`; operators should rebuild from tag or we pin `letta-vision:v0.3.0` in a follow-up.
 
-4. **Version string in health** — Container still reports upstream `0.16.8` in `/v1/health/`; fork line is tagged `v0.3.0` in git, not embedded in server binary yet.
+4. **Version string in health** — Fixed post-v0.3.0: `pyproject.toml` and `LETTA_VERSION` (compose default `0.3.0`) drive `/v1/health/`.
+
+5. **Registry audit (post-v0.3.0)** — 33 flagged models were glob expansion of 12 FR families, not extra entries. One over-inclusion found: `o3*` matched `o3-mini` (no API vision). Tightened to `o3`, `o3-pro*`, `o3-2025-*` (excludes `o3-mini*`); `o4*` narrowed to `o4-mini*` only.
 
 ---
 

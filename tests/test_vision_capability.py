@@ -30,6 +30,25 @@ def test_registry_text_only():
     assert not model_supports_vision("meta-llama/llama-3.1-8b-instruct")
 
 
+def test_registry_rejects_legacy_and_mini_traps():
+    """Glob patterns must not flag known text-only or non-vision API models."""
+    traps = [
+        ("gpt-4", "openai/gpt-4"),
+        ("gpt-4-turbo", "openai/gpt-4-turbo"),
+        ("claude-3-5-sonnet-20241022", "anthropic/claude-3-5-sonnet-20241022"),
+        ("o3-mini", "openai/o3-mini"),
+        ("o3-mini-2025-01-31", "openai/o3-mini-2025-01-31"),
+    ]
+    for model, handle in traps:
+        assert not model_supports_vision(model, handle), f"false positive: {model}"
+
+
+def test_registry_includes_full_o3_not_mini():
+    assert model_supports_vision("o3", handle="openai/o3")
+    assert model_supports_vision("o3-pro", handle="openai/o3-pro")
+    assert model_supports_vision("o3-2025-04-16", handle="openai/o3-2025-04-16")
+
+
 def test_validate_rejects_unsupported_media_type():
     tiny = base64.standard_b64encode(b"x").decode()
     mc = MessageCreate(

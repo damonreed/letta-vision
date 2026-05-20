@@ -2,6 +2,15 @@
 Curated vision-capability registry for LLM models.
 
 Single source of truth for supports_vision flags and README documentation.
+
+There are 12 registry rows (FR §3.1). A live catalog may show ~30 entries with
+supports_vision=true because dated variants expand via globs (e.g. six gpt-4o*
+snapshots). Over-inclusion is worse than under-inclusion: a false positive lets
+the client attach images and the provider may silently degrade.
+
+Patterns are intentionally conservative:
+- o3-mini* is excluded (text/reasoning-only on the API; o3 and o3-pro have vision)
+- gpt-4 / claude-3 / llama must not match (see tests/test_vision_capability.py)
 """
 
 from __future__ import annotations
@@ -12,16 +21,23 @@ from letta.settings import settings
 
 # (provider label, model id or pattern) — patterns use shell-style globs (*)
 VISION_CAPABLE_MODELS: list[tuple[str, str]] = [
+    # OpenRouter — empirically validated (smoke test)
     ("OpenRouter", "moonshotai/kimi-k2.6"),
     ("OpenRouter", "moonshotai/kimi-k2.5"),
+    # OpenAI — FR §3.1 families; globs expand dated catalog entries only
     ("OpenAI", "gpt-4o*"),
     ("OpenAI", "gpt-4.1*"),
-    ("OpenAI", "o1*"),
-    ("OpenAI", "o3*"),
-    ("OpenAI", "o4*"),
+    ("OpenAI", "o1"),
+    ("OpenAI", "o1-*"),
+    ("OpenAI", "o3"),
+    ("OpenAI", "o3-pro*"),
+    ("OpenAI", "o3-2025-*"),
+    ("OpenAI", "o4-mini*"),
+    # Anthropic — Claude 4 multimodal line
     ("Anthropic", "claude-opus-4-*"),
     ("Anthropic", "claude-sonnet-4-*"),
     ("Anthropic", "claude-haiku-4-*"),
+    # Google — when provider is configured
     ("Google", "gemini-2.5-pro*"),
     ("Google", "gemini-2.5-flash*"),
 ]

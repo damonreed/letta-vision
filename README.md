@@ -143,6 +143,8 @@ This fork adds vision contract hardening on top of upstream Letta multimodal con
 
 Operators can add custom models: `LETTA_VISION_MODELS_EXTRA=my-custom-llava-v1,my-finetuned-qwen-vl` (comma-separated).
 
+Glob patterns expand dated catalog entries (e.g. many `gpt-4o-*` snapshots). `o3-mini` is intentionally excluded (no API vision). Health reports fork version via `LETTA_VERSION` (default `0.3.0` in this repo).
+
 ### Limits
 
 | Variable | Default |

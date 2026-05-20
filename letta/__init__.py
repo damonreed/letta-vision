@@ -4,8 +4,8 @@ from importlib.metadata import PackageNotFoundError, version
 try:
     __version__ = version("letta")
 except PackageNotFoundError:
-    # Fallback for development installations
-    __version__ = "0.16.7"
+    # Fallback for development / Docker installs without package metadata
+    __version__ = "0.3.0"
 
 if os.environ.get("LETTA_VERSION"):
     __version__ = os.environ["LETTA_VERSION"]
