@@ -7,6 +7,7 @@ import time
 from typing import Any, AsyncIterator, List, Optional
 
 import httpx
+from httpx import Timeout
 import openai
 from openai import AsyncOpenAI, AsyncStream, OpenAI
 from openai.types import Reasoning
@@ -66,9 +67,19 @@ from letta.schemas.openai.chat_completion_response import (
 from letta.schemas.openai.responses_request import ResponsesRequest
 from letta.schemas.response_format import JsonSchemaResponseFormat
 from letta.schemas.usage import LettaUsageStatistics
-from letta.settings import model_settings
+from letta.settings import model_settings, settings
 
 logger = get_logger(__name__)
+
+
+def _openai_client_timeout(*, streaming: bool = False) -> Timeout | float:
+    """Apply LETTA_LLM_* timeout settings to OpenAI-compatible clients (incl. OpenRouter)."""
+    read = (
+        settings.llm_stream_timeout_seconds
+        if streaming
+        else settings.llm_request_timeout_seconds
+    )
+    return Timeout(connect=5.0, read=read, write=read, pool=read)
 
 
 def is_openai_reasoning_model(model: str) -> bool:
@@ -204,6 +215,7 @@ class OpenAIClient(LLMClientBase):
 
         # The OpenAI client requires some API key value
         kwargs["api_key"] = kwargs.get("api_key") or "DUMMY_API_KEY"
+        kwargs["timeout"] = _openai_client_timeout(streaming=False)
 
         return kwargs
 
@@ -212,6 +224,7 @@ class OpenAIClient(LLMClientBase):
         # supposedly the openai python client requires a dummy API key
         api_key = api_key or "DUMMY_API_KEY"
         kwargs = {"api_key": api_key, "base_url": embedding_config.embedding_endpoint}
+        kwargs["timeout"] = _openai_client_timeout(streaming=False)
         return kwargs
 
     async def _prepare_client_kwargs_async(self, llm_config: LLMConfig) -> dict:
@@ -240,6 +253,7 @@ class OpenAIClient(LLMClientBase):
                 kwargs["default_headers"] = headers
 
         kwargs["api_key"] = kwargs.get("api_key") or "DUMMY_API_KEY"
+        kwargs["timeout"] = _openai_client_timeout(streaming=True)
 
         return kwargs
 
