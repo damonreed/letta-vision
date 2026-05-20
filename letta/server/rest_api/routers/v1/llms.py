@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, List, Optional
 from fastapi import APIRouter, Depends, Query
 
 from letta.schemas.enums import ProviderCategory, ProviderType
+from letta.llm_api.model_registry import model_supports_vision
 from letta.schemas.model import EmbeddingModel, Model
 from letta.server.rest_api.dependencies import HeaderParams, get_headers, get_letta_server
 
@@ -36,7 +37,12 @@ async def list_llm_models(
     )
 
     # Convert all models to the new Model schema
-    return [Model.from_llm_config(model) for model in models]
+    return [
+        Model.from_llm_config(
+            model.model_copy(update={"supports_vision": model_supports_vision(model.model, handle=model.handle)})
+        )
+        for model in models
+    ]
 
 
 @router.get("/embedding", response_model=List[EmbeddingModel], operation_id="list_embedding_models")

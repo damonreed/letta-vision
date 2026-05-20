@@ -120,3 +120,36 @@ Letta is an open source project built by over a hundred contributors from around
 ---
 
 ***Legal notices**: By using Letta and related Letta services (such as the Letta endpoint or hosted service), you are agreeing to our [privacy policy](https://www.letta.com/privacy-policy) and [terms of service](https://www.letta.com/terms-of-service).*
+
+
+## Vision support
+
+This fork adds vision contract hardening on top of upstream Letta multimodal content blocks.
+
+### Behavior (v1)
+
+- Image content blocks are stored **inline** in message history (base64 in `source.data` with `source.type = "letta"` and `file_id`).
+- Heavy image workflows hit context limits quickly; v2 will add lazy fetch via `GET /api/files/{file_id}`.
+
+### Vision-capable models (registry)
+
+| Provider | Model ID / pattern |
+|----------|-------------------|
+| OpenRouter | `moonshotai/kimi-k2.6` |
+| OpenRouter | `moonshotai/kimi-k2.5` |
+| OpenAI | `gpt-4o*`, `gpt-4.1*`, `o1*`, `o3*`, `o4*` |
+| Anthropic | `claude-opus-4-*`, `claude-sonnet-4-*`, `claude-haiku-4-*` |
+| Google | `gemini-2.5-pro*`, `gemini-2.5-flash*` |
+
+Operators can add custom models: `LETTA_VISION_MODELS_EXTRA=my-custom-llava-v1,my-finetuned-qwen-vl` (comma-separated).
+
+### Limits
+
+| Variable | Default |
+|----------|---------|
+| `LETTA_MAX_IMAGE_BYTES` | 20 MiB |
+| `LETTA_MAX_MESSAGE_BYTES` | 80 MiB |
+| `LETTA_LLM_REQUEST_TIMEOUT_SECONDS` | 300 |
+| `LETTA_LLM_RETRY_ON_TIMEOUT` | false |
+
+Sending images to a non-vision model returns **422** (not silent text degradation).

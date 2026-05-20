@@ -205,6 +205,20 @@ class LettaImageFetchError(LettaError):
         )
 
 
+class LettaMessageTooLargeError(LettaError):
+    """Inbound message or image exceeds configured size limits."""
+
+    def __init__(self, message: str):
+        super().__init__(message=message, code=ErrorCode.INVALID_ARGUMENT, details={"validation_error": message})
+
+
+class LettaVisionCapabilityError(LettaError):
+    """Agent model does not support vision but message contains image blocks."""
+
+    def __init__(self, message: str = "This agent's model does not support image inputs."):
+        super().__init__(message=message, code=ErrorCode.INVALID_ARGUMENT, details={"validation_error": message})
+
+
 class LettaMCPError(LettaError):
     """Base error for MCP-related issues."""
 

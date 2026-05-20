@@ -67,6 +67,7 @@ from letta.schemas.openai.chat_completion_response import (
 from letta.schemas.openai.responses_request import ResponsesRequest
 from letta.schemas.response_format import JsonSchemaResponseFormat
 from letta.schemas.usage import LettaUsageStatistics
+from letta.llm_api.model_registry import merge_provider_preferences
 from letta.settings import model_settings, settings
 
 logger = get_logger(__name__)
@@ -216,6 +217,7 @@ class OpenAIClient(LLMClientBase):
         # The OpenAI client requires some API key value
         kwargs["api_key"] = kwargs.get("api_key") or "DUMMY_API_KEY"
         kwargs["timeout"] = _openai_client_timeout(streaming=False)
+        kwargs["max_retries"] = settings.llm_max_retries
 
         return kwargs
 
@@ -254,6 +256,7 @@ class OpenAIClient(LLMClientBase):
 
         kwargs["api_key"] = kwargs.get("api_key") or "DUMMY_API_KEY"
         kwargs["timeout"] = _openai_client_timeout(streaming=True)
+        kwargs["max_retries"] = settings.llm_max_retries
 
         return kwargs
 
@@ -749,6 +752,10 @@ class OpenAIClient(LLMClientBase):
                 "ignore": ["deepinfra/fp4", "ambient/fp8", "io-net/fp8", "phala", "siliconflow/fp8"],
             }
             request_data["extra_body"] = existing_extra
+
+        if is_openrouter and llm_config.provider_preferences:
+            existing_extra = request_data.get("extra_body", {})
+            request_data["extra_body"] = merge_provider_preferences(llm_config, existing_extra)
 
         return request_data
 

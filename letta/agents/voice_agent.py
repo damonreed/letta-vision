@@ -161,7 +161,8 @@ class VoiceAgent(BaseAgent):
             llm_config=agent_state.llm_config,
         )
         letta_message_db_queue = await create_input_messages(
-            input_messages=input_messages, agent_id=agent_state.id, timezone=agent_state.timezone, run_id=None, actor=self.actor
+            input_messages=input_messages, agent_id=agent_state.id, timezone=agent_state.timezone, run_id=None, actor=self.actor,
+            agent_llm_config=agent_state.llm_config,
         )
         in_memory_message_history = self.pre_process_input_message(input_messages)
 

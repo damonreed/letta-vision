@@ -42,6 +42,8 @@ from letta.errors import (
     LettaExpiredError,
     LettaImageFetchError,
     LettaInvalidArgumentError,
+    LettaMessageTooLargeError,
+    LettaVisionCapabilityError,
     LettaInvalidMCPSchemaError,
     LettaMCPConnectionError,
     LettaMCPTimeoutError,
@@ -548,6 +550,7 @@ def create_application() -> "FastAPI":
     _error_handler_408 = partial(error_handler_with_code, code=408)
     _error_handler_409 = partial(error_handler_with_code, code=409)
     _error_handler_410 = partial(error_handler_with_code, code=410)
+    _error_handler_413 = partial(error_handler_with_code, code=413)
     _error_handler_415 = partial(error_handler_with_code, code=415)
     _error_handler_422 = partial(error_handler_with_code, code=422)
     _error_handler_500 = partial(error_handler_with_code, code=500)
@@ -559,6 +562,8 @@ def create_application() -> "FastAPI":
     app.add_exception_handler(LettaToolNameConflictError, _error_handler_400)
     app.add_exception_handler(AgentFileImportError, _error_handler_400)
     app.add_exception_handler(EmbeddingConfigRequiredError, _error_handler_400)
+    app.add_exception_handler(LettaMessageTooLargeError, _error_handler_413)
+    app.add_exception_handler(LettaVisionCapabilityError, _error_handler_422)
     app.add_exception_handler(LettaImageFetchError, _error_handler_400)
     app.add_exception_handler(ContextWindowExceededError, _error_handler_400)
     app.add_exception_handler(ValueError, _error_handler_400)

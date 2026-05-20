@@ -127,8 +127,15 @@ letta:
   # LLM Timeouts (LETTA_LLM_*)
   # =============================================================================
   llm:
-    request_timeout_seconds: 60.0
+    request_timeout_seconds: 300.0
     stream_timeout_seconds: 600.0
+    max_retries: 1
+    retry_on_timeout: false
+
+  # Vision (LETTA_VISION_MODELS_EXTRA, LETTA_MAX_IMAGE_BYTES, LETTA_MAX_MESSAGE_BYTES)
+  vision_models_extra: null
+  max_image_bytes: 20971520
+  max_message_bytes: 83886080
 
   # =============================================================================
   # Pinecone (LETTA_PINECONE_*, LETTA_ENABLE_PINECONE, LETTA_UPSERT_PINECONE_INDICES)

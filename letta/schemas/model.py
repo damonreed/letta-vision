@@ -93,6 +93,10 @@ class Model(LLMConfig, ModelBase):
     provider_category: Optional[ProviderCategory] = Field(
         None, description="Deprecated: The provider category for the model.", deprecated=True
     )
+    supports_vision: bool = Field(False, description="Whether this model accepts image content blocks.")
+    provider_preferences: Optional[dict] = Field(
+        None, description="OpenRouter provider routing preferences for this model."
+    )
 
     @classmethod
     def from_llm_config(cls, llm_config: "LLMConfig") -> "Model":
@@ -125,6 +129,8 @@ class Model(LLMConfig, ModelBase):
             tier=llm_config.tier,
             parallel_tool_calls=llm_config.parallel_tool_calls,
             provider_category=llm_config.provider_category,
+            supports_vision=llm_config.supports_vision,
+            provider_preferences=llm_config.provider_preferences,
         )
 
     @property

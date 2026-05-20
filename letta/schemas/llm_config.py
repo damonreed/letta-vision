@@ -135,6 +135,14 @@ class LLMConfig(BaseModel):
         description="SGLang tool call parser name (e.g. 'glm47', 'qwen25', 'hermes'). "
         "Used by the SGLang native adapter to parse tool calls from raw model output.",
     )
+    supports_vision: bool = Field(
+        False,
+        description="Whether this model accepts image content blocks. Populated from the vision model registry at list time.",
+    )
+    provider_preferences: Optional[dict] = Field(
+        None,
+        description="OpenRouter provider routing preferences (passed as the 'provider' field in the request body).",
+    )
 
     @model_validator(mode="before")
     @classmethod

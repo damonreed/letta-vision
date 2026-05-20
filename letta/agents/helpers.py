@@ -87,7 +87,12 @@ async def _prepare_in_context_messages_async(
 
     # Create a new user message from the input and store it
     input_msgs = await create_input_messages(
-        input_messages=input_messages, agent_id=agent_state.id, timezone=agent_state.timezone, run_id=run_id, actor=actor
+        input_messages=input_messages,
+        agent_id=agent_state.id,
+        timezone=agent_state.timezone,
+        run_id=run_id,
+        actor=actor,
+        agent_llm_config=agent_state.llm_config,
     )
     new_in_context_messages = await message_manager.create_many_messages_async(
         input_msgs,
@@ -281,7 +286,8 @@ async def _prepare_in_context_messages_no_persist_async(
                     )
                 ]
                 new_in_context_messages = await create_input_messages(
-                    input_messages=keep_alive_messages, agent_id=agent_state.id, timezone=agent_state.timezone, run_id=run_id, actor=actor
+                    input_messages=keep_alive_messages, agent_id=agent_state.id, timezone=agent_state.timezone, run_id=run_id, actor=actor,
+                    agent_llm_config=agent_state.llm_config,
                 )
                 return current_in_context_messages, new_in_context_messages
             logger.warn(
@@ -301,7 +307,8 @@ async def _prepare_in_context_messages_no_persist_async(
             logger.warning(f"Filtered {len(skipped)} non-MessageCreate follow-up messages: {[type(m).__name__ for m in skipped]}")
         if follow_up:
             follow_up_messages = await create_input_messages(
-                input_messages=follow_up, agent_id=agent_state.id, timezone=agent_state.timezone, run_id=run_id, actor=actor
+                input_messages=follow_up, agent_id=agent_state.id, timezone=agent_state.timezone, run_id=run_id, actor=actor,
+                agent_llm_config=agent_state.llm_config,
             )
             new_in_context_messages.extend(follow_up_messages)
     else:
@@ -311,7 +318,8 @@ async def _prepare_in_context_messages_no_persist_async(
 
         # Create a new user message from the input but dont store it yet
         new_in_context_messages = await create_input_messages(
-            input_messages=input_messages, agent_id=agent_state.id, timezone=agent_state.timezone, run_id=run_id, actor=actor
+            input_messages=input_messages, agent_id=agent_state.id, timezone=agent_state.timezone, run_id=run_id, actor=actor,
+            agent_llm_config=agent_state.llm_config,
         )
 
     return current_in_context_messages, new_in_context_messages

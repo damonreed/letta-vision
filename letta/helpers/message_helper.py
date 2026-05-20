@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import json
 import mimetypes
 from urllib.parse import urlparse
 
@@ -89,6 +90,89 @@ def _parse_data_image_url(url: str) -> tuple[str, str]:
         raise LettaImageFetchError(url=url[:100] + "...", reason="Invalid data URL format") from exc
 
 
+ALLOWED_IMAGE_MEDIA_TYPES = frozenset({"image/jpeg", "image/png", "image/webp", "image/gif"})
+
+
+def _iter_image_blocks(content) -> list:
+    from letta.schemas.letta_message_content import ImageContent
+
+    if isinstance(content, list):
+        return [c for c in content if isinstance(c, ImageContent)]
+    return []
+
+
+def _message_has_image_blocks(message_create: MessageCreate) -> bool:
+    return bool(_iter_image_blocks(message_create.content if isinstance(message_create.content, list) else []))
+
+
+def _estimate_message_bytes(message_create: MessageCreate) -> int:
+    if isinstance(message_create.content, str):
+        return len(message_create.content.encode("utf-8"))
+    try:
+        payload = [
+            c.model_dump() if hasattr(c, "model_dump") else c
+            for c in message_create.content
+        ]
+        return len(json.dumps(payload).encode("utf-8"))
+    except Exception:
+        return len(str(message_create.content).encode("utf-8"))
+
+
+def _decoded_image_size_bytes(data: str) -> int:
+    import binascii
+
+    try:
+        return len(base64.standard_b64decode(data, validate=True))
+    except (binascii.Error, ValueError):
+        padded = data + "=" * (-len(data) % 4)
+        return len(base64.standard_b64decode(padded))
+
+
+def validate_message_creates_for_vision(
+    message_creates: list[MessageCreate],
+    agent_llm_config,
+) -> None:
+    """Validate inbound image blocks before LLM invocation."""
+    from letta.errors import LettaInvalidArgumentError, LettaMessageTooLargeError, LettaVisionCapabilityError
+    from letta.llm_api.model_registry import model_supports_vision
+    from letta.schemas.letta_message_content import ImageContent
+    from letta.settings import settings
+
+    has_images = any(_message_has_image_blocks(mc) for mc in message_creates)
+    if has_images and agent_llm_config is not None:
+        if not model_supports_vision(agent_llm_config.model, handle=agent_llm_config.handle):
+            raise LettaVisionCapabilityError(
+                "This agent's model does not support image inputs. Switch to a vision-capable model."
+            )
+
+    max_image = settings.max_image_bytes
+    max_message = settings.max_message_bytes
+
+    for mc in message_creates:
+        if _estimate_message_bytes(mc) > max_message:
+            raise LettaMessageTooLargeError(
+                f"Message body exceeds maximum size of {max_message} bytes."
+            )
+        if not isinstance(mc.content, list):
+            continue
+        for block in mc.content:
+            if not isinstance(block, ImageContent):
+                continue
+            media_type = getattr(block.source, "media_type", None) or ""
+            if media_type not in ALLOWED_IMAGE_MEDIA_TYPES:
+                raise LettaInvalidArgumentError(
+                    f"Unsupported image media_type '{media_type}'. Allowed: {', '.join(sorted(ALLOWED_IMAGE_MEDIA_TYPES))}.",
+                    argument_name="media_type",
+                )
+            data = getattr(block.source, "data", None) or ""
+            if not data:
+                raise LettaInvalidArgumentError("Image content block requires non-empty base64 data.", argument_name="data")
+            if _decoded_image_size_bytes(data) > max_image:
+                raise LettaMessageTooLargeError(
+                    f"Image exceeds maximum size of {max_image} bytes."
+                )
+
+
 async def convert_message_creates_to_messages(
     message_creates: list[MessageCreate],
     agent_id: str,
@@ -96,7 +180,10 @@ async def convert_message_creates_to_messages(
     run_id: str,
     wrap_user_message: bool = True,
     wrap_system_message: bool = True,
+    agent_llm_config=None,
 ) -> list[Message]:
+    if agent_llm_config is not None:
+        validate_message_creates_for_vision(message_creates, agent_llm_config)
     # Process all messages concurrently
     tasks = [
         _convert_message_create_to_message(

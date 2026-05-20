@@ -426,9 +426,30 @@ class Settings(BaseSettings):
     mistral_api_key: Optional[str] = None
 
     # LLM request timeout settings (model + embedding model)
-    llm_request_timeout_seconds: float = Field(default=60.0, ge=10.0, le=1800.0, description="Timeout for LLM requests in seconds")
+    llm_request_timeout_seconds: float = Field(default=300.0, ge=10.0, le=1800.0, description="Timeout for LLM requests in seconds")
     llm_stream_timeout_seconds: float = Field(
         default=600.0, ge=10.0, le=1800.0, description="Timeout for LLM streaming requests in seconds"
+    )
+    llm_max_retries: int = Field(default=1, ge=0, le=10, description="Retries on transient LLM failures (connection error, 5xx)")
+    llm_retry_on_timeout: bool = Field(
+        default=False,
+        description="If true, retry once when an LLM request times out. Default false to avoid double-billing.",
+    )
+
+    # Vision support
+    vision_models_extra: Optional[str] = Field(
+        default=None,
+        description="Comma-separated model IDs/handles to flag as vision-capable (merged into registry at startup).",
+    )
+    max_image_bytes: int = Field(
+        default=20 * 1024 * 1024,
+        ge=1,
+        description="Maximum decoded size per inbound image content block (bytes).",
+    )
+    max_message_bytes: int = Field(
+        default=80 * 1024 * 1024,
+        ge=1,
+        description="Maximum serialized size per inbound message body (bytes).",
     )
 
     # For embeddings

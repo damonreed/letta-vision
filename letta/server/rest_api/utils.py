@@ -157,7 +157,12 @@ def capture_sentry_exception(e: BaseException):
 
 
 async def create_input_messages(
-    input_messages: List[MessageCreate], agent_id: str, timezone: str, run_id: str, actor: User
+    input_messages: List[MessageCreate],
+    agent_id: str,
+    timezone: str,
+    run_id: str,
+    actor: User,
+    agent_llm_config=None,
 ) -> List[Message]:
     """
     Converts a user input message into the internal structured format.
@@ -167,7 +172,13 @@ async def create_input_messages(
     """
 
     messages = await convert_message_creates_to_messages(
-        input_messages, agent_id, timezone, run_id, wrap_user_message=False, wrap_system_message=False
+        input_messages,
+        agent_id,
+        timezone,
+        run_id,
+        wrap_user_message=False,
+        wrap_system_message=False,
+        agent_llm_config=agent_llm_config,
     )
     return messages
 
