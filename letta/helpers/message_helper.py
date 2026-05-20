@@ -122,7 +122,7 @@ def _decoded_image_size_bytes(data: str) -> int:
     import binascii
 
     try:
-        return len(base64.standard_b64decode(data, validate=True))
+        return len(base64.standard_b64decode(data))
     except (binascii.Error, ValueError):
         padded = data + "=" * (-len(data) % 4)
         return len(base64.standard_b64decode(padded))

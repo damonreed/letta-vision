@@ -1,4 +1,6 @@
 import base64
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 from letta.errors import LettaInvalidArgumentError, LettaMessageTooLargeError, LettaVisionCapabilityError
@@ -38,15 +40,16 @@ def test_validate_rejects_unsupported_media_type():
         validate_message_creates_for_vision([mc], _llm_config("moonshotai/kimi-k2.6"))
 
 
-def test_validate_rejects_oversized_image(monkeypatch):
-    monkeypatch.setattr("letta.helpers.message_helper.settings.max_image_bytes", 16)
-    data = base64.standard_b64encode(b"0123456789abcdef").decode()
+def test_validate_rejects_oversized_image():
+    mock_settings = MagicMock(max_image_bytes=16, max_message_bytes=80 * 1024 * 1024)
+    data = base64.standard_b64encode(b"0123456789abcdef" + b"x").decode()
     mc = MessageCreate(
         role=MessageRole.user,
         content=[ImageContent(source=Base64Image(media_type="image/png", data=data))],
     )
-    with pytest.raises(LettaMessageTooLargeError):
-        validate_message_creates_for_vision([mc], _llm_config("moonshotai/kimi-k2.6"))
+    with patch("letta.settings.settings", mock_settings):
+        with pytest.raises(LettaMessageTooLargeError):
+            validate_message_creates_for_vision([mc], _llm_config("moonshotai/kimi-k2.6"))
 
 
 def test_validate_rejects_non_vision_model():
