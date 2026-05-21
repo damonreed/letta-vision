@@ -1,17 +1,35 @@
 from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMessageToolCall, Function
 
-from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMessageToolCall, Function
-
 from letta.llm_api.openai_client import fill_image_content_in_messages, fill_image_content_in_responses_input
-from letta.schemas.openai.chat_completion_request import cast_message_to_subtype
 from letta.schemas.enums import MessageRole
-from letta.schemas.letta_message_content import Base64Image, ImageContent, TextContent
-from letta.schemas.message import Message, ToolReturn
+from letta.schemas.letta_message_content import Base64Image, ImageContent, LettaImage, TextContent
+from letta.schemas.message import Message, ToolReturn, user_content_to_openai_chat_content
+from letta.schemas.openai.chat_completion_request import cast_message_to_subtype
 
 
 def _user_message_with_image_first(text: str) -> Message:
     image = ImageContent(source=Base64Image(media_type="image/png", data="dGVzdA=="))
     return Message(role=MessageRole.user, content=[image, TextContent(text=text)])
+
+
+def _letta_stored_image_message(text: str | None = None) -> Message:
+    """Simulates persisted history: base64 inbound rewritten to LettaImage with inline data."""
+    image = ImageContent(
+        source=LettaImage(
+            file_id="file-test-001",
+            data="dGVzdA==",
+            media_type="image/jpeg",
+        )
+    )
+    if text:
+        return Message(role=MessageRole.user, content=[TextContent(text=text), image])
+    return Message(role=MessageRole.user, content=[image])
+
+
+def _user_content_has_image_url(content) -> bool:
+    if isinstance(content, list):
+        return any(part.get("type") == "image_url" for part in content)
+    return False
 
 
 def test_to_openai_dicts_include_user_image_url_parts():
@@ -22,6 +40,114 @@ def test_to_openai_dicts_include_user_image_url_parts():
     assert isinstance(content, list)
     assert any(part["type"] == "image_url" for part in content)
     assert any(part["type"] == "text" and "what is in this image?" in part["text"] for part in content)
+
+
+def test_to_openai_dict_text_only_user_unchanged():
+    message = Message(role=MessageRole.user, content=[TextContent(text="hello only")])
+    serialized = Message.to_openai_dicts_from_list([message])
+    assert serialized[0]["content"] == "hello only"
+
+
+def test_to_openai_dict_image_only_user_has_image_url_not_placeholder():
+    message = Message(role=MessageRole.user, content=[ImageContent(source=Base64Image(media_type="image/png", data="dGVzdA=="))])
+    serialized = Message.to_openai_dicts_from_list([message])
+    content = serialized[0]["content"]
+    assert isinstance(content, list)
+    assert _user_content_has_image_url(content)
+    assert "[Image Here]" not in str(content)
+
+
+def test_to_openai_dict_letta_image_persisted_in_history():
+    message = _letta_stored_image_message("Describe this.")
+    serialized = Message.to_openai_dicts_from_list([message])
+    content = serialized[0]["content"]
+    assert isinstance(content, list)
+    assert _user_content_has_image_url(content)
+    image_parts = [p for p in content if p["type"] == "image_url"]
+    assert "image/jpeg" in image_parts[0]["image_url"]["url"]
+
+
+def test_to_openai_dict_multiple_images_preserved():
+    img1 = ImageContent(source=Base64Image(media_type="image/png", data="Zm9v"))
+    img2 = ImageContent(source=Base64Image(media_type="image/png", data="YmFy"))
+    message = Message(role=MessageRole.user, content=[img1, TextContent(text="compare"), img2])
+    serialized = Message.to_openai_dicts_from_list([message])
+    content = serialized[0]["content"]
+    assert sum(1 for p in content if p["type"] == "image_url") == 2
+
+
+def test_multi_turn_history_serializes_each_user_image():
+    """Every historical user turn with an image must emit image_url in the LLM payload."""
+    turn1 = _letta_stored_image_message("First image.")
+    turn2 = Message(role=MessageRole.user, content=[TextContent(text="Follow-up without new image.")])
+    turn3 = _letta_stored_image_message("Second image.")
+    history = [
+        Message(role=MessageRole.system, content=[TextContent(text="system")]),
+        turn1,
+        Message(role=MessageRole.assistant, content=[TextContent(text="I see the first image.")]),
+        turn2,
+        Message(role=MessageRole.assistant, content=[TextContent(text="Noted.")]),
+        turn3,
+    ]
+    serialized = Message.to_openai_dicts_from_list(history)
+    user_rows = [m for m in serialized if m["role"] == "user"]
+    assert len(user_rows) == 3
+    assert _user_content_has_image_url(user_rows[0]["content"])
+    assert user_rows[1]["content"] == "Follow-up without new image."
+    assert _user_content_has_image_url(user_rows[2]["content"])
+
+
+def test_v030_fill_bailed_on_tool_expand_but_current_serializer_preserves_images():
+    """Regression guard for v0.3.0: fill_image bailed when tool rows expanded; user dict used text placeholders."""
+    image = ImageContent(source=Base64Image(media_type="image/png", data="dGVzdA=="))
+    user = Message(role=MessageRole.user, content=[TextContent(text="see this"), image])
+    tool_msg = Message(
+        role=MessageRole.tool,
+        tool_returns=[
+            ToolReturn(tool_call_id="call-a", status="success", func_response="ok"),
+            ToolReturn(tool_call_id="call-b", status="success", func_response="done"),
+        ],
+    )
+    pydantic_messages = [tool_msg, user]
+    openai_messages = Message.to_openai_dicts_from_list(pydantic_messages)
+    assert len(openai_messages) == 3
+    assert len(openai_messages) != len(pydantic_messages)
+
+    # Simulate v0.3.0 serialized user row (text placeholder) + old fill bail on length mismatch
+    v030_openai = [
+        {"role": "tool", "content": "ok", "tool_call_id": "call-a"},
+        {"role": "tool", "content": "done", "tool_call_id": "call-b"},
+        {"role": "user", "content": "see this [Image omitted]"},
+    ]
+
+    def _v030_fill(openai_list, pydantic_list):
+        if len(openai_list) != len(pydantic_list):
+            return openai_list
+        return fill_image_content_in_messages(openai_list, pydantic_list)
+
+    assert _v030_fill(v030_openai, pydantic_messages)[2]["content"] == "see this [Image omitted]"
+
+    # Current path: to_openai_dict emits multimodal user content without relying on fill
+    user_rows = [m for m in openai_messages if m.get("role") == "user"]
+    assert _user_content_has_image_url(user_rows[0]["content"])
+
+
+def test_user_content_to_openai_chat_content_letta_dict():
+    content = [
+        {"type": "text", "text": "hi"},
+        {
+            "type": "image",
+            "source": {
+                "type": "letta",
+                "file_id": "file-x",
+                "data": "dGVzdA==",
+                "media_type": "image/jpeg",
+            },
+        },
+    ]
+    parts = user_content_to_openai_chat_content(content)
+    assert isinstance(parts, list)
+    assert any(p["type"] == "image_url" and "image/jpeg" in p["image_url"]["url"] for p in parts)
 
 
 def test_fill_image_content_in_messages_handles_pydantic_openai_rows():
@@ -64,6 +190,24 @@ def test_fill_image_content_in_messages_pairs_user_messages_when_tool_rows_expan
     assert any(part["type"] == "image_url" for part in user_rows[0]["content"])
 
 
+def test_tool_return_with_image_serializes_multimodal():
+    image = ImageContent(source=Base64Image(media_type="image/png", data="dGVzdA=="))
+    tool_msg = Message(
+        role=MessageRole.tool,
+        tool_returns=[
+            ToolReturn(
+                tool_call_id="call-img",
+                status="success",
+                func_response=[TextContent(text="screenshot"), image],
+            )
+        ],
+    )
+    serialized = Message.to_openai_dicts_from_list([tool_msg])
+    assert len(serialized) == 1
+    assert serialized[0]["role"] == "tool"
+    assert any(p["type"] == "image_url" for p in serialized[0]["content"])
+
+
 def test_to_openai_responses_dicts_handles_image_first_content():
     message = _user_message_with_image_first("hello world")
     serialized = Message.to_openai_responses_dicts_from_list([message])
@@ -85,6 +229,29 @@ def test_to_openai_responses_dicts_handles_image_only_content():
     serialized = Message.to_openai_responses_dicts_from_list([message])
     parts = serialized[0]["content"]
     assert parts[0]["type"] == "input_image"
+
+
+def test_to_anthropic_dict_user_letta_image():
+    message = _letta_stored_image_message("What is this?")
+    serialized = message.to_anthropic_dict(
+        current_model="anthropic/claude-sonnet-4-5-20250929",
+        put_inner_thoughts_in_kwargs=False,
+    )
+    assert serialized["role"] == "user"
+    assert any(p["type"] == "image" for p in serialized["content"])
+    image_block = next(p for p in serialized["content"] if p["type"] == "image")
+    assert image_block["source"]["data"] == "dGVzdA=="
+    assert image_block["source"]["media_type"] == "image/jpeg"
+
+
+def test_to_google_dict_user_letta_image():
+    message = _letta_stored_image_message("What is this?")
+    serialized = message.to_google_dict(current_model="google/gemini-2.5-pro")
+    assert serialized["role"] == "user"
+    assert any("inline_data" in p for p in serialized["parts"])
+    inline = next(p for p in serialized["parts"] if "inline_data" in p)
+    assert inline["inline_data"]["data"] == "dGVzdA=="
+    assert inline["inline_data"]["mime_type"] == "image/jpeg"
 
 
 def test_to_anthropic_dict_falls_back_for_malformed_tool_call_arguments():

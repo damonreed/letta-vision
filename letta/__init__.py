@@ -5,7 +5,7 @@ try:
     __version__ = version("letta")
 except PackageNotFoundError:
     # Fallback for development / Docker installs without package metadata
-    __version__ = "0.3.0"
+    __version__ = "0.4.0"
 
 if os.environ.get("LETTA_VERSION"):
     __version__ = os.environ["LETTA_VERSION"]

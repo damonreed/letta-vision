@@ -1481,15 +1481,17 @@ class Message(BaseMessage):
             }
 
         elif self.role == "user":
-            assert text_content is not None, vars(self)
-            user_content = (
-                user_content_to_openai_chat_content(self.content)
-                if self.content
+            has_image_blocks = bool(
+                self.content
                 and any(
                     isinstance(c, ImageContent) or (isinstance(c, dict) and c.get("type") == "image") for c in self.content
                 )
-                else text_content
             )
+            if has_image_blocks:
+                user_content = user_content_to_openai_chat_content(self.content)
+            else:
+                assert text_content is not None, vars(self)
+                user_content = text_content
             openai_message = {
                 "content": user_content,
                 "role": self.role,
@@ -1823,7 +1825,10 @@ class Message(BaseMessage):
         if source.get("type") == "base64" and source.get("data"):
             media_type = source.get("media_type", "image/png")
             return f"data:{media_type};base64,{source['data']}"
-        elif source.get("type") == "url":
+        if source.get("type") == "letta" and source.get("data"):
+            media_type = source.get("media_type", "image/png")
+            return f"data:{media_type};base64,{source['data']}"
+        if source.get("type") == "url":
             return source.get("url")
         return None
 
@@ -1888,6 +1893,8 @@ class Message(BaseMessage):
         elif isinstance(part, dict) and part.get("type") == "image":
             source = part.get("source", {})
             if source.get("type") == "base64" and source.get("data"):
+                return source["data"], source.get("media_type", "image/png")
+            if source.get("type") == "letta" and source.get("data"):
                 return source["data"], source.get("media_type", "image/png")
         return None
 
@@ -2007,16 +2014,19 @@ class Message(BaseMessage):
                     if isinstance(content, TextContent):
                         content_parts.append({"type": "text", "text": content.text})
                     elif isinstance(content, ImageContent):
-                        content_parts.append(
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "data": content.source.data,
-                                    "media_type": content.source.media_type,
-                                },
-                            }
-                        )
+                        image_data = Message._get_base64_image_data(content)
+                        if image_data:
+                            data, media_type = image_data
+                            content_parts.append(
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "data": data,
+                                        "media_type": media_type,
+                                    },
+                                }
+                            )
                     else:
                         raise ValueError(f"Unsupported content type: {content.type}")
 
@@ -2288,14 +2298,17 @@ class Message(BaseMessage):
                 if isinstance(content, TextContent):
                     content_parts.append({"text": content.text})
                 elif isinstance(content, ImageContent):
-                    content_parts.append(
-                        {
-                            "inline_data": {
-                                "data": content.source.data,
-                                "mime_type": content.source.media_type,
+                    image_data = Message._get_base64_image_data(content)
+                    if image_data:
+                        data, media_type = image_data
+                        content_parts.append(
+                            {
+                                "inline_data": {
+                                    "data": data,
+                                    "mime_type": media_type,
+                                }
                             }
-                        }
-                    )
+                        )
                 else:
                     raise ValueError(f"Unsupported content type: {content.type}")
 

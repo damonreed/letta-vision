@@ -129,6 +129,8 @@ This fork adds vision contract hardening on top of upstream Letta multimodal con
 ### Behavior (v1)
 
 - Image content blocks are stored **inline** in message history (base64 in `source.data` with `source.type = "letta"` and `file_id`).
+- **Cross-turn context (v0.4.0):** On every agent turn, the full in-context history is serialized to the LLM provider with image blocks preserved as multimodal parts (`image_url` / Anthropic `image` / Gemini `inline_data`). Prior user images remain visible to the model on later text-only turns without re-uploading (Open WebUI-style: whole conversation in each request).
+- **Token cost:** Image-bearing threads have **super-linear** input cost: each historical image is re-sent on every subsequent turn (roughly N images × M turns in cumulative payload size). Manageable for typical sessions; very long visual threads will hit context limits or large bills. v2 directions: lazy `file_id` fetch, provider prompt caching, memory-aware elision.
 - Heavy image workflows hit context limits quickly; v2 will add lazy fetch via `GET /api/files/{file_id}`.
 
 ### Vision-capable models (registry)
@@ -143,7 +145,9 @@ This fork adds vision contract hardening on top of upstream Letta multimodal con
 
 Operators can add custom models: `LETTA_VISION_MODELS_EXTRA=my-custom-llava-v1,my-finetuned-qwen-vl` (comma-separated).
 
-Glob patterns expand dated catalog entries (e.g. many `gpt-4o-*` snapshots). `o3-mini` is intentionally excluded (no API vision). Health reports fork version via `LETTA_VERSION` (default `0.3.0` in this repo).
+Glob patterns expand dated catalog entries (e.g. many `gpt-4o-*` snapshots). `o3-mini` is intentionally excluded (no API vision). Health reports fork version via `LETTA_VERSION` (default `0.4.0` in this repo).
+
+Legacy non-v3 agent loops may still replace images with `"[Image Here]"` text placeholders; use `letta_v1_agent` / Letta Agent V3 for vision.
 
 ### Limits
 

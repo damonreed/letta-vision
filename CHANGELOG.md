@@ -9,6 +9,18 @@ Fork releases use `v0.x.y` tags (diverged from upstream Letta `0.16.x` at v0.2.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-21
+
+### Added
+
+- Cross-turn image context: historical user images are preserved in LLM request serialization (OpenAI `image_url`, Anthropic `image`, Gemini `inline_data`).
+- `user_content_to_openai_chat_content()` and order-based `fill_image_content_in_messages()` pairing (fixes tool-row expansion skipping images).
+- Tests: extended `tests/test_message_serialization.py`; `tests/integration_test_image_persistence.py` (live OpenRouter when `OPENROUTER_API_KEY` is set).
+
+### Changed
+
+- README Vision section documents cross-turn behavior and super-linear token cost growth.
+
 ## [0.3.0] - 2026-05-20
 
 ### Added
@@ -30,6 +42,7 @@ Fork releases use `v0.x.y` tags (diverged from upstream Letta `0.16.x` at v0.2.0
 
 Pre-vision baseline: multimodal content blocks validated via K2.6 smoke test; partial timeout wiring.
 
-[Unreleased]: https://github.com/damonreed/letta-vision/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/damonreed/letta-vision/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/damonreed/letta-vision/releases/tag/v0.4.0
 [0.3.0]: https://github.com/damonreed/letta-vision/releases/tag/v0.3.0
 [0.2.0]: https://github.com/damonreed/letta-vision/releases/tag/v0.2.0
