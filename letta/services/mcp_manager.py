@@ -126,7 +126,9 @@ class MCPManager:
 
             # call tool
             result, success = await mcp_client.execute_tool(tool_name, tool_args)
-            logger.info(f"MCP Result: {result}, Success: {success}")
+            from letta.services.mcp.tool_result_formatter import format_mcp_result_for_log
+
+            logger.info(f"MCP Result: {format_mcp_result_for_log(result)}, Success: {success}")
             # TODO: change to pydantic tool
             return result, success
         finally:

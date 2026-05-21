@@ -20,6 +20,7 @@ from letta.errors import LettaMCPConnectionError
 from letta.functions.mcp_client.types import SSEServerConfig, StreamableHTTPServerConfig
 from letta.log import get_logger
 from letta.services.mcp.base_client import _log_mcp_tool_error
+from letta.services.mcp.tool_result_formatter import mcp_content_to_letta_parts
 from letta.services.mcp.server_side_oauth import ServerSideOAuth
 
 logger = get_logger(__name__)
@@ -126,7 +127,7 @@ class AsyncFastMCPSSEClient:
             return serializable_tools
         return tools
 
-    async def execute_tool(self, tool_name: str, tool_args: dict) -> Tuple[str, bool]:
+    async def execute_tool(self, tool_name: str, tool_args: dict) -> Tuple[str | list, bool]:
         """Execute a tool on the MCP server.
 
         Args:
@@ -149,21 +150,7 @@ class AsyncFastMCPSSEClient:
             _log_mcp_tool_error(logger, tool_name, exception_to_check)
             return str(exception_to_check), False
 
-        # Parse content from result
-        parsed_content = []
-        for content_piece in result.content:
-            if hasattr(content_piece, "text"):
-                parsed_content.append(content_piece.text)
-                logger.debug(f"MCP tool result parsed content (text): {parsed_content}")
-            else:
-                parsed_content.append(str(content_piece))
-                logger.debug(f"MCP tool result parsed content (other): {parsed_content}")
-
-        if parsed_content:
-            final_content = " ".join(parsed_content)
-        else:
-            final_content = "Empty response from tool"
-
+        final_content = mcp_content_to_letta_parts(result.content)
         return final_content, not result.is_error
 
     def _check_initialized(self):
@@ -283,7 +270,7 @@ class AsyncFastMCPStreamableHTTPClient:
             return serializable_tools
         return tools
 
-    async def execute_tool(self, tool_name: str, tool_args: dict) -> Tuple[str, bool]:
+    async def execute_tool(self, tool_name: str, tool_args: dict) -> Tuple[str | list, bool]:
         """Execute a tool on the MCP server.
 
         Args:
@@ -306,21 +293,7 @@ class AsyncFastMCPStreamableHTTPClient:
             _log_mcp_tool_error(logger, tool_name, exception_to_check)
             return str(exception_to_check), False
 
-        # Parse content from result
-        parsed_content = []
-        for content_piece in result.content:
-            if hasattr(content_piece, "text"):
-                parsed_content.append(content_piece.text)
-                logger.debug(f"MCP tool result parsed content (text): {parsed_content}")
-            else:
-                parsed_content.append(str(content_piece))
-                logger.debug(f"MCP tool result parsed content (other): {parsed_content}")
-
-        if parsed_content:
-            final_content = " ".join(parsed_content)
-        else:
-            final_content = "Empty response from tool"
-
+        final_content = mcp_content_to_letta_parts(result.content)
         return final_content, not result.is_error
 
     def _check_initialized(self):

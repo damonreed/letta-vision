@@ -1,14 +1,67 @@
 from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMessageToolCall, Function
 
-from letta.llm_api.openai_client import fill_image_content_in_responses_input
+from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMessageToolCall, Function
+
+from letta.llm_api.openai_client import fill_image_content_in_messages, fill_image_content_in_responses_input
+from letta.schemas.openai.chat_completion_request import cast_message_to_subtype
 from letta.schemas.enums import MessageRole
 from letta.schemas.letta_message_content import Base64Image, ImageContent, TextContent
-from letta.schemas.message import Message
+from letta.schemas.message import Message, ToolReturn
 
 
 def _user_message_with_image_first(text: str) -> Message:
     image = ImageContent(source=Base64Image(media_type="image/png", data="dGVzdA=="))
     return Message(role=MessageRole.user, content=[image, TextContent(text=text)])
+
+
+def test_to_openai_dicts_include_user_image_url_parts():
+    message = _user_message_with_image_first("what is in this image?")
+    serialized = Message.to_openai_dicts_from_list([message])
+    assert serialized[0]["role"] == "user"
+    content = serialized[0]["content"]
+    assert isinstance(content, list)
+    assert any(part["type"] == "image_url" for part in content)
+    assert any(part["type"] == "text" and "what is in this image?" in part["text"] for part in content)
+
+
+def test_fill_image_content_in_messages_handles_pydantic_openai_rows():
+    """openai_message_list entries are ChatMessage pydantic models after cast_message_to_subtype."""
+    image = ImageContent(source=Base64Image(media_type="image/png", data="dGVzdA=="))
+    user = Message(role=MessageRole.user, content=[TextContent(text="see this"), image])
+    pydantic_messages = [
+        Message(role=MessageRole.system, content=[TextContent(text="system prompt")]),
+        user,
+    ]
+    openai_messages = [
+        cast_message_to_subtype(row)
+        for row in Message.to_openai_dicts_from_list(pydantic_messages)
+    ]
+    filled = fill_image_content_in_messages(openai_messages, pydantic_messages)
+    user_rows = [m for m in filled if getattr(m, "role", None) == "user" or (isinstance(m, dict) and m.get("role") == "user")]
+    assert len(user_rows) == 1
+    content = user_rows[0]["content"] if isinstance(user_rows[0], dict) else user_rows[0].content
+    assert any(part["type"] == "image_url" for part in content)
+
+
+def test_fill_image_content_in_messages_pairs_user_messages_when_tool_rows_expand():
+    image = ImageContent(source=Base64Image(media_type="image/png", data="dGVzdA=="))
+    user = Message(role=MessageRole.user, content=[TextContent(text="see this"), image])
+    tool_msg = Message(
+        role=MessageRole.tool,
+        tool_returns=[
+            ToolReturn(tool_call_id="call-a", status="success", func_response="ok"),
+            ToolReturn(tool_call_id="call-b", status="success", func_response="done"),
+        ],
+    )
+    pydantic_messages = [tool_msg, user]
+    openai_messages = Message.to_openai_dicts_from_list(pydantic_messages)
+    assert len(openai_messages) == 3
+    assert len(openai_messages) != len(pydantic_messages)
+
+    filled = fill_image_content_in_messages(openai_messages, pydantic_messages)
+    user_rows = [m for m in filled if m.get("role") == "user"]
+    assert len(user_rows) == 1
+    assert any(part["type"] == "image_url" for part in user_rows[0]["content"])
 
 
 def test_to_openai_responses_dicts_handles_image_first_content():

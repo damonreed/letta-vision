@@ -31,6 +31,7 @@ from letta.errors import (
     SystemPromptTokenExceededError,
 )
 from letta.helpers import ToolRulesSolver
+from letta.helpers.message_helper import resolve_tool_return_images
 from letta.helpers.datetime_helpers import get_utc_time, get_utc_timestamp_ns
 from letta.helpers.tool_execution_helper import enable_strict_mode
 from letta.llm_api.llm_client import LLMClient
@@ -52,7 +53,7 @@ from letta.schemas.letta_message_content import OmittedReasoningContent, Reasoni
 from letta.schemas.letta_request import ClientSkillSchema, ClientToolSchema
 from letta.schemas.letta_response import LettaResponse, TurnTokenData
 from letta.schemas.letta_stop_reason import LettaStopReason, StopReasonType
-from letta.schemas.message import Message, MessageCreate, ToolReturn
+from letta.schemas.message import Message, MessageCreate, ToolReturn, tool_return_to_text
 from letta.schemas.openai.chat_completion_response import ChoiceLogprobs, ToolCall, ToolCallDenial, UsageStatistics
 from letta.schemas.provider_trace import BillingContext
 from letta.schemas.step import StepProgression
@@ -677,6 +678,9 @@ class LettaAgentV3(LettaAgentV2):
                         "Compaction failed because the system prompt is too large for this model's context window. "
                         "Reduce system instructions, memory blocks, or tools, or use a model with a larger context window."
                     )
+                elif isinstance(e, LLMError):
+                    error_type = StopReasonType.llm_api_error.value
+                    user_visible_error_message = error_detail
 
                 error_message = LettaErrorMessage(
                     run_id=run_id,
@@ -1866,7 +1870,7 @@ class LettaAgentV3(LettaAgentV2):
             step_metrics.tool_execution_ns = max(dt for _, dt in results)
 
         # 5e. Process results and compute function responses
-        function_responses: list[Optional[str]] = []
+        function_responses: list[Optional[str | list]] = []
         persisted_continue_flags: list[bool] = []
         persisted_stop_reasons: list[LettaStopReason | None] = []
 
@@ -1874,20 +1878,28 @@ class LettaAgentV3(LettaAgentV2):
             tool_execution_result, _ = results[idx]
             has_prefill_error = bool(spec.get("error"))
 
+            func_return = tool_execution_result.func_return
+            if isinstance(func_return, list):
+                func_return = await resolve_tool_return_images(func_return)
+                tool_execution_result.func_return = func_return
+
             # Validate and format function response
             truncate = spec["name"] not in {"conversation_search", "conversation_search_date", "archival_memory_search"}
             return_char_limit = next((t.return_char_limit for t in self.agent_state.tools if t.name == spec["name"]), None)
-            function_response_string = validate_function_response(
-                tool_execution_result.func_return,
+            function_response = validate_function_response(
+                func_return,
                 return_char_limit=return_char_limit,
                 truncate=truncate,
             )
-            function_responses.append(function_response_string)
+            function_responses.append(function_response)
 
             # Update last function response (for tool rules)
+            response_for_rules = (
+                tool_return_to_text(function_response) if isinstance(function_response, list) else function_response
+            )
             self.last_function_response = package_function_response(
                 was_success=tool_execution_result.success_flag,
-                response_string=function_response_string,
+                response_string=response_for_rules,
                 timezone=self.agent_state.timezone,
             )
 

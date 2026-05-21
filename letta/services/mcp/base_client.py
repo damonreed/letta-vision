@@ -8,6 +8,7 @@ from mcp.types import TextContent
 from letta.errors import LettaMCPConnectionError
 from letta.functions.mcp_client.types import BaseServerConfig
 from letta.log import get_logger
+from letta.services.mcp.tool_result_formatter import mcp_content_to_letta_parts
 
 logger = get_logger(__name__)
 
@@ -101,7 +102,7 @@ class AsyncBaseMCPClient:
             return serializable_tools
         return response.tools
 
-    async def execute_tool(self, tool_name: str, tool_args: dict) -> Tuple[str, bool]:
+    async def execute_tool(self, tool_name: str, tool_args: dict) -> Tuple[str | list, bool]:
         self._check_initialized()
         try:
             result = await self.session.call_tool(tool_name, tool_args)
@@ -112,21 +113,11 @@ class AsyncBaseMCPClient:
             _log_mcp_tool_error(logger, tool_name, exception_to_check)
             return str(exception_to_check), False
 
-        parsed_content = []
-        for content_piece in result.content:
-            if isinstance(content_piece, TextContent):
-                parsed_content.append(content_piece.text)
-                logger.debug(f"MCP tool result parsed content (text): {parsed_content}")
-            else:
-                parsed_content.append(str(content_piece))
-                logger.debug(f"MCP tool result parsed content (other): {parsed_content}")
-        if len(parsed_content) > 0:
-            final_content = " ".join(parsed_content)
-        else:
-            # TODO move hardcoding to constants
-            final_content = "Empty response from tool"
-
-        return final_content, not result.isError
+        final_content = mcp_content_to_letta_parts(result.content)
+        is_error = getattr(result, "isError", None)
+        if is_error is None:
+            is_error = getattr(result, "is_error", False)
+        return final_content, not is_error
 
     def _check_initialized(self):
         if not self.initialized:

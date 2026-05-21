@@ -295,7 +295,7 @@ class ToolReturnMessage(LettaMessage):
     message_type: Literal[MessageType.tool_return_message] = Field(
         default=MessageType.tool_return_message, description="The type of the message."
     )
-    tool_return: str = Field(..., deprecated=True)
+    tool_return: Union[str, List[LettaToolReturnContentUnion]] = Field(..., deprecated=True)
     status: Literal["success", "error"] = Field(..., deprecated=True)
     tool_call_id: str = Field(..., deprecated=True)
     stdout: Optional[List[str]] = Field(None, deprecated=True)

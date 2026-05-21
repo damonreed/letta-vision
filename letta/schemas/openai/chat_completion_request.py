@@ -38,7 +38,7 @@ class AssistantMessage(BaseModel):
 
 
 class ToolMessage(BaseModel):
-    content: str
+    content: Union[str, List[dict]]
     role: str = "tool"
     tool_call_id: str
 

@@ -121,9 +121,18 @@ class ToolExecutionManager:
                 )
             status = result.status
 
-            # trim result
-            # Convert to string representation, preserving dict structure when within limit
-            return_str = json.dumps(result.func_return) if isinstance(result.func_return, dict) else str(result.func_return)
+            # trim result (preserve JSON image URLs; omit embedded base64 — see mcp/tool_result_formatter)
+            from letta.services.mcp.tool_result_formatter import compact_tool_return_for_limit
+
+            from letta.schemas.message import tool_return_has_images, tool_return_to_text
+
+            result.func_return = compact_tool_return_for_limit(result.func_return, tool.return_char_limit)
+            if isinstance(result.func_return, list) and tool_return_has_images(result.func_return):
+                return result
+
+            return_str = (
+                json.dumps(result.func_return) if isinstance(result.func_return, dict) else str(result.func_return)
+            )
             if len(return_str) > tool.return_char_limit:
                 result.func_return = FUNCTION_RETURN_VALUE_TRUNCATED(return_str, len(return_str), tool.return_char_limit)
             return result

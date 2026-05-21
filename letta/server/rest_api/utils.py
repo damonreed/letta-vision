@@ -604,9 +604,17 @@ def create_parallel_tool_messages_from_llm_response(
             assistant_message.id = pre_computed_assistant_message_id
         messages.append(assistant_message)
 
+    from letta.schemas.message import tool_return_to_text
+
     content: List[TextContent] = []
     for spec, exec_result, response in zip(tool_call_specs, tool_execution_results, function_responses):
-        packaged = package_function_response(exec_result.success_flag, response, timezone)
+        if isinstance(response, list):
+            func_response_value = response
+            legacy_text = tool_return_to_text(response) or "Empty tool return"
+            packaged = package_function_response(exec_result.success_flag, legacy_text, timezone)
+        else:
+            packaged = package_function_response(exec_result.success_flag, response, timezone)
+            func_response_value = packaged
         content.append(TextContent(text=packaged))
         tool_returns.append(
             ToolReturn(
@@ -614,7 +622,7 @@ def create_parallel_tool_messages_from_llm_response(
                 status=exec_result.status,
                 stdout=exec_result.stdout,
                 stderr=exec_result.stderr,
-                func_response=packaged,
+                func_response=func_response_value,
             )
         )
 

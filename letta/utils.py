@@ -897,7 +897,7 @@ def parse_json_or_wrap_raw(
 
 def validate_function_response(
     function_response: Any, return_char_limit: int, strict: bool = False, truncate: bool = True
-) -> str | dict[str, Any]:
+) -> str | dict[str, Any] | list:
     """Check to make sure that a function used by Letta returned a valid response. Truncates to return_char_limit if necessary.
 
     This makes sure that we can coerce the function_response into a string or dict that meets our criteria. We handle some soft coercion.
@@ -914,6 +914,14 @@ def validate_function_response(
 
     elif strict:
         raise ValueError(f"Strict mode violation. Function returned type: {type(function_response).__name__}")
+
+    elif isinstance(function_response, list):
+        from letta.schemas.message import tool_return_has_images, tool_return_to_text
+
+        if tool_return_has_images(function_response):
+            return function_response
+
+        function_response_string = tool_return_to_text(function_response) or "Empty tool return"
 
     elif isinstance(function_response, dict):
         # For dicts, check if truncation is needed

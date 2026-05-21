@@ -82,6 +82,15 @@ def _get_text_from_part(part: Union[TextContent, ImageContent, dict]) -> Optiona
     return None
 
 
+def tool_return_has_images(func_response: Optional[Union[str, List]]) -> bool:
+    """True when func_response is a multi-modal list that includes image blocks."""
+    if not isinstance(func_response, list):
+        return False
+    return any(
+        isinstance(part, ImageContent) or (isinstance(part, dict) and part.get("type") == "image") for part in func_response
+    )
+
+
 def tool_return_to_text(func_response: Optional[Union[str, List]]) -> Optional[str]:
     """Convert tool return content to text, replacing images with placeholders."""
     if func_response is None:
@@ -89,7 +98,13 @@ def tool_return_to_text(func_response: Optional[Union[str, List]]) -> Optional[s
     if isinstance(func_response, str):
         return func_response
 
-    text_parts = [text for part in func_response if (text := _get_text_from_part(part))]
+    from letta.services.mcp.tool_result_formatter import redact_base64_in_text
+
+    text_parts = [
+        redact_base64_in_text(text)
+        for part in func_response
+        if (text := _get_text_from_part(part))
+    ]
     image_count = sum(
         1 for part in func_response if isinstance(part, ImageContent) or (isinstance(part, dict) and part.get("type") == "image")
     )
@@ -99,6 +114,89 @@ def tool_return_to_text(func_response: Optional[Union[str, List]]) -> Optional[s
         placeholder = "[Image omitted]" if image_count == 1 else f"[{image_count} images omitted]"
         result = (result + " " + placeholder) if result else placeholder
     return result if result else None
+
+
+def tool_return_to_openai_chat_content(
+    func_response: Optional[Union[str, List]],
+    tool_return_truncation_chars: Optional[int] = None,
+) -> Union[str, List[dict]]:
+    """Build OpenAI Chat Completions tool message content (string or vision multimodal parts)."""
+    if func_response is None:
+        return ""
+    if isinstance(func_response, str):
+        return truncate_tool_return(func_response, tool_return_truncation_chars) or ""
+    if not tool_return_has_images(func_response):
+        text = tool_return_to_text(func_response)
+        return truncate_tool_return(text, tool_return_truncation_chars) or ""
+
+    parts: List[dict] = []
+    for part in func_response:
+        if isinstance(part, TextContent):
+            text = truncate_tool_return(part.text, tool_return_truncation_chars) or ""
+            if text:
+                parts.append({"type": "text", "text": text})
+        elif isinstance(part, ImageContent):
+            image_url = Message._image_source_to_data_url(part)
+            if image_url:
+                detail = getattr(part.source, "detail", None) or "auto"
+                parts.append({"type": "image_url", "image_url": {"url": image_url, "detail": detail}})
+        elif isinstance(part, dict):
+            if part.get("type") == "text":
+                text = truncate_tool_return(part.get("text", ""), tool_return_truncation_chars) or ""
+                if text:
+                    parts.append({"type": "text", "text": text})
+            elif part.get("type") == "image":
+                image_url = Message._image_dict_to_data_url(part)
+                if image_url:
+                    detail = part.get("source", {}).get("detail", "auto")
+                    parts.append({"type": "image_url", "image_url": {"url": image_url, "detail": detail}})
+
+    return parts if parts else ""
+
+
+def user_content_to_openai_chat_content(content: Optional[List]) -> Union[str, List[dict]]:
+    """Build OpenAI Chat Completions user message content (string or vision multimodal parts)."""
+    if not content:
+        return ""
+    if len(content) == 1:
+        only = content[0]
+        if isinstance(only, TextContent):
+            return only.text
+        if isinstance(only, dict) and only.get("type") == "text":
+            return only.get("text", "")
+    if not any(
+        isinstance(part, ImageContent) or (isinstance(part, dict) and part.get("type") == "image") for part in content
+    ):
+        text_parts = []
+        for part in content:
+            if isinstance(part, TextContent):
+                text_parts.append(part.text)
+            elif isinstance(part, dict) and part.get("type") == "text":
+                text_parts.append(part.get("text", ""))
+        return "\n\n".join(text_parts) if text_parts else ""
+
+    parts: List[dict] = []
+    for part in content:
+        if isinstance(part, TextContent):
+            if part.text:
+                parts.append({"type": "text", "text": part.text})
+        elif isinstance(part, ImageContent):
+            image_url = Message._image_source_to_data_url(part)
+            if image_url:
+                detail = getattr(part.source, "detail", None) or "auto"
+                parts.append({"type": "image_url", "image_url": {"url": image_url, "detail": detail}})
+        elif isinstance(part, dict):
+            if part.get("type") == "text":
+                text = part.get("text", "")
+                if text:
+                    parts.append({"type": "text", "text": text})
+            elif part.get("type") == "image":
+                image_url = Message._image_dict_to_data_url(part)
+                if image_url:
+                    detail = part.get("source", {}).get("detail", "auto")
+                    parts.append({"type": "image_url", "image_url": {"url": image_url, "detail": detail}})
+
+    return parts if parts else ""
 
 
 def add_inner_thoughts_to_tool_call(
@@ -893,18 +991,14 @@ class Message(BaseMessage):
 
         first_tool_return = all_tool_returns[0]
 
-        # Convert deprecated string-only field to text (preserve images in tool_returns list)
-        deprecated_tool_return_text = (
-            tool_return_to_text(first_tool_return.tool_return)
-            if isinstance(first_tool_return.tool_return, list)
-            else first_tool_return.tool_return
-        )
+        # Deprecated top-level field mirrors first return (multimodal list preserved for clients)
+        deprecated_tool_return_value = first_tool_return.tool_return
 
         return ToolReturnMessage(
             id=self.id,
             date=self.created_at,
             # deprecated top-level fields populated from first tool return
-            tool_return=deprecated_tool_return_text,
+            tool_return=deprecated_tool_return_value,
             status=first_tool_return.status,
             tool_call_id=first_tool_return.tool_call_id,
             stdout=first_tool_return.stdout,
@@ -1388,8 +1482,16 @@ class Message(BaseMessage):
 
         elif self.role == "user":
             assert text_content is not None, vars(self)
+            user_content = (
+                user_content_to_openai_chat_content(self.content)
+                if self.content
+                and any(
+                    isinstance(c, ImageContent) or (isinstance(c, dict) and c.get("type") == "image") for c in self.content
+                )
+                else text_content
+            )
             openai_message = {
-                "content": text_content,
+                "content": user_content,
                 "role": self.role,
             }
 
@@ -1459,9 +1561,9 @@ class Message(BaseMessage):
                 tool_return = self.tool_returns[0]
                 if not tool_return.tool_call_id:
                     raise TypeError("OpenAI API requires tool_call_id to be set.")
-                # Convert to text first (replaces images with placeholders), then truncate
-                func_response_text = tool_return_to_text(tool_return.func_response)
-                func_response = truncate_tool_return(func_response_text, tool_return_truncation_chars)
+                func_response = tool_return_to_openai_chat_content(
+                    tool_return.func_response, tool_return_truncation_chars
+                )
                 openai_message = {
                     "content": func_response,
                     "role": self.role,
@@ -1516,9 +1618,9 @@ class Message(BaseMessage):
                 for tr in m.tool_returns:
                     if not tr.tool_call_id:
                         raise TypeError("ToolReturn came back without a tool_call_id.")
-                    # Convert multi-modal to text (images → placeholders), then truncate
-                    func_response_text = tool_return_to_text(tr.func_response)
-                    func_response = truncate_tool_return(func_response_text, tool_return_truncation_chars)
+                    func_response = tool_return_to_openai_chat_content(
+                        tr.func_response, tool_return_truncation_chars
+                    )
                     result.append(
                         {
                             "content": func_response,

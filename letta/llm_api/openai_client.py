@@ -1448,50 +1448,35 @@ class OpenAIClient(LLMClientBase):
         return super().handle_llm_error(e, llm_config=llm_config)
 
 
+def _openai_row_role(message: Any) -> Optional[str]:
+    """Role from a Chat Completions row (dict or OpenAI pydantic message)."""
+    if isinstance(message, dict):
+        return message.get("role")
+    return getattr(message, "role", None)
+
+
 def fill_image_content_in_messages(openai_message_list: List[dict], pydantic_message_list: List[PydanticMessage]) -> List[dict]:
     """
     Converts image content to openai format.
-    """
 
-    if len(openai_message_list) != len(pydantic_message_list):
+    Pairs user-role messages by order (not by full-list index) so tool-return
+    expansion in to_openai_dicts_from_list does not skip image pass-through.
+    """
+    from letta.schemas.message import user_content_to_openai_chat_content
+
+    pydantic_users = [m for m in pydantic_message_list if getattr(m, "role", None) == "user"]
+    openai_user_indices = [i for i, m in enumerate(openai_message_list) if _openai_row_role(m) == "user"]
+
+    if len(pydantic_users) != len(openai_user_indices):
         return openai_message_list
 
-    new_message_list = []
-    for idx in range(len(openai_message_list)):
-        openai_message, pydantic_message = openai_message_list[idx], pydantic_message_list[idx]
-        if pydantic_message.role != "user":
-            new_message_list.append(openai_message)
+    new_message_list = list(openai_message_list)
+    for pydantic_message, openai_idx in zip(pydantic_users, openai_user_indices):
+        if not isinstance(pydantic_message.content, list):
             continue
-
-        if not isinstance(pydantic_message.content, list) or (
-            len(pydantic_message.content) == 1 and pydantic_message.content[0].type == MessageContentType.text
-        ):
-            new_message_list.append(openai_message)
-            continue
-
-        message_content = []
-        for content in pydantic_message.content:
-            if content.type == MessageContentType.text:
-                message_content.append(
-                    {
-                        "type": "text",
-                        "text": content.text,
-                    }
-                )
-            elif content.type == MessageContentType.image:
-                message_content.append(
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:{content.source.media_type};base64,{content.source.data}",
-                            "detail": content.source.detail or "auto",
-                        },
-                    }
-                )
-            else:
-                raise ValueError(f"Unsupported content type {content.type}")
-
-        new_message_list.append({"role": "user", "content": message_content})
+        multimodal = user_content_to_openai_chat_content(pydantic_message.content)
+        if isinstance(multimodal, list):
+            new_message_list[openai_idx] = {"role": "user", "content": multimodal}
 
     return new_message_list
 
