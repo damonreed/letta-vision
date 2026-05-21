@@ -20,6 +20,7 @@ Fork releases use `v0.x.y` tags (diverged from upstream Letta `0.16.x` at v0.2.0
 ### Changed
 
 - README Vision section documents cross-turn behavior and super-linear token cost growth.
+- Streamlined LLM failure notices in `LettaAgentV3` (single user-visible message, no injected JSON in the failure bubble).
 
 ## [0.3.0] - 2026-05-20
 
