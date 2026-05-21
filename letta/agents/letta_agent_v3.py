@@ -896,6 +896,8 @@ class LettaAgentV3(LettaAgentV2):
         messages.append(failure_message)
 
         # Stream as assistant so clients that drop user_message SSE (e.g. vision bridge) show this immediately.
+        # Single user-visible notice. Packed JSON is persisted on failure_message for
+        # agent context; clients expose it via collapsible diagnostics (not a second stream chunk).
         yield AssistantMessage(
             id=failure_message.id,
             date=get_utc_time(),
@@ -903,14 +905,6 @@ class LettaAgentV3(LettaAgentV2):
             step_id=step_id,
             run_id=run_id,
             otid=Message.generate_otid_from_id(failure_message.id, 0),
-        )
-        yield AssistantMessage(
-            id=f"{failure_message.id}-injected-json",
-            date=get_utc_time(),
-            content=f"```json\n{json.dumps(json.loads(packed), indent=2)}\n```",
-            step_id=step_id,
-            run_id=run_id,
-            otid=Message.generate_otid_from_id(failure_message.id, 1),
         )
 
         if include_compaction_messages:
