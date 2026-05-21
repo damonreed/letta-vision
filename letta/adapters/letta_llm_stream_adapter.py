@@ -5,6 +5,7 @@ from typing import AsyncGenerator
 
 from letta.adapters.letta_llm_adapter import LettaLLMAdapter
 from letta.errors import LLMError
+from letta.llm_api.degraded_response import validate_streaming_completion_or_raise
 from letta.helpers.datetime_helpers import get_utc_timestamp_ns
 from letta.interfaces.anthropic_streaming_interface import AnthropicStreamingInterface
 from letta.interfaces.openai_streaming_interface import OpenAIStreamingInterface
@@ -70,6 +71,28 @@ class LettaLLMStreamAdapter(LettaLLMAdapter):
         if self._ws_session is not None:
             await self._ws_session.aclose()
             self._ws_session = None
+
+    def _validate_streaming_completion(self) -> None:
+        """Raise LLMEmptyResponseError when the stream ended without tool calls or content."""
+        if self.interface is None:
+            return
+        raw_usage = getattr(self.interface, "raw_usage", None)
+        response_id = getattr(self.interface, "message_id", None)
+        tool_calls = getattr(self, "tool_calls", None) or []
+        content_parts = getattr(self, "content", None)
+        reasoning_content = getattr(self, "reasoning_content", None)
+        finish_reason = self.finish_reason
+        validate_streaming_completion_or_raise(
+            llm_config=self.llm_config,
+            tool_calls=tool_calls,
+            tool_call=self.tool_call,
+            content_parts=content_parts,
+            reasoning_content=reasoning_content,
+            usage=self.usage,
+            raw_usage=raw_usage,
+            response_id=response_id,
+            finish_reason=finish_reason,
+        )
 
     async def invoke_llm(
         self,
@@ -201,6 +224,8 @@ class LettaLLMStreamAdapter(LettaLLMAdapter):
                 self.message_id = self.interface.letta_message_id
             except Exception:
                 self.message_id = None
+
+            self._validate_streaming_completion()
 
             # Log request and response data
             self.log_provider_trace(step_id=step_id, actor=actor)

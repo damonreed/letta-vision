@@ -403,6 +403,30 @@ class LettaErrorMessage(BaseModel):
     seq_id: Optional[int] = None
 
 
+class LlmFailureStats(BaseModel):
+    """Metadata for an injected LLM failure notice (degraded response or API/stream error)."""
+
+    failure_kind: str = Field(
+        ...,
+        description="degraded_response (empty/zero-token stream) or llm_api_error (provider exception).",
+    )
+    attempts: Optional[int] = Field(None, description="Total LLM attempts made before giving up, when applicable.")
+    model: Optional[str] = Field(None, description="Model id from provider or agent config.")
+    handle: Optional[str] = Field(None, description="Agent model handle at failure time.")
+    degraded_reason: Optional[str] = Field(
+        None,
+        description="Classifier reason for degraded completions.",
+    )
+    generation_id: Optional[str] = Field(None, description="OpenRouter generation id when present.")
+    error_type: Optional[str] = Field(None, description="Letta/stream error_type (e.g. llm_api_error).")
+    error_class: Optional[str] = Field(None, description="Exception class name (e.g. LLMBadRequestError).")
+    detail: Optional[str] = Field(None, description="Truncated error detail string.")
+
+
+# Backward-compatible alias
+LlmDegradedFailureStats = LlmFailureStats
+
+
 class CompactionStats(BaseModel):
     """
     Statistics about a memory compaction operation.
@@ -418,6 +442,24 @@ class CompactionStats(BaseModel):
     context_window: int = Field(..., description="The model's context window size")
     messages_count_before: int = Field(..., description="Number of messages before compaction")
     messages_count_after: int = Field(..., description="Number of messages after compaction")
+
+
+def extract_llm_failure_stats_from_packed_json(text_content: str) -> Optional[LlmFailureStats]:
+    """Extract LlmFailureStats from a packed system_alert JSON string."""
+    try:
+        packed_json = json.loads(text_content)
+        if not isinstance(packed_json, dict):
+            return None
+        stats = packed_json.get("llm_failure_stats") or packed_json.get("degraded_failure_stats")
+        if stats:
+            return LlmFailureStats(**stats)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        pass
+    return None
+
+
+def extract_llm_degraded_failure_stats_from_packed_json(text_content: str) -> Optional[LlmFailureStats]:
+    return extract_llm_failure_stats_from_packed_json(text_content)
 
 
 def extract_compaction_stats_from_packed_json(text_content: str) -> Optional[CompactionStats]:
@@ -447,6 +489,8 @@ class SummaryMessage(LettaMessage):
     message_type: Literal["summary_message"] = "summary_message"
     summary: str
     compaction_stats: Optional[CompactionStats] = None
+    degraded_failure_stats: Optional[LlmFailureStats] = None
+    llm_failure_stats: Optional[LlmFailureStats] = None
 
 
 class EventMessage(LettaMessage):
@@ -455,7 +499,7 @@ class EventMessage(LettaMessage):
     """
 
     message_type: Literal["event_message"] = "event_message"
-    event_type: Literal["compaction"]
+    event_type: Literal["compaction", "llm_degraded_failure"]
     event_data: dict
 
 

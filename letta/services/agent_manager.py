@@ -763,8 +763,13 @@ class AgentManager:
         actor: PydanticUser,
     ) -> PydanticAgentState:
         new_tools = set(agent_update.tool_ids or [])
-        # Use folder_ids if provided, otherwise fall back to deprecated source_ids for backwards compatibility
-        folder_ids_to_update = agent_update.folder_ids if agent_update.folder_ids is not None else agent_update.source_ids
+        update_fields = agent_update.model_fields_set
+        if "folder_ids" in update_fields:
+            folder_ids_to_update = agent_update.folder_ids
+        elif "source_ids" in update_fields:
+            folder_ids_to_update = agent_update.source_ids
+        else:
+            folder_ids_to_update = None
         new_sources = set(folder_ids_to_update or [])
         new_blocks = set(agent_update.block_ids or [])
         new_idents = set(agent_update.identity_ids or [])
@@ -775,8 +780,8 @@ class AgentManager:
             agent.updated_at = datetime.now(timezone.utc)
             agent.last_updated_by_id = actor.id
 
-            if agent_update.reasoning is not None:
-                llm_config = agent_update.llm_config or agent.llm_config
+            if "reasoning" in update_fields and agent_update.reasoning is not None:
+                llm_config = agent_update.llm_config if "llm_config" in update_fields else agent.llm_config
                 agent_update.llm_config = LLMConfig.apply_reasoning_setting_to_config(
                     llm_config,
                     agent_update.reasoning,
@@ -791,7 +796,7 @@ class AgentManager:
 
             # If agent provider changed, refresh default-derived compaction model
             # so compaction stays aligned with the agent's active provider
-            if not explicit_compaction_model_update and agent_update.llm_config is not None:
+            if not explicit_compaction_model_update and "llm_config" in update_fields and agent_update.llm_config is not None:
                 old_provider_name = agent.llm_config.provider_name or agent.llm_config.model_endpoint_type
                 new_provider_name = agent_update.llm_config.provider_name or agent_update.llm_config.model_endpoint_type
                 llm_provider_changed = new_provider_name != old_provider_name
@@ -849,31 +854,33 @@ class AgentManager:
                         if field not in changed_fields:
                             setattr(agent_update.compaction_settings, field, getattr(agent.compaction_settings, field))
 
-            scalar_updates = {
-                "name": agent_update.name,
-                "system": agent_update.system,
-                "llm_config": agent_update.llm_config,
-                "embedding_config": agent_update.embedding_config,
-                "compaction_settings": agent_update.compaction_settings,
-                "message_ids": agent_update.message_ids,
-                "tool_rules": agent_update.tool_rules,
-                "description": agent_update.description,
-                "project_id": agent_update.project_id,
-                "template_id": agent_update.template_id,
-                "base_template_id": agent_update.base_template_id,
-                "message_buffer_autoclear": agent_update.message_buffer_autoclear,
-                "enable_sleeptime": agent_update.enable_sleeptime,
-                "response_format": agent_update.response_format,
-                "last_run_completion": agent_update.last_run_completion,
-                "last_run_duration_ms": agent_update.last_run_duration_ms,
-                "last_stop_reason": agent_update.last_stop_reason,
-                "timezone": agent_update.timezone,
-                "max_files_open": agent_update.max_files_open,
-                "per_file_view_window_char_limit": agent_update.per_file_view_window_char_limit,
-            }
-            for col, val in scalar_updates.items():
-                if val is not None:
-                    setattr(agent, col, val)
+            scalar_field_names = (
+                "name",
+                "system",
+                "llm_config",
+                "embedding_config",
+                "compaction_settings",
+                "message_ids",
+                "tool_rules",
+                "description",
+                "project_id",
+                "template_id",
+                "base_template_id",
+                "message_buffer_autoclear",
+                "enable_sleeptime",
+                "response_format",
+                "last_run_completion",
+                "last_run_duration_ms",
+                "last_stop_reason",
+                "timezone",
+                "max_files_open",
+                "per_file_view_window_char_limit",
+            )
+            for col in scalar_field_names:
+                if col in update_fields:
+                    val = getattr(agent_update, col)
+                    if val is not None:
+                        setattr(agent, col, val)
 
             if agent_update.metadata is not None:
                 agent.metadata_ = agent_update.metadata
@@ -890,7 +897,7 @@ class AgentManager:
                 session.expire(agent, ["tools"])
 
             # Update sources if either folder_ids or source_ids (deprecated) is provided
-            if agent_update.folder_ids is not None or agent_update.source_ids is not None:
+            if "folder_ids" in update_fields or "source_ids" in update_fields:
                 await self._replace_pivot_rows_async(
                     session,
                     SourcesAgents.__table__,

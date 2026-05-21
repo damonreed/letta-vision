@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from letta.helpers.singleton import singleton
 from letta.log import get_logger
+from letta.observability.lifecycle_logging import log_step_lifecycle_completed, log_step_lifecycle_started
 
 logger = get_logger(__name__)
 from letta.orm.errors import NoResultFound
@@ -245,7 +246,8 @@ class StepManager:
             new_step = StepModel(**step_data)
             await new_step.create_async(session, no_commit=True, no_refresh=True)
             pydantic_step = new_step.to_pydantic()
-            return pydantic_step
+        log_step_lifecycle_started(step=pydantic_step)
+        return pydantic_step
 
     @enforce_types
     @raise_on_invalid_id(param_name="step_id", expected_prefix=PrimitiveType.STEP)
@@ -411,6 +413,7 @@ class StepManager:
         # Send webhook notification for step completion outside the DB session
         webhook_service = WebhookService()
         await webhook_service.notify_step_complete(step_id)
+        log_step_lifecycle_completed(step=pydantic_step, terminal_status="failed")
         return pydantic_step
 
     @enforce_types

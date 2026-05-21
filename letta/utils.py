@@ -1577,9 +1577,9 @@ async def decrypt_agent_secrets(agents: list) -> list:
     # Collect all env vars that need decryption
     decrypt_tasks = []
     for agent in agents:
-        if agent.tool_exec_environment_variables:
-            for env_var in agent.tool_exec_environment_variables:
-                decrypt_tasks.append(decrypt_env_var(env_var))
+        env_vars = agent.secrets or []
+        for env_var in env_vars:
+            decrypt_tasks.append(decrypt_env_var(env_var))
 
     # Decrypt with bounded concurrency (matches crypto executor size)
     if decrypt_tasks:

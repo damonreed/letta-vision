@@ -435,6 +435,15 @@ class Settings(BaseSettings):
         default=False,
         description="If true, retry once when an LLM request times out. Default false to avoid double-billing.",
     )
+    llm_degraded_response_max_retries: int = Field(
+        default=2,
+        ge=0,
+        le=10,
+        description=(
+            "Retries after a degraded streaming completion (empty output or OpenRouter 0-token generation). "
+            "Default 2 means three attempts total (initial + 2 retries)."
+        ),
+    )
 
     # Vision support
     vision_models_extra: Optional[str] = Field(

@@ -30,6 +30,7 @@ from letta.errors import (
     LLMServerError,
     SystemPromptTokenExceededError,
 )
+from letta.llm_api.degraded_response import human_message_for_llm_failure, llm_failure_error_type
 from letta.helpers import ToolRulesSolver
 from letta.helpers.message_helper import resolve_tool_return_images
 from letta.helpers.datetime_helpers import get_utc_time, get_utc_timestamp_ns
@@ -38,9 +39,11 @@ from letta.llm_api.llm_client import LLMClient
 from letta.local_llm.constants import INNER_THOUGHTS_KWARG
 from letta.otel.tracing import trace_method
 from letta.schemas.agent import AgentState
-from letta.schemas.enums import LLMCallType
+from letta.agents.agent_state_access import get_llm_config
+from letta.schemas.enums import LLMCallType, MessageRole
 from letta.schemas.letta_message import (
     ApprovalReturn,
+    AssistantMessage,
     CompactionStats,
     EventMessage,
     LettaErrorMessage,
@@ -48,6 +51,7 @@ from letta.schemas.letta_message import (
     MessageType,
     SummaryMessage,
     extract_compaction_stats_from_packed_json,
+    extract_llm_degraded_failure_stats_from_packed_json,
 )
 from letta.schemas.letta_message_content import OmittedReasoningContent, ReasoningContent, RedactedReasoningContent, TextContent
 from letta.schemas.letta_request import ClientSkillSchema, ClientToolSchema
@@ -75,7 +79,7 @@ from letta.services.summarizer.summarizer_config import CompactionSettings
 from letta.services.summarizer.summarizer_sliding_window import count_tokens
 from letta.services.summarizer.thresholds import get_compaction_trigger_threshold
 from letta.settings import settings, summarizer_settings
-from letta.system import package_function_response
+from letta.system import package_function_response, package_llm_failure_notice_message, unpack_message
 from letta.utils import safe_create_task_with_return, validate_function_response
 
 
@@ -148,7 +152,7 @@ class LettaAgentV3(LettaAgentV2):
         This prevents any single tool return from consuming too much context.
         """
         try:
-            cap = int(self.agent_state.llm_config.context_window * 0.2 * 4)  # 20% of tokens → chars
+            cap = int(get_llm_config(self.agent_state).context_window * 0.2 * 4)  # 20% of tokens → chars
         except Exception:
             cap = 5000
         return max(5000, cap)
@@ -202,7 +206,7 @@ class LettaAgentV3(LettaAgentV2):
             messages=in_context_messages + input_messages_to_persist,
             llm_adapter=LettaLLMRequestAdapter(
                 llm_client=self.llm_client,
-                llm_config=self.agent_state.llm_config,
+                llm_config=get_llm_config(self.agent_state),
                 call_type=LLMCallType.agent_step,
                 agent_id=self.agent_state.id,
                 agent_tags=self.agent_state.tags,
@@ -290,10 +294,10 @@ class LettaAgentV3(LettaAgentV2):
         # Check if we should use SGLang native adapter for multi-turn RL training.
         # Matches handles starting with "sglang/" OR providers named like "*sglang*"
         # (e.g. "slime-sglang" used in training).
-        _handle = self.agent_state.llm_config.handle or ""
-        _provider = (self.agent_state.llm_config.provider_name or "").lower()
+        _handle = get_llm_config(self.agent_state).handle or ""
+        _provider = (get_llm_config(self.agent_state).provider_name or "").lower()
         use_sglang_native = (
-            self.agent_state.llm_config.return_token_ids and _handle and (_handle.startswith("sglang/") or "sglang" in _provider)
+            get_llm_config(self.agent_state).return_token_ids and _handle and (_handle.startswith("sglang/") or "sglang" in _provider)
         )
         self.return_token_ids = use_sglang_native
 
@@ -301,7 +305,7 @@ class LettaAgentV3(LettaAgentV2):
             # Use SGLang native adapter for multi-turn RL training
             llm_adapter = SGLangNativeAdapter(
                 llm_client=self.llm_client,
-                llm_config=self.agent_state.llm_config,
+                llm_config=get_llm_config(self.agent_state),
                 model_settings=self.agent_state.model_settings,
                 call_type=LLMCallType.agent_step,
                 agent_id=self.agent_state.id,
@@ -315,7 +319,7 @@ class LettaAgentV3(LettaAgentV2):
         else:
             llm_adapter = SimpleLLMRequestAdapter(
                 llm_client=self.llm_client,
-                llm_config=self.agent_state.llm_config,
+                llm_config=get_llm_config(self.agent_state),
                 call_type=LLMCallType.agent_step,
                 agent_id=self.agent_state.id,
                 agent_tags=self.agent_state.tags,
@@ -366,12 +370,12 @@ class LettaAgentV3(LettaAgentV2):
             ## Proactive summarization if approaching context limit
             # if (
             #    self.context_token_estimate is not None
-            #    and self.context_token_estimate > self.agent_state.llm_config.context_window * SUMMARIZATION_TRIGGER_MULTIPLIER
+            #    and self.context_token_estimate > get_llm_config(self.agent_state).context_window * SUMMARIZATION_TRIGGER_MULTIPLIER
             #    and not self.agent_state.message_buffer_autoclear
             # ):
             #    self.logger.warning(
             #        f"Step usage ({self.last_step_usage.total_tokens} tokens) approaching "
-            #        f"context limit ({self.agent_state.llm_config.context_window}), triggering summarization."
+            #        f"context limit ({get_llm_config(self.agent_state).context_window}), triggering summarization."
             #    )
 
             #    in_context_messages = await self.summarize_conversation_history(
@@ -502,16 +506,16 @@ class LettaAgentV3(LettaAgentV2):
 
         # Check if we should use SGLang native adapter for multi-turn RL training
         use_sglang_native = (
-            self.agent_state.llm_config.return_token_ids
-            and self.agent_state.llm_config.handle
-            and self.agent_state.llm_config.handle.startswith("sglang/")
+            get_llm_config(self.agent_state).return_token_ids
+            and get_llm_config(self.agent_state).handle
+            and get_llm_config(self.agent_state).handle.startswith("sglang/")
         )
         self.return_token_ids = use_sglang_native
 
         if stream_tokens:
             llm_adapter = SimpleLLMStreamAdapter(
                 llm_client=self.llm_client,
-                llm_config=self.agent_state.llm_config,
+                llm_config=get_llm_config(self.agent_state),
                 call_type=LLMCallType.agent_step,
                 agent_id=self.agent_state.id,
                 agent_tags=self.agent_state.tags,
@@ -525,7 +529,7 @@ class LettaAgentV3(LettaAgentV2):
             # Use SGLang native adapter for multi-turn RL training
             llm_adapter = SGLangNativeAdapter(
                 llm_client=self.llm_client,
-                llm_config=self.agent_state.llm_config,
+                llm_config=get_llm_config(self.agent_state),
                 model_settings=self.agent_state.model_settings,
                 call_type=LLMCallType.agent_step,
                 agent_id=self.agent_state.id,
@@ -540,7 +544,7 @@ class LettaAgentV3(LettaAgentV2):
         else:
             llm_adapter = SimpleLLMRequestAdapter(
                 llm_client=self.llm_client,
-                llm_config=self.agent_state.llm_config,
+                llm_config=get_llm_config(self.agent_state),
                 call_type=LLMCallType.agent_step,
                 agent_id=self.agent_state.id,
                 agent_tags=self.agent_state.tags,
@@ -600,8 +604,11 @@ class LettaAgentV3(LettaAgentV2):
 
                     # Log chunks with missing id or otid for debugging.
                     # Compaction EventMessage is intentionally metadata-only and may omit otid.
-                    is_compaction_event = isinstance(chunk, EventMessage) and chunk.event_type == "compaction"
-                    if isinstance(chunk, LettaMessage) and (not chunk.id or not chunk.otid) and not is_compaction_event:
+                    is_metadata_event = isinstance(chunk, EventMessage) and chunk.event_type in (
+                        "compaction",
+                        "llm_degraded_failure",
+                    )
+                    if isinstance(chunk, LettaMessage) and (not chunk.id or not chunk.otid) and not is_metadata_event:
                         self.logger.warning(
                             "Streaming chunk missing id or otid: message_type=%s id=%s otid=%s step_id=%s",
                             chunk.message_type,
@@ -748,15 +755,15 @@ class LettaAgentV3(LettaAgentV2):
         """
         system_prompt_token_estimate = await count_tokens(
             actor=self.actor,
-            llm_config=self.agent_state.llm_config,
+            llm_config=get_llm_config(self.agent_state),
             messages=[system_message],
         )
-        if system_prompt_token_estimate is not None and system_prompt_token_estimate >= self.agent_state.llm_config.context_window:
+        if system_prompt_token_estimate is not None and system_prompt_token_estimate >= get_llm_config(self.agent_state).context_window:
             self.should_continue = False
             self.stop_reason = LettaStopReason(stop_reason=StopReasonType.context_window_overflow_in_system_prompt.value)
             raise SystemPromptTokenExceededError(
                 system_prompt_token_estimate=system_prompt_token_estimate,
-                context_window=self.agent_state.llm_config.context_window,
+                context_window=get_llm_config(self.agent_state).context_window,
             )
 
     async def _checkpoint_messages(self, run_id: str, step_id: str, new_messages: list[Message], in_context_messages: list[Message]):
@@ -819,6 +826,144 @@ class LettaAgentV3(LettaAgentV2):
 
         self.in_context_messages = in_context_messages  # update in-memory state
 
+    def _create_llm_failure_event_message(
+        self,
+        *,
+        step_id: str | None,
+        run_id: str | None,
+        error: LLMError,
+        model_handle: str | None,
+        attempts: Optional[int],
+        failure_kind: str,
+    ) -> EventMessage:
+        details = error.details if isinstance(error.details, dict) else {}
+        llm_cfg = get_llm_config(self.agent_state)
+        return EventMessage(
+            id=str(uuid.uuid4()),
+            date=get_utc_time(),
+            event_type="llm_degraded_failure",
+            event_data={
+                "failure_kind": failure_kind,
+                "attempts": attempts,
+                "model": details.get("model") or llm_cfg.model,
+                "handle": details.get("handle") or model_handle or llm_cfg.handle,
+                "degraded_reason": details.get("degraded_reason"),
+                "generation_id": details.get("generation_id"),
+                "error_type": llm_failure_error_type(error),
+                "error_class": type(error).__name__,
+                "context_window": llm_cfg.context_window,
+            },
+            run_id=run_id,
+            step_id=step_id,
+        )
+
+    async def _inject_llm_failure_into_context(
+        self,
+        *,
+        error: LLMError,
+        messages: list[Message],
+        run_id: str | None,
+        step_id: str | None,
+        include_compaction_messages: bool,
+        model_handle: str | None,
+        attempts: Optional[int] = None,
+    ) -> AsyncGenerator[LettaMessage, None]:
+        """Persist and stream a system_alert notice after an LLM failure."""
+        details = error.details if isinstance(error.details, dict) else {}
+        llm_cfg = get_llm_config(self.agent_state)
+        failure_kind = "degraded_response" if isinstance(error, LLMEmptyResponseError) else "llm_api_error"
+        packed = package_llm_failure_notice_message(
+            timezone=self.agent_state.timezone,
+            failure_kind=failure_kind,
+            human_message=human_message_for_llm_failure(error, attempts=attempts),
+            model=details.get("model") or llm_cfg.model,
+            handle=details.get("handle") or model_handle or llm_cfg.handle,
+            attempts=attempts,
+            degraded_reason=details.get("degraded_reason"),
+            generation_id=details.get("generation_id"),
+            error_type=llm_failure_error_type(error),
+            error_class=type(error).__name__,
+            detail=str(error)[:500],
+        )
+        failure_message = Message(
+            role=MessageRole.summary if include_compaction_messages else MessageRole.user,
+            content=[TextContent(text=packed)],
+            agent_id=self.agent_state.id,
+            run_id=run_id,
+            step_id=step_id,
+        )
+        failure_text = unpack_message(packed)
+        messages.append(failure_message)
+
+        # Stream as assistant so clients that drop user_message SSE (e.g. vision bridge) show this immediately.
+        yield AssistantMessage(
+            id=failure_message.id,
+            date=get_utc_time(),
+            content=failure_text,
+            step_id=step_id,
+            run_id=run_id,
+            otid=Message.generate_otid_from_id(failure_message.id, 0),
+        )
+        yield AssistantMessage(
+            id=f"{failure_message.id}-injected-json",
+            date=get_utc_time(),
+            content=f"```json\n{json.dumps(json.loads(packed), indent=2)}\n```",
+            step_id=step_id,
+            run_id=run_id,
+            otid=Message.generate_otid_from_id(failure_message.id, 1),
+        )
+
+        if include_compaction_messages:
+            yield self._create_llm_failure_event_message(
+                step_id=step_id,
+                run_id=run_id,
+                error=error,
+                model_handle=model_handle,
+                attempts=attempts,
+                failure_kind=failure_kind,
+            )
+
+        await self._checkpoint_messages(
+            run_id=run_id,
+            step_id=step_id,
+            new_messages=[failure_message],
+            in_context_messages=messages,
+        )
+        self.response_messages.append(failure_message)
+
+    def _create_llm_degraded_failure_result_messages(
+        self,
+        *,
+        failure_message: Message,
+        failure_text: str,
+        step_id: str | None,
+        run_id: str | None,
+        include_compaction_messages: bool,
+    ) -> list[LettaMessage]:
+        if include_compaction_messages:
+            packed_text = (
+                failure_message.content[0].text
+                if failure_message.content and isinstance(failure_message.content[0], TextContent)
+                else ""
+            )
+            degraded_stats = extract_llm_degraded_failure_stats_from_packed_json(packed_text)
+            return [
+                SummaryMessage(
+                    id=failure_message.id,
+                    date=failure_message.created_at,
+                    summary=failure_text,
+                    otid=Message.generate_otid_from_id(failure_message.id, 0),
+                    step_id=step_id,
+                    run_id=run_id,
+                    degraded_failure_stats=degraded_stats,
+                ),
+            ]
+        result = list(Message.to_letta_messages(failure_message))
+        for i, msg in enumerate(result):
+            if not msg.otid:
+                msg.otid = Message.generate_otid_from_id(failure_message.id, i)
+        return result
+
     def _create_compaction_event_message(
         self,
         step_id: str | None,
@@ -843,7 +988,7 @@ class LettaAgentV3(LettaAgentV2):
             event_data={
                 "trigger": trigger,
                 "context_token_estimate": self.context_token_estimate,
-                "context_window": self.agent_state.llm_config.context_window,
+                "context_window": get_llm_config(self.agent_state).context_window,
             },
             run_id=run_id,
             step_id=step_id,
@@ -939,7 +1084,7 @@ class LettaAgentV3(LettaAgentV2):
         if self.context_token_estimate is None:
             self.logger.warning("Context token estimate is not set")
 
-        compaction_trigger_threshold = get_compaction_trigger_threshold(self.agent_state.llm_config)
+        compaction_trigger_threshold = get_compaction_trigger_threshold(get_llm_config(self.agent_state))
 
         step_progression = StepProgression.START
         caught_exception = None
@@ -1044,7 +1189,7 @@ class LettaAgentV3(LettaAgentV2):
                 )
 
                 # Auto mode: resolve handle to actual model config
-                auto_mode_handle = self.agent_state.llm_config.handle
+                auto_mode_handle = get_llm_config(self.agent_state).handle
                 is_auto_mode = auto_mode_handle in AUTO_MODE_HANDLES
                 is_primary = False
                 primary_handle = ""
@@ -1054,7 +1199,7 @@ class LettaAgentV3(LettaAgentV2):
                     try:
                         routing_client = await get_llm_routing_client()
                         active_llm_config, is_primary, primary_handle = await routing_client.resolve_auto_mode_config(
-                            stored_llm_config=self.agent_state.llm_config,
+                            stored_llm_config=get_llm_config(self.agent_state),
                             actor=self.actor,
                         )
                         resolved_llm_config = active_llm_config
@@ -1064,7 +1209,7 @@ class LettaAgentV3(LettaAgentV2):
                         active_llm_config = routing_client.apply_reroute_rules(
                             resolved_config=active_llm_config,
                             messages=messages,
-                            stored_llm_config=self.agent_state.llm_config,
+                            stored_llm_config=get_llm_config(self.agent_state),
                             agent_state=self.agent_state,
                         )
                         resolved_llm_config = active_llm_config
@@ -1090,7 +1235,7 @@ class LettaAgentV3(LettaAgentV2):
                                 model_endpoint=resolved_llm_config.model_endpoint,
                             )
                 else:
-                    active_llm_config = self.agent_state.llm_config
+                    active_llm_config = get_llm_config(self.agent_state)
                     active_llm_client = self.llm_client
 
                 force_tool_call = valid_tools[0]["name"] if len(valid_tools) == 1 and self._require_tool_call else None
@@ -1156,22 +1301,69 @@ class LettaAgentV3(LettaAgentV2):
                             return
 
                         step_progression, step_metrics = self._step_checkpoint_llm_request_start(step_metrics, agent_step_span)
-                        invocation = llm_adapter.invoke_llm(
-                            request_data=request_data,
-                            messages=messages,
-                            tools=valid_tools,
-                            use_assistant_message=False,  # NOTE: set to false
-                            requires_approval_tools=self.tool_rules_solver.get_requires_approval_tools(
-                                set([t["name"] for t in valid_tools])
+                        max_degraded_attempts = settings.llm_degraded_response_max_retries + 1
+                        llm_stream_succeeded = False
+                        for degraded_attempt in range(max_degraded_attempts):
+                            try:
+                                invocation = llm_adapter.invoke_llm(
+                                    request_data=request_data,
+                                    messages=messages,
+                                    tools=valid_tools,
+                                    use_assistant_message=False,  # NOTE: set to false
+                                    requires_approval_tools=self.tool_rules_solver.get_requires_approval_tools(
+                                        set([t["name"] for t in valid_tools])
+                                    )
+                                    + [ct.name for ct in self.client_tools],
+                                    step_id=step_id,
+                                    actor=self.actor,
+                                )
+                                async for chunk in invocation:
+                                    if llm_adapter.supports_token_streaming():
+                                        if include_return_message_types is None or chunk.message_type in include_return_message_types:
+                                            yield chunk
+                                llm_stream_succeeded = True
+                                break
+                            except LLMEmptyResponseError as e:
+                                if degraded_attempt < settings.llm_degraded_response_max_retries:
+                                    self.logger.warning(
+                                        "[LLM_DEGRADED_RESPONSE] Retrying after degraded stream completion "
+                                        f"(attempt {degraded_attempt + 1}/{max_degraded_attempts}, "
+                                        f"handle={active_llm_config.handle}): {e}"
+                                    )
+                                    continue
+                                self.stop_reason = LettaStopReason(stop_reason=StopReasonType.invalid_llm_response.value)
+                                async for notice in self._inject_llm_failure_into_context(
+                                    error=e,
+                                    messages=messages,
+                                    run_id=run_id,
+                                    step_id=step_id,
+                                    include_compaction_messages=include_compaction_messages,
+                                    attempts=max_degraded_attempts,
+                                    model_handle=active_llm_config.handle,
+                                ):
+                                    yield notice
+                                raise e
+                        if not llm_stream_succeeded:
+                            self.stop_reason = LettaStopReason(stop_reason=StopReasonType.invalid_llm_response.value)
+                            exhausted_error = LLMEmptyResponseError(
+                                message="LLM stream failed after all degraded-response retries",
+                                details={
+                                    "handle": active_llm_config.handle,
+                                    "attempts": max_degraded_attempts,
+                                    "degraded_reason": "retries_exhausted",
+                                },
                             )
-                            + [ct.name for ct in self.client_tools],
-                            step_id=step_id,
-                            actor=self.actor,
-                        )
-                        async for chunk in invocation:
-                            if llm_adapter.supports_token_streaming():
-                                if include_return_message_types is None or chunk.message_type in include_return_message_types:
-                                    yield chunk
+                            async for notice in self._inject_llm_failure_into_context(
+                                error=exhausted_error,
+                                messages=messages,
+                                run_id=run_id,
+                                step_id=step_id,
+                                include_compaction_messages=include_compaction_messages,
+                                attempts=max_degraded_attempts,
+                                model_handle=active_llm_config.handle,
+                            ):
+                                yield notice
+                            raise exhausted_error
                         # Report success to circuit breaker (only for models with fallback routes)
                         routing_client = await get_llm_routing_client()
                         if routing_client.get_fallback_handle(active_llm_config.handle):
@@ -1179,9 +1371,6 @@ class LettaAgentV3(LettaAgentV2):
                         # If you've reached this point without an error, break out of retry loop
                         break
                     except ValueError as e:
-                        self.stop_reason = LettaStopReason(stop_reason=StopReasonType.invalid_llm_response.value)
-                        raise e
-                    except LLMEmptyResponseError as e:
                         self.stop_reason = LettaStopReason(stop_reason=StopReasonType.invalid_llm_response.value)
                         raise e
                     except (LLMRateLimitError, LLMServerError, LLMProviderOverloaded) as e:
@@ -1195,7 +1384,7 @@ class LettaAgentV3(LettaAgentV2):
 
                             fallback_config = await routing_client.get_fallback_config_for_handle(
                                 fallback_handle=fallback_handle,
-                                stored_llm_config=self.agent_state.llm_config,
+                                stored_llm_config=get_llm_config(self.agent_state),
                                 actor=self.actor,
                             )
                             self.logger.warning(
@@ -1214,9 +1403,27 @@ class LettaAgentV3(LettaAgentV2):
                             is_primary = False
                             continue
                         self.stop_reason = LettaStopReason(stop_reason=StopReasonType.llm_api_error.value)
+                        async for notice in self._inject_llm_failure_into_context(
+                            error=e,
+                            messages=messages,
+                            run_id=run_id,
+                            step_id=step_id,
+                            include_compaction_messages=include_compaction_messages,
+                            model_handle=active_llm_config.handle,
+                        ):
+                            yield notice
                         raise e
                     except LLMError as e:
                         self.stop_reason = LettaStopReason(stop_reason=StopReasonType.llm_api_error.value)
+                        async for notice in self._inject_llm_failure_into_context(
+                            error=e,
+                            messages=messages,
+                            run_id=run_id,
+                            step_id=step_id,
+                            include_compaction_messages=include_compaction_messages,
+                            model_handle=active_llm_config.handle,
+                        ):
+                            yield notice
                         raise e
                     except Exception as e:
                         if isinstance(e, ContextWindowExceededError) and llm_request_attempt < summarizer_settings.max_summarizer_retries:
@@ -1405,7 +1612,14 @@ class LettaAgentV3(LettaAgentV2):
 
             # step(...) has successfully completed! now we can persist messages and update the in-context messages + save metrics
             # persistence needs to happen before streaming to minimize chances of agent getting into an inconsistent state
-            step_progression, step_metrics = await self._step_checkpoint_finish(step_metrics, agent_step_span, logged_step)
+            tool_names = [tc.function.name for tc in tool_calls] if tool_calls else []
+            step_progression, step_metrics = await self._step_checkpoint_finish(
+                step_metrics,
+                agent_step_span,
+                logged_step,
+                llm_adapter=llm_adapter,
+                tool_names=tool_names,
+            )
             await self._checkpoint_messages(
                 run_id=run_id,
                 step_id=step_id,
@@ -1444,7 +1658,7 @@ class LettaAgentV3(LettaAgentV2):
                 self.logger.info(
                     "Compaction threshold exceeded "
                     f"(current: {self.context_token_estimate}, threshold: {compaction_trigger_threshold}, "
-                    f"context_window: {self.agent_state.llm_config.context_window}), trying to compact messages"
+                    f"context_window: {get_llm_config(self.agent_state).context_window}), trying to compact messages"
                 )
 
                 # Capture pre-compaction state for metadata
@@ -1636,7 +1850,7 @@ class LettaAgentV3(LettaAgentV2):
 
                     heartbeat_msg = create_heartbeat_system_message(
                         agent_id=self.agent_state.id,
-                        model=self.agent_state.llm_config.model,
+                        model=get_llm_config(self.agent_state).model,
                         function_call_success=True,
                         timezone=self.agent_state.timezone,
                         heartbeat_reason=heartbeat_reason,
@@ -1662,7 +1876,7 @@ class LettaAgentV3(LettaAgentV2):
                 )
                 assistant_message = create_letta_messages_from_llm_response(
                     agent_id=self.agent_state.id,
-                    model=self.agent_state.llm_config.model,
+                    model=get_llm_config(self.agent_state).model,
                     function_name=None,
                     function_arguments=None,
                     tool_execution_result=None,
@@ -1701,7 +1915,7 @@ class LettaAgentV3(LettaAgentV2):
             if requested_tool_calls:
                 approval_messages = create_approval_request_message_from_llm_response(
                     agent_id=self.agent_state.id,
-                    model=self.agent_state.llm_config.model,
+                    model=get_llm_config(self.agent_state).model,
                     requested_tool_calls=requested_tool_calls,
                     allowed_tool_calls=allowed_tool_calls,
                     reasoning_content=content,
@@ -1931,7 +2145,7 @@ class LettaAgentV3(LettaAgentV2):
         # Use the parallel message creation function for both single and multiple tools
         parallel_messages = create_parallel_tool_messages_from_llm_response(
             agent_id=self.agent_state.id,
-            model=self.agent_state.llm_config.model,
+            model=get_llm_config(self.agent_state).model,
             tool_call_specs=tool_call_specs,
             tool_execution_results=tool_execution_results,
             function_responses=function_responses,
@@ -2061,7 +2275,7 @@ class LettaAgentV3(LettaAgentV2):
 
         # Build allowed tools from server tools, excluding those overridden by client tools
         allowed_tools = [
-            enable_strict_mode(t.json_schema, strict=self.agent_state.llm_config.strict)
+            enable_strict_mode(t.json_schema, strict=get_llm_config(self.agent_state).strict)
             for t in tools
             if t.name in set(valid_tool_names) and t.name not in client_tool_names
         ]
@@ -2121,7 +2335,7 @@ class LettaAgentV3(LettaAgentV2):
         result = await compact_messages(
             actor=self.actor,
             agent_id=self.agent_state.id,
-            agent_llm_config=self.agent_state.llm_config,
+            agent_llm_config=get_llm_config(self.agent_state),
             telemetry_manager=self.telemetry_manager,
             llm_client=self.llm_client,
             agent_type=self.agent_state.agent_type,

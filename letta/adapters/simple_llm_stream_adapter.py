@@ -250,6 +250,8 @@ class SimpleLLMStreamAdapter(LettaLLMStreamAdapter):
                 elif getattr(resp, "status", None) == "completed":
                     self._finish_reason = "stop"
 
+            self._validate_streaming_completion()
+
             # Log request and response data
             self.log_provider_trace(step_id=step_id, actor=actor)
 

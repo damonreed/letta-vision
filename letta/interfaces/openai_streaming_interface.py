@@ -332,8 +332,15 @@ class OpenAIStreamingInterface:
         # track usage
         if chunk.usage:
             # chunk usage displays the cumulative tokens so far (not tokens for individual chunk)
-            self.input_tokens = chunk.usage.prompt_tokens
-            self.output_tokens = chunk.usage.completion_tokens
+            usage = chunk.usage
+            prompt_tokens = usage.prompt_tokens
+            completion_tokens = usage.completion_tokens
+            if prompt_tokens is None and getattr(usage, "input_tokens", None) is not None:
+                prompt_tokens = usage.input_tokens
+            if completion_tokens is None and getattr(usage, "output_tokens", None) is not None:
+                completion_tokens = usage.output_tokens
+            self.input_tokens = prompt_tokens or 0
+            self.output_tokens = completion_tokens or 0
 
         if chunk.choices:
             choice = chunk.choices[0]
@@ -704,6 +711,10 @@ class SimpleOpenAIStreamingInterface:
         input_tokens = self.input_tokens if self.input_tokens else self.fallback_input_tokens
         output_tokens = self.output_tokens if self.output_tokens else self.fallback_output_tokens
 
+        if self.raw_usage and not input_tokens and not output_tokens:
+            input_tokens = self.raw_usage.get("prompt_tokens") or self.raw_usage.get("input_tokens") or 0
+            output_tokens = self.raw_usage.get("completion_tokens") or self.raw_usage.get("output_tokens") or 0
+
         return LettaUsageStatistics(
             prompt_tokens=input_tokens or 0,
             completion_tokens=output_tokens or 0,
@@ -846,8 +857,15 @@ class SimpleOpenAIStreamingInterface:
         # track usage
         if chunk.usage:
             # chunk usage displays the cumulative tokens so far (not tokens for individual chunk)
-            self.input_tokens = chunk.usage.prompt_tokens
-            self.output_tokens = chunk.usage.completion_tokens
+            usage = chunk.usage
+            prompt_tokens = usage.prompt_tokens
+            completion_tokens = usage.completion_tokens
+            if prompt_tokens is None and getattr(usage, "input_tokens", None) is not None:
+                prompt_tokens = usage.input_tokens
+            if completion_tokens is None and getattr(usage, "output_tokens", None) is not None:
+                completion_tokens = usage.output_tokens
+            self.input_tokens = prompt_tokens or 0
+            self.output_tokens = completion_tokens or 0
             # Store raw usage for transparent provider trace logging
             try:
                 self.raw_usage = chunk.usage.model_dump(exclude_none=True)

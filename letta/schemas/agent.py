@@ -188,8 +188,13 @@ class AgentState(OrmMetadataBase, validate_assignment=True):
         if self.max_files_open is not None and self.per_file_view_window_char_limit is not None:
             return self
 
-        # Get context window size from llm_config
-        context_window = self.llm_config.context_window if self.llm_config and self.llm_config.context_window else None
+        # Get context window size from llm_config (field deprecated on AgentState; still authoritative server-side)
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=DeprecationWarning)
+            llm_config = self.llm_config
+        context_window = llm_config.context_window if llm_config and llm_config.context_window else None
 
         # Calculate defaults using the helper function
         default_max_files, default_char_limit = calculate_file_defaults_based_on_context_window(context_window)

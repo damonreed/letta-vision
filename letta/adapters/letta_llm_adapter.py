@@ -1,7 +1,8 @@
 from abc import ABC, abstractmethod
-from typing import AsyncGenerator
+from typing import Any, AsyncGenerator
 
 from letta.llm_api.llm_client_base import LLMClientBase
+from letta.observability.lifecycle_logging import extract_provider_completion_metadata
 from letta.schemas.enums import LLMCallType
 from letta.schemas.letta_message import LettaMessage
 from letta.schemas.letta_message_content import ReasoningContent, RedactedReasoningContent, TextContent
@@ -119,6 +120,23 @@ class LettaLLMAdapter(ABC):
         should override this to release them.  The default implementation is a no-op.
         """
         pass
+
+    def get_provider_completion_metadata(self) -> dict[str, Any]:
+        """Scalar completion fields from the provider (e.g. OpenRouter usage in raw_usage), no prompts."""
+        raw_usage = None
+        response_model = None
+        generation_id = None
+        interface = getattr(self, "interface", None)
+        if interface is not None:
+            raw_usage = getattr(interface, "raw_usage", None)
+            response_model = getattr(interface, "model", None)
+            generation_id = getattr(interface, "message_id", None)
+        return extract_provider_completion_metadata(
+            raw_usage,
+            response_model=response_model,
+            generation_id=generation_id,
+            finish_reason=self.finish_reason,
+        )
 
     def log_provider_trace(self, step_id: str | None, actor: User | None) -> None:
         """

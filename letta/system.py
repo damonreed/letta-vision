@@ -236,6 +236,97 @@ def package_summarize_message_no_counts(summary, timezone, compaction_stats: dic
     return json_dumps(packaged_message)
 
 
+def package_llm_failure_notice_message(
+    *,
+    timezone: Optional[str],
+    failure_kind: str,
+    human_message: str,
+    model: Optional[str] = None,
+    handle: Optional[str] = None,
+    attempts: Optional[int] = None,
+    degraded_reason: Optional[str] = None,
+    generation_id: Optional[str] = None,
+    error_type: Optional[str] = None,
+    error_class: Optional[str] = None,
+    detail: Optional[str] = None,
+) -> str:
+    """Pack a system_alert notice injected into agent context after an LLM failure."""
+    detail_lines: list[str] = []
+    if model:
+        detail_lines.append(f"model={model}")
+    if handle:
+        detail_lines.append(f"handle={handle}")
+    if attempts is not None:
+        detail_lines.append(f"attempts={attempts}")
+    if degraded_reason:
+        detail_lines.append(f"reason={degraded_reason}")
+    if generation_id:
+        detail_lines.append(f"generation_id={generation_id}")
+    if error_type:
+        detail_lines.append(f"error_type={error_type}")
+    if error_class:
+        detail_lines.append(f"error_class={error_class}")
+    if detail:
+        detail_lines.append(f"detail={detail[:500]}")
+
+    context_message = human_message
+    if detail_lines:
+        context_message += "\n\nProvider details: " + ", ".join(detail_lines)
+
+    formatted_time = get_local_time(timezone=timezone)
+    failure_stats: dict[str, Any] = {
+        "failure_kind": failure_kind,
+        "attempts": attempts,
+        "model": model,
+        "handle": handle,
+        "degraded_reason": degraded_reason,
+        "generation_id": generation_id,
+        "error_type": error_type,
+        "error_class": error_class,
+        "detail": detail[:500] if detail else None,
+    }
+    packaged_message: dict[str, Any] = {
+        "type": "system_alert",
+        "message": context_message,
+        "time": formatted_time,
+        "llm_failure_stats": failure_stats,
+        # Backward-compatible alias for degraded-only clients
+        "degraded_failure_stats": failure_stats,
+    }
+    return json.dumps(packaged_message)
+
+
+def package_llm_degraded_failure_message(
+    *,
+    timezone: Optional[str],
+    attempts: int,
+    model: Optional[str] = None,
+    handle: Optional[str] = None,
+    degraded_reason: Optional[str] = None,
+    generation_id: Optional[str] = None,
+    detail: Optional[str] = None,
+) -> str:
+    """Pack a user-visible notice when the LLM returned no usable output after retries."""
+    human_message = (
+        f"Note: The model provider failed to return a usable response after {attempts} attempt(s). "
+        "This often indicates a temporary upstream outage (for example at OpenRouter or its CDN edge) "
+        "rather than a problem with your request. No assistant reply was produced for this step."
+    )
+    return package_llm_failure_notice_message(
+        timezone=timezone,
+        failure_kind="degraded_response",
+        human_message=human_message,
+        model=model,
+        handle=handle,
+        attempts=attempts,
+        degraded_reason=degraded_reason,
+        generation_id=generation_id,
+        detail=detail,
+        error_type="llm_empty_response",
+        error_class="LLMEmptyResponseError",
+    )
+
+
 def package_summarize_message_no_summary(hidden_message_count, message=None, timezone=None):
     """Add useful metadata to the summary message"""
 

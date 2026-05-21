@@ -802,10 +802,17 @@ class StreamingService:
                 if run_id and self.runs_manager and run_status:
                     # Extract stop_reason enum value from LettaStopReason object
                     stop_reason_value = stop_reason.stop_reason if stop_reason else StopReasonType.error.value
+                    from letta.helpers.datetime_helpers import get_utc_time
+
                     await self.runs_manager.update_run_by_id_async(
                         run_id=run_id,
                         conversation_id=lock_key,  # Use lock_key for lock release
-                        update=RunUpdate(status=run_status, stop_reason=stop_reason_value, metadata=error_data),
+                        update=RunUpdate(
+                            status=run_status,
+                            stop_reason=stop_reason_value,
+                            metadata=error_data,
+                            completed_at=get_utc_time().replace(tzinfo=None),
+                        ),
                         actor=actor,
                     )
 
@@ -819,7 +826,9 @@ class StreamingService:
 
     def _is_token_streaming_compatible(self, agent: AgentState) -> bool:
         """Check if agent's model supports token-level streaming."""
-        base_compatible = agent.llm_config.model_endpoint_type in [
+        from letta.agents.agent_state_access import get_llm_config
+
+        base_compatible = get_llm_config(agent).model_endpoint_type in [
             "anthropic",
             "openai",
             "bedrock",
@@ -957,7 +966,12 @@ class StreamingService:
         if not self.runs_manager:
             return
 
-        update = RunUpdate(status=status)
+        from letta.helpers.datetime_helpers import get_utc_time
+
+        update = RunUpdate(
+            status=status,
+            completed_at=get_utc_time().replace(tzinfo=None),
+        )
         if error:
             update.metadata = {"error": error}
         if stop_reason:

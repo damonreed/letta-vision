@@ -6,6 +6,7 @@ from typing import AsyncGenerator, Optional, Tuple
 from opentelemetry.trace import Span
 
 from letta.adapters.letta_llm_adapter import LettaLLMAdapter
+from letta.agents.agent_state_access import get_agent_memory, get_llm_config
 from letta.adapters.letta_llm_request_adapter import LettaLLMRequestAdapter
 from letta.adapters.letta_llm_stream_adapter import LettaLLMStreamAdapter
 from letta.agents.base_agent_v2 import BaseAgentV2
@@ -19,7 +20,7 @@ from letta.agents.helpers import (
     generate_step_id,
 )
 from letta.constants import DEFAULT_MAX_STEPS, NON_USER_MSG_PREFIX, REQUEST_HEARTBEAT_PARAM
-from letta.errors import ContextWindowExceededError, InsufficientCreditsError, LLMError
+from letta.errors import ContextWindowExceededError, InsufficientCreditsError, LLMEmptyResponseError, LLMError
 from letta.helpers import ToolRulesSolver
 from letta.helpers.datetime_helpers import get_utc_time, get_utc_timestamp_ns, ns_to_ms
 from letta.helpers.reasoning_helper import scrub_inner_thoughts_from_messages
@@ -66,6 +67,7 @@ from letta.services.run_manager import RunManager
 from letta.services.step_manager import StepManager
 from letta.services.summarizer.enums import SummarizationMode
 from letta.services.summarizer.summarizer import Summarizer
+from letta.observability.lifecycle_logging import log_step_lifecycle_completed, merge_step_usage_with_provider
 from letta.services.telemetry_manager import TelemetryManager
 from letta.services.tool_executor.tool_execution_manager import ToolExecutionManager
 from letta.settings import settings, summarizer_settings
@@ -171,7 +173,7 @@ class LettaAgentV2(BaseAgentV2):
             messages=in_context_messages + input_messages_to_persist,
             llm_adapter=LettaLLMRequestAdapter(
                 llm_client=self.llm_client,
-                llm_config=self.agent_state.llm_config,
+                llm_config=get_llm_config(self.agent_state),
                 call_type=LLMCallType.agent_step,
                 agent_id=self.agent_state.id,
                 agent_tags=self.agent_state.tags,
@@ -246,7 +248,7 @@ class LettaAgentV2(BaseAgentV2):
                 input_messages_to_persist=input_messages_to_persist,
                 llm_adapter=LettaLLMRequestAdapter(
                     llm_client=self.llm_client,
-                    llm_config=self.agent_state.llm_config,
+                    llm_config=get_llm_config(self.agent_state),
                     call_type=LLMCallType.agent_step,
                     agent_id=self.agent_state.id,
                     agent_tags=self.agent_state.tags,
@@ -346,7 +348,7 @@ class LettaAgentV2(BaseAgentV2):
         if stream_tokens:
             llm_adapter = LettaLLMStreamAdapter(
                 llm_client=self.llm_client,
-                llm_config=self.agent_state.llm_config,
+                llm_config=get_llm_config(self.agent_state),
                 call_type=LLMCallType.agent_step,
                 agent_id=self.agent_state.id,
                 agent_tags=self.agent_state.tags,
@@ -357,7 +359,7 @@ class LettaAgentV2(BaseAgentV2):
         else:
             llm_adapter = LettaLLMRequestAdapter(
                 llm_client=self.llm_client,
-                llm_config=self.agent_state.llm_config,
+                llm_config=get_llm_config(self.agent_state),
                 call_type=LLMCallType.agent_step,
                 agent_id=self.agent_state.id,
                 agent_tags=self.agent_state.tags,
@@ -524,7 +526,7 @@ class LettaAgentV2(BaseAgentV2):
                         request_data = self.llm_client.build_request_data(
                             agent_type=self.agent_state.agent_type,
                             messages=messages,
-                            llm_config=self.agent_state.llm_config,
+                            llm_config=get_llm_config(self.agent_state),
                             tools=valid_tools,
                             force_tool_call=force_tool_call,
                             system=request_system_prompt,
@@ -535,22 +537,44 @@ class LettaAgentV2(BaseAgentV2):
 
                         step_progression, step_metrics = self._step_checkpoint_llm_request_start(step_metrics, agent_step_span)
 
-                        invocation = llm_adapter.invoke_llm(
-                            request_data=request_data,
-                            messages=messages,
-                            tools=valid_tools,
-                            use_assistant_message=use_assistant_message,
-                            requires_approval_tools=self.tool_rules_solver.get_requires_approval_tools(
-                                set([t["name"] for t in valid_tools])
-                            ),
-                            step_id=step_id,
-                            actor=self.actor,
-                        )
-                        async for chunk in invocation:
-                            if llm_adapter.supports_token_streaming():
-                                if include_return_message_types is None or chunk.message_type in include_return_message_types:
-                                    first_chunk = True
-                                    yield chunk
+                        max_degraded_attempts = settings.llm_degraded_response_max_retries + 1
+                        llm_stream_succeeded = False
+                        for degraded_attempt in range(max_degraded_attempts):
+                            try:
+                                invocation = llm_adapter.invoke_llm(
+                                    request_data=request_data,
+                                    messages=messages,
+                                    tools=valid_tools,
+                                    use_assistant_message=use_assistant_message,
+                                    requires_approval_tools=self.tool_rules_solver.get_requires_approval_tools(
+                                        set([t["name"] for t in valid_tools])
+                                    ),
+                                    step_id=step_id,
+                                    actor=self.actor,
+                                )
+                                async for chunk in invocation:
+                                    if llm_adapter.supports_token_streaming():
+                                        if include_return_message_types is None or chunk.message_type in include_return_message_types:
+                                            first_chunk = True
+                                            yield chunk
+                                llm_stream_succeeded = True
+                                break
+                            except LLMEmptyResponseError as e:
+                                if degraded_attempt < settings.llm_degraded_response_max_retries:
+                                    self.logger.warning(
+                                        "[LLM_DEGRADED_RESPONSE] Retrying after degraded stream completion "
+                                        f"(attempt {degraded_attempt + 1}/{max_degraded_attempts}, "
+                                        f"handle={get_llm_config(self.agent_state).handle}): {e}"
+                                    )
+                                    continue
+                                self.stop_reason = LettaStopReason(stop_reason=StopReasonType.invalid_llm_response.value)
+                                raise e
+                        if not llm_stream_succeeded:
+                            self.stop_reason = LettaStopReason(stop_reason=StopReasonType.invalid_llm_response.value)
+                            raise LLMEmptyResponseError(
+                                message="LLM stream failed after all degraded-response retries",
+                                details={"attempts": max_degraded_attempts},
+                            )
                         # If you've reached this point without an error, break out of retry loop
                         break
                     except ValueError as e:
@@ -644,7 +668,15 @@ class LettaAgentV2(BaseAgentV2):
                 await self.agent_manager.update_message_ids_async(
                     agent_id=self.agent_state.id, message_ids=self.agent_state.message_ids, actor=self.actor
                 )
-            step_progression, step_metrics = await self._step_checkpoint_finish(step_metrics, agent_step_span, logged_step)
+            executed_tool = tool_call or llm_adapter.tool_call
+            tool_names = [executed_tool.function.name] if executed_tool is not None else []
+            step_progression, step_metrics = await self._step_checkpoint_finish(
+                step_metrics,
+                agent_step_span,
+                logged_step,
+                llm_adapter=llm_adapter,
+                tool_names=tool_names,
+            )
         except Exception as e:
             caught_exception = e
             self.logger.warning(f"Error during step processing: {e}")
@@ -788,7 +820,7 @@ class LettaAgentV2(BaseAgentV2):
                 raise
 
         # Always scrub inner thoughts regardless of system prompt refresh
-        in_context_messages = scrub_inner_thoughts_from_messages(in_context_messages, self.agent_state.llm_config)
+        in_context_messages = scrub_inner_thoughts_from_messages(in_context_messages, get_llm_config(self.agent_state))
         return in_context_messages
 
     @trace_method
@@ -804,7 +836,7 @@ class LettaAgentV2(BaseAgentV2):
             return self.override_system
 
         current_system_text = current_system_message.content[0].text
-        request_skills_block = self.agent_state.memory.compile_available_skills(client_skills=client_skills)
+        request_skills_block = get_agent_memory(self.agent_state).compile_available_skills(client_skills=client_skills)
         if not request_skills_block:
             return current_system_text
         return current_system_text.rstrip("\n") + "\n\n" + request_skills_block.lstrip("\n")
@@ -901,7 +933,7 @@ class LettaAgentV2(BaseAgentV2):
             error_on_empty=False,  # Return empty list instead of raising error
         ) or list(set(t.name for t in tools))
         allowed_tools = [
-            enable_strict_mode(t.json_schema, strict=self.agent_state.llm_config.strict) for t in tools if t.name in set(valid_tool_names)
+            enable_strict_mode(t.json_schema, strict=get_llm_config(self.agent_state).strict) for t in tools if t.name in set(valid_tool_names)
         ]
         terminal_tool_names = {rule.tool_name for rule in self.tool_rules_solver.terminal_tool_rules}
         allowed_tools = runtime_override_tool_json_schema(
@@ -917,7 +949,7 @@ class LettaAgentV2(BaseAgentV2):
         if request_start_timestamp_ns is not None:
             request_span = tracer.start_span("time_to_first_token", start_time=request_start_timestamp_ns)
             request_span.set_attributes(
-                {f"llm_config.{k}": v for k, v in self.agent_state.llm_config.model_dump().items() if v is not None}
+                {f"llm_config.{k}": v for k, v in get_llm_config(self.agent_state).model_dump().items() if v is not None}
             )
             return request_span
         return None
@@ -947,22 +979,25 @@ class LettaAgentV2(BaseAgentV2):
         logged_step = await self.step_manager.log_step_async(
             actor=self.actor,
             agent_id=self.agent_state.id,
-            provider_name=self.agent_state.llm_config.model_endpoint_type,
-            provider_category=self.agent_state.llm_config.provider_category or "base",
-            model=self.agent_state.llm_config.model,
-            model_endpoint=self.agent_state.llm_config.model_endpoint,
-            context_window_limit=self.agent_state.llm_config.context_window,
+            provider_name=get_llm_config(self.agent_state).model_endpoint_type,
+            provider_category=get_llm_config(self.agent_state).provider_category or "base",
+            model=get_llm_config(self.agent_state).model,
+            model_endpoint=get_llm_config(self.agent_state).model_endpoint,
+            context_window_limit=get_llm_config(self.agent_state).context_window,
             usage=UsageStatistics(completion_tokens=0, prompt_tokens=0, total_tokens=0),
             provider_id=None,
             run_id=run_id,
             step_id=step_id,
             project_id=self.agent_state.project_id,
             status=StepStatus.PENDING,
-            model_handle=self.agent_state.llm_config.handle,
+            model_handle=get_llm_config(self.agent_state).handle,
         )
 
         # Also create step metrics early and update at the end of the step
-        self._record_step_metrics(step_id=step_id, step_metrics=step_metrics, run_id=run_id)
+        safe_create_task(
+            self._record_step_metrics(step_id=step_id, step_metrics=step_metrics, run_id=run_id),
+            label="record_step_metrics_initial",
+        )
         return StepProgression.START, logged_step, step_metrics, agent_step_span
 
     @trace_method
@@ -986,7 +1021,12 @@ class LettaAgentV2(BaseAgentV2):
 
     @trace_method
     async def _step_checkpoint_finish(
-        self, step_metrics: StepMetrics, agent_step_span: Span | None, logged_step: Step | None
+        self,
+        step_metrics: StepMetrics,
+        agent_step_span: Span | None,
+        logged_step: Step | None,
+        llm_adapter: LettaLLMAdapter | None = None,
+        tool_names: list[str] | None = None,
     ) -> Tuple[StepProgression, StepMetrics]:
         if step_metrics.step_start_ns:
             step_ns = get_utc_timestamp_ns() - step_metrics.step_start_ns
@@ -994,13 +1034,15 @@ class LettaAgentV2(BaseAgentV2):
             if agent_step_span is not None:
                 agent_step_span.add_event(name="step_ms", attributes={"duration_ms": ns_to_ms(step_ns)})
                 agent_step_span.end()
-            self._record_step_metrics(step_id=step_metrics.id, step_metrics=step_metrics)
 
         # Update step with actual usage now that we have it (if step was created)
+        updated_step: Step | None = None
         if logged_step:
             # Use per-step usage for Step token details (not accumulated self.usage)
             # Each Step should store its own per-step values, not accumulated totals
             step_usage = self.last_step_usage if self.last_step_usage else self.usage
+            provider_completion = llm_adapter.get_provider_completion_metadata() if llm_adapter is not None else None
+            step_usage = merge_step_usage_with_provider(step_usage, provider_completion)
 
             # Build detailed token breakdowns from per-step LettaUsageStatistics
             # Use `is not None` to capture 0 values (meaning "provider reported 0 cached/reasoning tokens")
@@ -1019,7 +1061,7 @@ class LettaAgentV2(BaseAgentV2):
                     reasoning_tokens=step_usage.reasoning_tokens,
                 )
 
-            await self.step_manager.update_step_success_async(
+            updated_step = await self.step_manager.update_step_success_async(
                 self.actor,
                 step_metrics.id,
                 UsageStatistics(
@@ -1031,6 +1073,25 @@ class LettaAgentV2(BaseAgentV2):
                 ),
                 self.stop_reason,
             )
+
+        if logged_step and step_metrics.step_start_ns:
+            await self._record_step_metrics(step_id=step_metrics.id, step_metrics=step_metrics, run_id=logged_step.run_id)
+            try:
+                persisted_metrics = await self.step_manager.get_step_metrics_async(step_metrics.id, self.actor)
+            except Exception:
+                persisted_metrics = step_metrics
+            stream_events = None
+            if llm_adapter is not None and hasattr(llm_adapter, "interface"):
+                stream_events = getattr(llm_adapter.interface, "total_events_received", None)
+            log_step_lifecycle_completed(
+                step=updated_step or logged_step,
+                step_metrics=persisted_metrics,
+                provider_completion=provider_completion,
+                tool_names=tool_names,
+                terminal_status="success",
+                stream_events_received=stream_events,
+            )
+
         return StepProgression.FINISHED, step_metrics
 
     def _update_global_usage_stats(self, step_usage_stats: LettaUsageStatistics):
@@ -1370,9 +1431,9 @@ class LettaAgentV2(BaseAgentV2):
         # TODO: `force` and `clear` seem to no longer be used, we should remove
         if not skip_summarization:
             try:
-                if force or (total_tokens and total_tokens > self.agent_state.llm_config.context_window):
+                if force or (total_tokens and total_tokens > get_llm_config(self.agent_state).context_window):
                     self.logger.warning(
-                        f"Total tokens {total_tokens} exceeds configured max tokens {self.agent_state.llm_config.context_window}, forcefully clearing message history."
+                        f"Total tokens {total_tokens} exceeds configured max tokens {get_llm_config(self.agent_state).context_window}, forcefully clearing message history."
                     )
                     new_in_context_messages, _updated = await self.summarizer.summarize(
                         in_context_messages=in_context_messages,
@@ -1385,7 +1446,7 @@ class LettaAgentV2(BaseAgentV2):
                 else:
                     # NOTE (Sarah): Seems like this is doing nothing?
                     self.logger.info(
-                        f"Total tokens {total_tokens} does not exceed configured max tokens {self.agent_state.llm_config.context_window}, passing summarizing w/o force."
+                        f"Total tokens {total_tokens} does not exceed configured max tokens {get_llm_config(self.agent_state).context_window}, passing summarizing w/o force."
                     )
                     new_in_context_messages, _updated = await self.summarizer.summarize(
                         in_context_messages=in_context_messages,
@@ -1409,29 +1470,25 @@ class LettaAgentV2(BaseAgentV2):
 
         return new_in_context_messages
 
-    def _record_step_metrics(
+    async def _record_step_metrics(
         self,
         *,
         step_id: str,
         step_metrics: StepMetrics,
         run_id: str | None = None,
-    ):
-        task = safe_create_task(
-            self.step_manager.record_step_metrics_async(
-                actor=self.actor,
-                step_id=step_id,
-                llm_request_ns=step_metrics.llm_request_ns,
-                tool_execution_ns=step_metrics.tool_execution_ns,
-                step_ns=step_metrics.step_ns,
-                agent_id=self.agent_state.id,
-                run_id=run_id,
-                project_id=self.agent_state.project_id,
-                template_id=self.agent_state.template_id,
-                base_template_id=self.agent_state.base_template_id,
-            ),
-            label="record_step_metrics",
+    ) -> None:
+        await self.step_manager.record_step_metrics_async(
+            actor=self.actor,
+            step_id=step_id,
+            llm_request_ns=step_metrics.llm_request_ns,
+            tool_execution_ns=step_metrics.tool_execution_ns,
+            step_ns=step_metrics.step_ns,
+            agent_id=self.agent_state.id,
+            run_id=run_id,
+            project_id=self.agent_state.project_id,
+            template_id=self.agent_state.template_id,
+            base_template_id=self.agent_state.base_template_id,
         )
-        return task
 
     @trace_method
     async def _log_request(

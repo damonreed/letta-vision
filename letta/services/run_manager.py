@@ -12,7 +12,8 @@ from letta.orm.errors import NoResultFound
 from letta.orm.run import Run as RunModel
 from letta.orm.run_metrics import RunMetrics as RunMetricsModel
 from letta.orm.sqlalchemy_base import AccessType
-from letta.otel.tracing import log_event, trace_method
+from letta.observability.lifecycle_logging import log_run_lifecycle_completed, log_run_lifecycle_started
+from letta.otel.tracing import get_trace_id, log_event, trace_method
 from letta.schemas.enums import AgentType, ComparisonOperator, MessageRole, PrimitiveType, RunStatus
 from letta.schemas.job import LettaRequestConfig
 from letta.schemas.letta_message import LettaMessage
@@ -87,7 +88,16 @@ class RunManager:
             # context manager now handles commits
             # await session.commit()
 
-        return run.to_pydantic()
+        pydantic_run = run.to_pydantic()
+        log_run_lifecycle_started(
+            run_id=pydantic_run.id,
+            agent_id=pydantic_run.agent_id,
+            organization_id=organization_id,
+            conversation_id=pydantic_run.conversation_id,
+            background=pydantic_run.background,
+            trace_id=get_trace_id(),
+        )
+        return pydantic_run
 
     @enforce_types
     @raise_on_invalid_id(param_name="run_id", expected_prefix=PrimitiveType.RUN)
@@ -360,7 +370,6 @@ class RunManager:
                 if not update.stop_reason:
                     logger.error(f"Run {run_id} completed without a stop reason")
                 if not update.completed_at:
-                    logger.warning(f"Run {run_id} completed without a completed_at timestamp")
                     update.completed_at = get_utc_time().replace(tzinfo=None)
 
             # Update run attributes with only the fields that were explicitly set
@@ -477,6 +486,23 @@ class RunManager:
                 await run.update_async(db_session=session, actor=actor, no_commit=True, no_refresh=True)
                 # context manager now handles commits
                 # await session.commit()
+
+        if is_terminal_update:
+            run_duration_ms = None
+            if metrics.run_ns is not None:
+                run_duration_ms = round(metrics.run_ns / 1_000_000, 2)
+            log_run_lifecycle_completed(
+                run_id=pydantic_run.id,
+                agent_id=pydantic_run.agent_id,
+                organization_id=actor.organization_id,
+                status=str(pydantic_run.status),
+                stop_reason=str(pydantic_run.stop_reason) if pydantic_run.stop_reason else None,
+                ttft_ns=pydantic_run.ttft_ns,
+                total_duration_ns=pydantic_run.total_duration_ns,
+                run_duration_ms=run_duration_ms,
+                num_steps=num_steps,
+                trace_id=get_trace_id(),
+            )
 
         return pydantic_run
 

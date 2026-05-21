@@ -73,6 +73,14 @@ from letta.settings import model_settings, settings
 logger = get_logger(__name__)
 
 
+def _llm_config_parallel_tool_calls(llm_config: LLMConfig) -> bool | None:
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=DeprecationWarning)
+        return llm_config.parallel_tool_calls
+
+
 def _openai_client_timeout(*, streaming: bool = False) -> Timeout | float:
     """Apply LETTA_LLM_* timeout settings to OpenAI-compatible clients (incl. OpenRouter)."""
     read = (
@@ -490,7 +498,9 @@ class OpenAIClient(LLMClientBase):
 
         # Add parallel tool calling
         if tools and supports_parallel_tool_calling(model):
-            data.parallel_tool_calls = llm_config.parallel_tool_calls
+            parallel_tool_calls = _llm_config_parallel_tool_calls(llm_config)
+            if parallel_tool_calls is not None:
+                data.parallel_tool_calls = parallel_tool_calls
 
         # always set user id for openai requests
         if self.actor:
@@ -651,7 +661,9 @@ class OpenAIClient(LLMClientBase):
                 data.top_logprobs = llm_config.top_logprobs
 
         if tools and supports_parallel_tool_calling(model):
-            data.parallel_tool_calls = llm_config.parallel_tool_calls
+            parallel_tool_calls = _llm_config_parallel_tool_calls(llm_config)
+            if parallel_tool_calls is not None:
+                data.parallel_tool_calls = parallel_tool_calls
 
         # Add response_format support for structured outputs
         if hasattr(llm_config, "response_format") and llm_config.response_format is not None:
