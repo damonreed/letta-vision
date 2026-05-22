@@ -16,7 +16,7 @@ from letta.orm.sqlalchemy_base import SqlalchemyBase
 from letta.schemas.enums import MessageRole
 from letta.schemas.letta_message import ApprovalReturn
 from letta.schemas.letta_message_content import MessageContent, TextContent, TextContent as PydanticTextContent
-from letta.schemas.message import Message as PydanticMessage, ToolReturn
+from letta.schemas.message import Message as PydanticMessage, ToolReturn, tool_return_has_images
 from letta.settings import DatabaseChoice, settings
 
 
@@ -109,7 +109,8 @@ class Message(SqlalchemyBase, OrganizationMixin, AgentMixin):
         if self.tool_calls is None or len(self.tool_calls) == 0:
             model.tool_calls = None
 
-        # Handle legacy case of tool message with single tool return + single text content
+        # Legacy double-write: content[0].text duplicates tool_returns but strips images.
+        # Prefer multimodal func_response so the model and API keep inline image bytes.
         if (
             self.role == MessageRole.tool
             and self.tool_returns
@@ -119,7 +120,8 @@ class Message(SqlalchemyBase, OrganizationMixin, AgentMixin):
             and isinstance(self.content[0], TextContent)
         ):
             self.tool_call_id = self.tool_returns[0].tool_call_id
-            self.tool_returns[0].func_response = self.content[0].text
+            if not tool_return_has_images(self.tool_returns[0].func_response):
+                self.tool_returns[0].func_response = self.content[0].text
 
         return model
 

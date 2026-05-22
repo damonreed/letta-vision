@@ -346,3 +346,39 @@ def test_to_google_dict_no_signature_when_absent():
     function_calls = [p for p in serialized["parts"] if "functionCall" in p]
     assert len(function_calls) == 1
     assert "thought_signature" not in function_calls[0]
+
+
+def test_orm_to_pydantic_preserves_multimodal_tool_return_over_legacy_content():
+    """Regression: legacy content[0].text must not replace func_response when images are stored."""
+    from letta.orm.message import Message as OrmMessage
+    from letta.schemas.message import tool_return_has_images
+
+    image = ImageContent(source=Base64Image(media_type="image/png", data="dGVzdA=="))
+    multimodal = [TextContent(text='{"images":[{"url":"https://example.com/x.png"}]}'), image]
+    legacy_text = '{"status":"OK","message":"{\\"images\\":[]\\"} [Image omitted]"}'
+
+    orm = OrmMessage(
+        id="message-orm-multimodal-test",
+        role=MessageRole.tool,
+        organization_id="org-test",
+        agent_id="agent-test",
+        tool_returns=[
+            ToolReturn(tool_call_id="call-img", status="success", func_response=multimodal),
+        ],
+        content=[TextContent(text=legacy_text)],
+        tool_calls=[],
+    )
+
+    assert tool_return_has_images(orm.tool_returns[0].func_response)
+    model = orm.to_pydantic()
+    assert tool_return_has_images(model.tool_returns[0].func_response)
+
+    letta = model.to_letta_messages()[0]
+    assert isinstance(letta.tool_return, list)
+    assert any(
+        (p.type if hasattr(p, "type") else p.get("type")) == "image"
+        for p in letta.tool_return
+    )
+
+    openai = Message.to_openai_dicts_from_list([model])
+    assert any(p["type"] == "image_url" for p in openai[0]["content"])
