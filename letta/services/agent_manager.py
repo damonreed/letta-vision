@@ -1534,6 +1534,7 @@ class AgentManager:
         force=False,
         update_timestamp=True,
         dry_run: bool = False,
+        conversation_id: Optional[str] = None,
     ) -> Tuple[PydanticAgentState, Optional[PydanticMessage], int, int]:
         """Rebuilds the system message with the latest memory object and any shared memory block updates
 
@@ -1544,6 +1545,7 @@ class AgentManager:
         num_messages = await self.message_manager.size_async(actor=actor, agent_id=agent_id)
         num_archival_memories = await self.passage_manager.agent_passage_size_async(actor=actor, agent_id=agent_id)
         agent_state = await self.get_agent_by_id_async(agent_id=agent_id, include_relationships=["memory", "sources", "tools"], actor=actor)
+        agent_state = await self.refresh_open_file_cores(agent_state=agent_state, actor=actor)
 
         tool_rules_solver = ToolRulesSolver(agent_state.tool_rules)
 
@@ -1587,7 +1589,7 @@ class AgentManager:
             system_prompt=agent_state.system,
             memory_with_sources=curr_memory_str,
             agent_id=agent_state.id,
-            conversation_id="default",
+            conversation_id=conversation_id or "default",
             in_context_memory_last_edit=memory_edit_timestamp,
             timezone=agent_state.timezone,
             previous_message_count=num_messages - len(agent_state.message_ids),
@@ -1831,35 +1833,51 @@ class AgentManager:
 
     @enforce_types
     @trace_method
-    async def refresh_file_blocks(self, agent_state: PydanticAgentState, actor: PydanticUser) -> PydanticAgentState:
-        """
-        Refresh the file blocks in an agent's memory with current file content.
+    async def refresh_open_file_cores(self, agent_state: PydanticAgentState, actor: PydanticUser) -> PydanticAgentState:
+        """Refresh open file headlines and metadata-only file blocks for directory listing."""
+        from letta.services.agent_open_files_manager import AgentOpenFilesManager
 
-        This method synchronizes the agent's in-memory file blocks with the actual
-        file content from attached sources. It respects the per-file view window
-        limit to prevent excessive memory usage.
+        open_files_manager = AgentOpenFilesManager()
+        agent_state.memory.open_file_cores = await open_files_manager.list_open_files_with_cores(
+            agent_id=agent_state.id, actor=actor
+        )
 
-        Args:
-            agent_state: The current agent state containing memory configuration
-            actor: The user performing this action (for permission checking)
-
-        Returns:
-            Updated agent state with refreshed file blocks
-
-        Important:
-            - File blocks are truncated based on per_file_view_window_char_limit
-            - None values are filtered out (files that couldn't be loaded)
-            - This does NOT persist changes to the database, only updates the state object
-            - Call this before agent interactions if files may have changed externally
-        """
+        # Metadata-only file blocks for directory discovery (no page content)
         file_blocks = await self.file_agent_manager.list_files_for_agent(
             agent_id=agent_state.id,
-            per_file_view_window_char_limit=agent_state.per_file_view_window_char_limit,
+            per_file_view_window_char_limit=0,
             actor=actor,
             return_as_blocks=True,
         )
+        for fb in file_blocks:
+            if fb is not None:
+                fb.value = ""
         agent_state.memory.file_blocks = [b for b in file_blocks if b is not None]
+
+        from letta.services.file_core_block_manager import FileCoreBlockManager
+
+        file_ids = [fb.file_id for fb in agent_state.memory.file_blocks if fb.file_id]
+        core_manager = FileCoreBlockManager()
+        cores = await core_manager.get_many(file_ids=file_ids, actor=actor)
+        summaries: dict[str, str] = {}
+        for file_id in file_ids:
+            core = cores.get(file_id)
+            if core is None:
+                core = await core_manager.get_or_create(
+                    file_id=file_id,
+                    organization_id=actor.organization_id,
+                    actor=actor,
+                )
+            summaries[file_id] = core.summary
+        agent_state.memory.file_core_summaries = summaries
+
         return agent_state
+
+    @enforce_types
+    @trace_method
+    async def refresh_file_blocks(self, agent_state: PydanticAgentState, actor: PydanticUser) -> PydanticAgentState:
+        """Deprecated alias — use refresh_open_file_cores."""
+        return await self.refresh_open_file_cores(agent_state=agent_state, actor=actor)
 
     # ======================================================================================================================
     # Source Management

@@ -219,6 +219,68 @@ class ConversationManager:
         return pydantic_conversation
 
     @trace_method
+    async def recompile_system_message_for_conversation(
+        self,
+        conversation_id: str,
+        actor: PydanticUser,
+        *,
+        update_timestamp: bool = True,
+        dry_run: bool = False,
+    ) -> str:
+        """Recompile and optionally persist the conversation's in-context system message."""
+        from letta.helpers import ToolRulesSolver
+        from letta.helpers.datetime_helpers import get_utc_time
+        from letta.prompts.prompt_generator import PromptGenerator
+        from letta.schemas.message import MessageUpdate
+        from letta.services.agent_manager import AgentManager
+        from letta.services.message_manager import MessageManager
+        from letta.services.passage_manager import PassageManager
+
+        conversation = await self.get_conversation_by_id(conversation_id=conversation_id, actor=actor)
+        in_context_messages = await self.get_messages_for_conversation(conversation_id=conversation_id, actor=actor)
+        if not in_context_messages or in_context_messages[0].role != "system":
+            raise ValueError("Conversation does not have a system message in the first position.")
+
+        agent_manager = AgentManager()
+        message_manager = MessageManager()
+        passage_manager = PassageManager()
+
+        agent_state = await agent_manager.get_agent_by_id_async(
+            agent_id=conversation.agent_id,
+            include_relationships=["memory", "sources", "tools"],
+            actor=actor,
+        )
+        agent_state = await agent_manager.refresh_open_file_cores(agent_state=agent_state, actor=actor)
+
+        num_messages = await message_manager.size_async(actor=actor, agent_id=conversation.agent_id)
+        num_archival_memories = await passage_manager.agent_passage_size_async(actor=actor, agent_id=conversation.agent_id)
+        memory_edit_timestamp = get_utc_time() if update_timestamp else in_context_messages[0].created_at
+
+        compiled_content = await PromptGenerator.compile_system_message_async(
+            system_prompt=agent_state.system,
+            in_context_memory=agent_state.memory,
+            agent_id=agent_state.id,
+            conversation_id=conversation_id,
+            in_context_memory_last_edit=memory_edit_timestamp,
+            timezone=agent_state.timezone,
+            tool_rules_solver=ToolRulesSolver(agent_state.tool_rules),
+            previous_message_count=num_messages - len(in_context_messages),
+            archival_memory_size=num_archival_memories,
+            sources=agent_state.sources,
+            max_files_open=agent_state.max_files_open,
+            llm_config=agent_state.llm_config,
+        )
+
+        if not dry_run:
+            await message_manager.update_message_by_id_async(
+                message_id=in_context_messages[0].id,
+                message_update=MessageUpdate(content=compiled_content),
+                actor=actor,
+            )
+
+        return compiled_content
+
+    @trace_method
     async def compile_and_save_system_message_for_conversation(
         self,
         conversation_id: str,
@@ -255,9 +317,10 @@ class ConversationManager:
         if message_manager is None:
             message_manager = MessageManager()
 
-        if agent_state is None:
-            from letta.services.agent_manager import AgentManager
+        from letta.helpers import ToolRulesSolver
+        from letta.services.agent_manager import AgentManager
 
+        if agent_state is None:
             agent_state = await AgentManager().get_agent_by_id_async(
                 agent_id=agent_id,
                 include_relationships=["memory", "sources"],
@@ -267,6 +330,9 @@ class ConversationManager:
         passage_manager = PassageManager()
         num_messages = await message_manager.size_async(actor=actor, agent_id=agent_id)
         num_archival_memories = await passage_manager.agent_passage_size_async(actor=actor, agent_id=agent_id)
+
+        agent_state = await AgentManager().refresh_open_file_cores(agent_state=agent_state, actor=actor)
+        tool_rules_solver = ToolRulesSolver(agent_state.tool_rules)
 
         # Compile the system message with current memory state
         system_message_str = await PromptGenerator.compile_system_message_async(
@@ -280,8 +346,10 @@ class ConversationManager:
             append_icm_if_missing=True,
             previous_message_count=num_messages,
             archival_memory_size=num_archival_memories,
+            tool_rules_solver=tool_rules_solver,
             sources=agent_state.sources,
             max_files_open=agent_state.max_files_open,
+            llm_config=agent_state.llm_config,
         )
 
         system_message = PydanticMessage.dict_to_message(

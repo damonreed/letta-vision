@@ -144,6 +144,26 @@ class LettaAgentV3(LettaAgentV2):
         # Multi-turn token tracking for RL training (accumulated across all LLM calls)
         self.turns: list[TurnTokenData] = []
         self.return_token_ids: bool = False
+        self._pending_file_system_refresh: bool = False
+
+    @trace_method
+    async def _refresh_messages(self, in_context_messages: list[Message], force_system_prompt_refresh: bool = False):
+        """Refresh messages; rebuild system prompt when open files / directories changed."""
+        force = force_system_prompt_refresh or self._pending_file_system_refresh
+        if self._pending_file_system_refresh:
+            self._pending_file_system_refresh = False
+            try:
+                self.agent_state = await self.agent_manager.refresh_open_file_cores(
+                    agent_state=self.agent_state, actor=self.actor
+                )
+                limit = await self.agent_manager.get_agent_per_file_view_window_char_limit_async(
+                    agent_id=self.agent_state.id, actor=self.actor
+                )
+                if limit is not None:
+                    self.agent_state.per_file_view_window_char_limit = limit
+            except Exception as e:
+                self.logger.warning("Failed to refresh file state before system rebuild: %s", e)
+        return await super()._refresh_messages(in_context_messages, force_system_prompt_refresh=force)
 
     def _compute_tool_return_truncation_chars(self) -> int:
         """Compute a dynamic cap for tool returns in requests.
@@ -2082,6 +2102,8 @@ class LettaAgentV3(LettaAgentV2):
         persisted_continue_flags: list[bool] = []
         persisted_stop_reasons: list[LettaStopReason | None] = []
 
+        from letta.constants import FILE_STATE_SYSTEM_REFRESH_TOOLS
+
         for idx, spec in enumerate(exec_specs):
             tool_execution_result, _ = results[idx]
             has_prefill_error = bool(spec.get("error"))
@@ -2131,6 +2153,15 @@ class LettaAgentV3(LettaAgentV2):
                 )
             persisted_continue_flags.append(cont)
             persisted_stop_reasons.append(sr)
+
+        if any(
+            spec["name"] in FILE_STATE_SYSTEM_REFRESH_TOOLS
+            and not spec.get("error")
+            and not spec.get("violated")
+            and results[idx][0].success_flag
+            for idx, spec in enumerate(exec_specs)
+        ):
+            self._pending_file_system_refresh = True
 
         # 5f. Create messages using parallel message creation (works for both single and multi)
         tool_call_specs = [{"name": s["name"], "arguments": s["args"], "id": s["id"]} for s in exec_specs]

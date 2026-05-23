@@ -1385,6 +1385,7 @@ class LettaAgentV2(BaseAgentV2):
             passage_manager=self.passage_manager,
             sandbox_env_vars=sandbox_env_vars,
             actor=self.actor,
+            conversation_id=self.conversation_id,
         )
         # TODO: Integrate sandbox result
         log_event(name=f"start_{tool_name}_execution", attributes=tool_args)

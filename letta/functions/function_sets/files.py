@@ -1,97 +1,193 @@
 from typing import TYPE_CHECKING, List, Optional
 
-from letta.functions.types import FileOpenRequest
-
 if TYPE_CHECKING:
     from letta.schemas.agent import AgentState
-    from letta.schemas.file import FileMetadata
 
 
-async def open_files(agent_state: "AgentState", file_requests: List[FileOpenRequest], close_all_others: bool = False) -> str:
-    """Open one or more files and load their contents into files section in core memory. Maximum of 5 files can be opened simultaneously.
-
-    Use this when you want to:
-    - Inspect or reference file contents during reasoning
-    - View specific portions of large files (e.g. functions or definitions)
-    - Replace currently open files with a new set for focused context (via `close_all_others=True`)
-
-    Examples:
-        Open single file belonging to a directory named `project_utils` (entire content):
-            file_requests = [FileOpenRequest(file_name="project_utils/config.py")]
-
-        Open multiple files with different view ranges:
-            file_requests = [
-                FileOpenRequest(file_name="project_utils/config.py", offset=0, length=50),     # Lines 1-50
-                FileOpenRequest(file_name="project_utils/main.py", offset=100, length=100),    # Lines 101-200
-                FileOpenRequest(file_name="project_utils/utils.py")                            # Entire file
-            ]
-
-        Close all other files and open new ones:
-            open_files(agent_state, file_requests, close_all_others=True)
+async def attach_folder(agent_state: "AgentState", folder_id: str) -> dict:
+    """
+    Attach a folder of files to the agent.
 
     Args:
-        file_requests (List[FileOpenRequest]): List of file open requests, each specifying file name and optional view range.
-        close_all_others (bool): If True, closes all other currently open files first. Defaults to False.
+        folder_id (str): The folder (source) ID to attach.
 
     Returns:
-        str: A status message
+        dict: Status of the attach operation.
     """
     raise NotImplementedError("Tool not implemented. Please contact the Letta team.")
 
 
-async def grep_files(
+async def detach_folder(agent_state: "AgentState", folder_id: str) -> dict:
+    """
+    Detach a folder from the agent.
+
+    Args:
+        folder_id (str): The folder (source) ID to detach.
+
+    Returns:
+        dict: Status of the detach operation.
+    """
+    raise NotImplementedError("Tool not implemented. Please contact the Letta team.")
+
+
+async def open_file(agent_state: "AgentState", file_id: str) -> dict:
+    """
+    Open a file: attach its core headline to context without loading content.
+
+    Args:
+        file_id (str): The file ID to open.
+
+    Returns:
+        dict: Open file metadata including cursor position.
+    """
+    raise NotImplementedError("Tool not implemented. Please contact the Letta team.")
+
+
+async def close_file(agent_state: "AgentState", file_id: str) -> dict:
+    """
+    Close a file and detach its core headline from context.
+
+    Args:
+        file_id (str): The file ID to close.
+
+    Returns:
+        dict: Status of the close operation.
+    """
+    raise NotImplementedError("Tool not implemented. Please contact the Letta team.")
+
+
+async def file_read_page(agent_state: "AgentState", file_id: str) -> dict:
+    """
+    Read the current page at the cursor and advance.
+
+    Args:
+        file_id (str): The file ID to read.
+
+    Returns:
+        dict: Page content, character range, and updated cursor.
+    """
+    raise NotImplementedError("Tool not implemented. Please contact the Letta team.")
+
+
+async def file_read_next_page(agent_state: "AgentState", file_id: str) -> dict:
+    """
+    Navigate to and read the next page.
+
+    Args:
+        file_id (str): The file ID to read.
+
+    Returns:
+        dict: Page content, character range, and updated cursor.
+    """
+    raise NotImplementedError("Tool not implemented. Please contact the Letta team.")
+
+
+async def file_read_prev_page(agent_state: "AgentState", file_id: str) -> dict:
+    """
+    Navigate to and read the previous page.
+
+    Args:
+        file_id (str): The file ID to read.
+
+    Returns:
+        dict: Page content, character range, and updated cursor.
+    """
+    raise NotImplementedError("Tool not implemented. Please contact the Letta team.")
+
+
+async def file_read_range(agent_state: "AgentState", file_id: str, start_char: int, end_char: int) -> dict:
+    """
+    Read a specific character range without updating the cursor.
+
+    Args:
+        file_id (str): The file ID to read.
+        start_char (int): Start character offset (inclusive).
+        end_char (int): End character offset (exclusive).
+
+    Returns:
+        dict: Requested content and character range.
+    """
+    raise NotImplementedError("Tool not implemented. Please contact the Letta team.")
+
+
+async def file_grep(agent_state: "AgentState", file_id: str, pattern: str, max_hits: int = 20) -> dict:
+    """
+    Search within a single file for a pattern.
+
+    Args:
+        file_id (str): The file ID to search.
+        pattern (str): Regex or literal pattern to match.
+        max_hits (int): Maximum number of hits to return.
+
+    Returns:
+        dict: Matching lines with character offsets.
+    """
+    raise NotImplementedError("Tool not implemented. Please contact the Letta team.")
+
+
+async def update_file_core(agent_state: "AgentState", file_id: str, new_summary: str) -> dict:
+    """
+    Update the shared file core headline (a few sentences describing what the file is).
+
+    Args:
+        file_id (str): The file ID whose headline to update.
+        new_summary (str): New short headline text (shared across agents; shown in directory listings).
+
+    Returns:
+        dict: Updated file core block metadata.
+    """
+    raise NotImplementedError("Tool not implemented. Please contact the Letta team.")
+
+
+async def write_archive(
+    agent_state: "AgentState", file_id: str, title: str, content: str, tags: Optional[List[str]] = None
+) -> dict:
+    """
+    Write a topical archive linked to a file.
+
+    Args:
+        file_id (str): The file this archive is about.
+        title (str): Short title naming the topical focus.
+        content (str): Archive body (1-8000 characters).
+        tags (Optional[List[str]]): Optional tags for later search.
+
+    Returns:
+        dict: Created archive metadata including stored tags.
+    """
+    raise NotImplementedError("Tool not implemented. Please contact the Letta team.")
+
+
+async def search_archives(
     agent_state: "AgentState",
-    pattern: str,
-    include: Optional[str] = None,
-    context_lines: Optional[int] = 1,
-    offset: Optional[int] = None,
-) -> str:
+    query: str,
+    file_id: Optional[str] = None,
+    tags: Optional[List[str]] = None,
+    limit: int = 10,
+) -> dict:
     """
-    Searches file contents for pattern matches with surrounding context.
-
-    Results are paginated - shows 20 matches per call. The response includes:
-    - A summary of total matches and which files contain them
-    - The current page of matches (20 at a time)
-    - Instructions for viewing more matches using the offset parameter
-
-    Example usage:
-        First call: grep_files(pattern="TODO")
-        Next call: grep_files(pattern="TODO", offset=20)  # Shows matches 21-40
-
-    Returns search results containing:
-    - Summary with total match count and file distribution
-    - List of files with match counts per file
-    - Current page of matches (up to 20)
-    - Navigation hint for next page if more matches exist
+    Semantic search over file archives.
 
     Args:
-        pattern (str): Keyword or regex pattern to search within file contents.
-        include (Optional[str]): Optional keyword or regex pattern to filter filenames to include in the search.
-        context_lines (Optional[int]): Number of lines of context to show before and after each match.
-                                       Equivalent to `-C` in grep_files. Defaults to 1.
-        offset (Optional[int]): Number of matches to skip before showing results. Used for pagination.
-                                For example, offset=20 shows matches starting from the 21st match.
-                                Use offset=0 (or omit) for first page, offset=20 for second page,
-                                offset=40 for third page, etc. The tool will tell you the exact
-                                offset to use for the next page.
+        query (str): Natural-language search query.
+        file_id (Optional[str]): Limit search to one file's archives.
+        tags (Optional[List[str]]): Filter by archive tags.
+        limit (int): Maximum results to return.
+
+    Returns:
+        dict: Ranked archive hits with provenance metadata.
     """
     raise NotImplementedError("Tool not implemented. Please contact the Letta team.")
 
 
-async def semantic_search_files(agent_state: "AgentState", query: str, limit: int = 5) -> List["FileMetadata"]:
+async def search_file_contents(agent_state: "AgentState", query: str, limit: int = 5) -> str:
     """
-    Searches file contents using semantic meaning rather than exact matches.
-
-    Ideal for:
-    - Finding conceptually related information across files
-    - Discovering relevant content without knowing exact keywords
-    - Locating files with similar topics or themes
+    Semantic search over ingested file passages (folder RAG).
 
     Args:
-        query (str): The search query text to find semantically similar content.
-        limit: Maximum number of results to return (default: 5)
+        query (str): Natural-language search query.
+        limit (int): Maximum passages to return.
 
     Returns:
-        List[FileMetadata]: List of matching files.
+        str: Matching passage excerpts from attached folders.
     """
     raise NotImplementedError("Tool not implemented. Please contact the Letta team.")

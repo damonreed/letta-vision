@@ -983,47 +983,12 @@ async def recompile_conversation(
         actor=actor,
     )
 
-    _, system_message, _, _ = await server.agent_manager.rebuild_system_prompt_async(
-        agent_id=conversation.agent_id,
+    return await conversation_manager.recompile_system_message_for_conversation(
+        conversation_id=conversation_id,
         actor=actor,
-        force=True,
         update_timestamp=True,
-        dry_run=True,
+        dry_run=dry_run,
     )
-
-    if system_message is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"No system message found for conversation '{conversation_id}'")
-
-    compiled_content = system_message.to_openai_dict().get("content", "")
-
-    if not dry_run:
-        in_context_messages = await conversation_manager.get_messages_for_conversation(
-            conversation_id=conversation_id,
-            actor=actor,
-        )
-        if not in_context_messages:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="No in-context messages found for this conversation.",
-            )
-
-        existing_system_message = in_context_messages[0]
-        if existing_system_message.role != "system":
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Conversation does not have a system message in the first position.",
-            )
-
-        from letta.schemas.message import MessageUpdate
-
-        message_update = MessageUpdate(content=compiled_content)
-        await server.message_manager.update_message_by_id_async(
-            message_id=existing_system_message.id,
-            message_update=message_update,
-            actor=actor,
-        )
-
-    return compiled_content
 
 
 @router.post("/{conversation_id}/compact", response_model=CompactionResponse, operation_id="compact_conversation")

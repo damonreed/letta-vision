@@ -17,6 +17,20 @@ from letta.utils import enforce_types
 logger = get_logger(__name__)
 
 
+def _ids_within_single_char_edit(a: str, b: str) -> bool:
+    if a == b:
+        return True
+    if len(a) != len(b):
+        return False
+    mismatches = 0
+    for x, y in zip(a, b):
+        if x != y:
+            mismatches += 1
+            if mismatches > 1:
+                return False
+    return mismatches == 1
+
+
 class FileAgentManager:
     """High-level helpers for CRUD / listing on the `files_agents` join table."""
 
@@ -299,12 +313,90 @@ class FileAgentManager:
             if is_open_only:
                 conditions.append(FileAgentModel.is_open.is_(True))
 
-            rows = (await session.execute(select(FileAgentModel).where(and_(*conditions)))).scalars().all()
+            rows = (
+                await session.execute(
+                    select(FileAgentModel)
+                    .join(FileMetadataModel, FileAgentModel.file_id == FileMetadataModel.id)
+                    .where(
+                        *conditions,
+                        FileMetadataModel.is_deleted == False,
+                    )
+                )
+            ).scalars().all()
 
             if return_as_blocks:
                 return [r.to_pydantic_block(per_file_view_window_char_limit=per_file_view_window_char_limit) for r in rows]
             else:
                 return [r.to_pydantic() for r in rows]
+
+    @enforce_types
+    @trace_method
+    async def resolve_file_id_for_agent(
+        self,
+        *,
+        agent_id: str,
+        file_id: str,
+        actor: PydanticUser,
+    ) -> str:
+        """Resolve a file_id for this agent, correcting common UUID copy typos or path-as-id mistakes."""
+        from letta.services.file_manager import FileManager
+
+        file_manager = FileManager()
+        existing = await file_manager.get_file_by_id(file_id=file_id, actor=actor)
+        if existing is not None:
+            return file_id
+
+        associations = await self.list_files_for_agent(
+            agent_id=agent_id,
+            per_file_view_window_char_limit=0,
+            actor=actor,
+            return_as_blocks=False,
+        )
+        if not associations:
+            raise ValueError(f"File not found: {file_id}")
+
+        needle = file_id.strip()
+        basename = needle.split("/")[-1] if "/" in needle else needle
+
+        name_matches = [
+            a
+            for a in associations
+            if a.file_name == needle
+            or a.file_name == basename
+            or a.file_name.endswith(f"/{basename}")
+            or a.file_name.endswith(f"/{needle}")
+        ]
+        if len(name_matches) == 1:
+            logger.info(
+                "Resolved file reference %r -> %s via file_name for agent %s",
+                file_id,
+                name_matches[0].file_id,
+                agent_id,
+            )
+            return name_matches[0].file_id
+
+        typo_matches = [a for a in associations if _ids_within_single_char_edit(a.file_id, needle)]
+        if len(typo_matches) == 1:
+            logger.info(
+                "Resolved file reference %r -> %s via single-character file_id correction for agent %s",
+                file_id,
+                typo_matches[0].file_id,
+                agent_id,
+            )
+            return typo_matches[0].file_id
+
+        if len(typo_matches) > 1:
+            options = ", ".join(sorted({a.file_id for a in typo_matches[:5]}))
+            raise ValueError(f"File not found: {file_id}. Multiple similar file IDs for this agent: {options}")
+
+        if len(name_matches) > 1:
+            options = ", ".join(sorted({a.file_id for a in name_matches[:5]}))
+            raise ValueError(f"File not found: {file_id}. Multiple files match that name: {options}")
+
+        known = ", ".join(sorted({a.file_id for a in associations if basename.lower() in (a.file_name or "").lower()}))
+        if known:
+            raise ValueError(f"File not found: {file_id}. Did you mean one of: {known}?")
+        raise ValueError(f"File not found: {file_id}")
 
     @enforce_types
     @trace_method

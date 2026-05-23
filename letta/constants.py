@@ -167,7 +167,32 @@ MEMORY_TOOLS_LINE_NUMBER_PREFIX_REGEX = re.compile(
 BUILTIN_TOOLS = ["run_code", "run_code_with_tools", "web_search", "fetch_webpage"]
 
 # Built in tools
-FILES_TOOLS = ["open_files", "grep_files", "semantic_search_files"]
+FILES_TOOLS = [
+    "attach_folder",
+    "detach_folder",
+    "open_file",
+    "close_file",
+    "file_read_page",
+    "file_read_next_page",
+    "file_read_prev_page",
+    "file_read_range",
+    "file_grep",
+    "update_file_core",
+    "write_archive",
+    "search_archives",
+    "search_file_contents",
+]
+
+# File tools that mutate in-context <open_files> / directories and require system prompt refresh.
+FILE_STATE_SYSTEM_REFRESH_TOOLS = frozenset(
+    {
+        "attach_folder",
+        "detach_folder",
+        "open_file",
+        "close_file",
+        "update_file_core",
+    }
+)
 
 FILE_MEMORY_EXISTS_MESSAGE = "The following files are currently accessible in memory:"
 FILE_MEMORY_EMPTY_MESSAGE = (

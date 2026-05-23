@@ -3,7 +3,7 @@ import logging
 import os
 from datetime import datetime
 from io import StringIO
-from typing import List, Optional, Union
+from typing import Dict, List, Optional, Union
 
 from letta.log import get_logger
 
@@ -17,6 +17,7 @@ from letta.otel.tracing import trace_method
 from letta.schemas.block import Block, FileBlock
 from letta.schemas.enums import AgentType
 from letta.schemas.file import FileStatus
+from letta.schemas.file_core_block import OpenFileCoreView
 from letta.schemas.message import Message
 
 
@@ -77,6 +78,13 @@ class Memory(BaseModel, validate_assignment=True):
     blocks: List[Block] = Field(..., description="Memory blocks contained in the agent's in-context memory")
     file_blocks: List[FileBlock] = Field(
         default_factory=list, description="Special blocks representing the agent's in-context memory of an attached file"
+    )
+    open_file_cores: List[OpenFileCoreView] = Field(
+        default_factory=list, description="Stable headlines for currently open files (three-tier filesystem)"
+    )
+    file_core_summaries: Dict[str, str] = Field(
+        default_factory=dict,
+        description="file_id -> short headline for every file in attached directories",
     )
 
     @field_validator("file_blocks")
@@ -585,14 +593,23 @@ class Memory(BaseModel, validate_assignment=True):
         s.write("</available_skills>")
         return s.getvalue()
 
-    def _render_directories_common(self, s: StringIO, sources, max_files_open):
-        s.write("\n\n<directories>\n")
+    def _render_open_files(self, s: StringIO, max_files_open: Optional[int] = None):
+        s.write("\n\n<open_files>\n")
         if max_files_open is not None:
-            current_open = sum(1 for b in self.file_blocks if getattr(b, "value", None))
+            current_open = len(self.open_file_cores)
             s.write("<file_limits>\n")
             s.write(f"- current_files_open={current_open}\n")
             s.write(f"- max_files_open={max_files_open}\n")
             s.write("</file_limits>\n")
+        for core in self.open_file_cores:
+            s.write(f'<file file_id="{core.file_id}" name="{core.file_name}">\n')
+            s.write(f"{core.summary}\n")
+            s.write("</file>\n")
+        s.write("</open_files>")
+
+    def _render_directories_common(self, s: StringIO, sources, max_files_open):
+        s.write("\n\n<directories>\n")
+        open_ids = {c.file_id for c in self.open_file_cores}
 
         for source in sources:
             source_name = getattr(source, "name", "")
@@ -600,7 +617,8 @@ class Memory(BaseModel, validate_assignment=True):
             source_instr = getattr(source, "instructions", None)
             source_id = getattr(source, "id", None)
 
-            s.write(f'<directory name="{source_name}">\n')
+            source_id_attr = f' source_id="{source_id}"' if source_id else ""
+            s.write(f'<directory name="{source_name}"{source_id_attr}>\n')
             if source_desc:
                 s.write(f"<description>{source_desc}</description>\n")
             if source_instr:
@@ -609,40 +627,33 @@ class Memory(BaseModel, validate_assignment=True):
             if self.file_blocks:
                 for fb in self.file_blocks:
                     if source_id is not None and getattr(fb, "source_id", None) == source_id:
-                        status = FileStatus.open.value if getattr(fb, "value", None) else FileStatus.closed.value
+                        file_id = getattr(fb, "file_id", None) or ""
+                        status = FileStatus.open.value if file_id in open_ids else FileStatus.closed.value
                         label = fb.label or "file"
-                        desc = fb.description or ""
-                        chars_current = len(fb.value or "")
-                        limit = fb.limit if fb.limit is not None else 0
 
-                        s.write(f'<file status="{status}" name="{label}">\n')
-                        if desc:
-                            s.write("<description>\n")
-                            s.write(f"{desc}\n")
-                            s.write("</description>\n")
-                        s.write("<metadata>")
-                        if getattr(fb, "read_only", False):
-                            s.write("\n- read_only=true")
-                        s.write(f"\n- chars_current={chars_current}\n")
-                        s.write(f"- chars_limit={limit}\n")
-                        s.write("</metadata>\n")
-                        if getattr(fb, "value", None):
-                            s.write("<value>\n")
-                            s.write(f"{fb.value}\n")
-                            s.write("</value>\n")
+                        headline = self._directory_file_headline(file_id)
+                        s.write(f'<file status="{status}" file_id="{file_id}" name="{label}">\n')
+                        if headline:
+                            s.write(f"{headline}\n")
                         s.write("</file>\n")
 
             s.write("</directory>\n")
         s.write("</directories>")
 
+    def _directory_file_headline(self, file_id: str) -> str:
+        if not file_id:
+            return ""
+        summary = (self.file_core_summaries.get(file_id) or "").strip()
+        if summary:
+            return summary
+        for core in self.open_file_cores:
+            if core.file_id == file_id:
+                return (core.summary or "").strip()
+        return "No headline yet."
+
     def _render_directories_react(self, s: StringIO, sources, max_files_open):
         s.write("\n\n<directories>\n")
-        if max_files_open is not None:
-            current_open = sum(1 for b in self.file_blocks if getattr(b, "value", None))
-            s.write("<file_limits>\n")
-            s.write(f"- current_files_open={current_open}\n")
-            s.write(f"- max_files_open={max_files_open}\n")
-            s.write("</file_limits>\n")
+        open_ids = {c.file_id for c in self.open_file_cores}
 
         for source in sources:
             source_name = getattr(source, "name", "")
@@ -650,7 +661,8 @@ class Memory(BaseModel, validate_assignment=True):
             source_instr = getattr(source, "instructions", None)
             source_id = getattr(source, "id", None)
 
-            s.write(f'<directory name="{source_name}">\n')
+            source_id_attr = f' source_id="{source_id}"' if source_id else ""
+            s.write(f'<directory name="{source_name}"{source_id_attr}>\n')
             if source_desc:
                 s.write(f"<description>{source_desc}</description>\n")
             if source_instr:
@@ -659,27 +671,14 @@ class Memory(BaseModel, validate_assignment=True):
             if self.file_blocks:
                 for fb in self.file_blocks:
                     if source_id is not None and getattr(fb, "source_id", None) == source_id:
-                        status = FileStatus.open.value if getattr(fb, "value", None) else FileStatus.closed.value
+                        file_id = getattr(fb, "file_id", None) or ""
+                        status = FileStatus.open.value if file_id in open_ids else FileStatus.closed.value
                         label = fb.label or "file"
-                        desc = fb.description or ""
-                        chars_current = len(fb.value or "")
-                        limit = fb.limit if fb.limit is not None else 0
 
-                        s.write(f'<file status="{status}">\n')
-                        s.write(f"<{label}>\n")
-                        s.write("<description>\n")
-                        s.write(f"{desc}\n")
-                        s.write("</description>\n")
-                        s.write("<metadata>")
-                        if getattr(fb, "read_only", False):
-                            s.write("\n- read_only=true")
-                        s.write(f"\n- chars_current={chars_current}\n")
-                        s.write(f"- chars_limit={limit}\n")
-                        s.write("</metadata>\n")
-                        s.write("<value>\n")
-                        s.write(f"{fb.value or ''}\n")
-                        s.write("</value>\n")
-                        s.write(f"</{label}>\n")
+                        headline = self._directory_file_headline(file_id)
+                        s.write(f'<file status="{status}" file_id="{file_id}" name="{label}">\n')
+                        if headline:
+                            s.write(f"{headline}\n")
                         s.write("</file>\n")
 
             s.write("</directory>\n")
@@ -722,6 +721,9 @@ class Memory(BaseModel, validate_assignment=True):
             s.write(f"{desc}\n\n")
             s.write(f"{val}\n")
             s.write("</tool_usage_rules>")
+
+        if self.open_file_cores:
+            self._render_open_files(s, max_files_open)
 
         if sources:
             if is_react:

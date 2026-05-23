@@ -79,6 +79,7 @@ class ToolExecutionManager:
         agent_state: Optional[AgentState] = None,
         sandbox_config: Optional[SandboxConfig] = None,
         sandbox_env_vars: Optional[Dict[str, Any]] = None,
+        conversation_id: Optional[str] = None,
     ):
         self.message_manager = message_manager
         self.agent_manager = agent_manager
@@ -90,6 +91,7 @@ class ToolExecutionManager:
         self.actor = actor
         self.sandbox_config = sandbox_config
         self.sandbox_env_vars = sandbox_env_vars
+        self.conversation_id = conversation_id
 
     @trace_method
     async def execute_tool_async(
@@ -114,6 +116,9 @@ class ToolExecutionManager:
                 return MetricRegistry().tool_execution_time_ms_histogram.record(
                     exec_time_ms, dict(get_ctx_attributes(), **{"tool.name": tool.name})
                 )
+
+            if isinstance(executor, LettaFileToolExecutor):
+                executor.conversation_id = self.conversation_id
 
             async with AsyncTimer(callback_func=_metrics_callback):
                 result = await executor.execute(

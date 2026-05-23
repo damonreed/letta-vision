@@ -10,7 +10,10 @@ from letta.orm.blocks_conversations import BlocksConversations as BlocksConversa
 from letta.orm.blocks_tags import BlocksTags as BlocksTags
 from letta.orm.conversation import Conversation as Conversation
 from letta.orm.conversation_messages import ConversationMessage as ConversationMessage
+from letta.orm.agent_open_file import AgentOpenFile as AgentOpenFile
 from letta.orm.file import FileMetadata as FileMetadata
+from letta.orm.file_archive import FileArchive as FileArchive
+from letta.orm.file_core_block import FileCoreBlock as FileCoreBlock
 from letta.orm.files_agents import FileAgent as FileAgent
 from letta.orm.group import Group as Group
 from letta.orm.groups_agents import GroupsAgents as GroupsAgents

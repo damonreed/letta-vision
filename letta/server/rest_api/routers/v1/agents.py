@@ -963,45 +963,36 @@ async def open_file_for_agent(
     headers: HeaderParams = Depends(get_headers),
 ):
     """
-    Opens a specific file for a given agent.
-
-    This endpoint marks a specific file as open in the agent's file state.
-    The file will be included in the agent's working memory view.
-    Returns a list of file names that were closed due to LRU eviction.
+    Opens a specific file for a given agent (attaches file core headline; no content in system prompt).
+    Returns a list of file IDs that were evicted due to LRU.
     """
     actor = await server.user_manager.get_actor_or_default_async(actor_id=headers.actor_id)
 
-    # Get the agent to access files configuration
     per_file_view_window_char_limit, max_files_open = await server.agent_manager.get_agent_files_config_async(
         agent_id=agent_id, actor=actor
     )
 
-    # Get file metadata
-    file_metadata = await server.file_manager.get_file_by_id(file_id=file_id, actor=actor, include_content=True)
+    file_metadata = await server.file_manager.get_file_by_id(file_id=file_id, actor=actor, include_content=False)
     if not file_metadata:
         raise HTTPException(status_code=404, detail=f"File with id={file_id} not found")
 
-    # Process file content with line numbers using LineChunker
-    from letta.services.file_processor.chunker.line_chunker import LineChunker
+    from letta.services.agent_open_files_manager import AgentOpenFilesManager
+    from letta.services.file_core_block_manager import FileCoreBlockManager
 
-    content_lines = LineChunker().chunk_text(file_metadata=file_metadata, validate_range=False)
-    visible_content = "\n".join(content_lines)
+    await FileCoreBlockManager().get_or_create(
+        file_id=file_id,
+        organization_id=actor.organization_id,
+        actor=actor,
+    )
 
-    # Truncate if needed
-    visible_content = truncate_file_visible_content(visible_content, True, per_file_view_window_char_limit)
-
-    # Use enforce_max_open_files_and_open for efficient LRU handling
-    closed_files, _was_already_open, _ = await server.file_agent_manager.enforce_max_open_files_and_open(
+    _, evicted = await AgentOpenFilesManager().open_file(
         agent_id=agent_id,
         file_id=file_id,
-        file_name=file_metadata.file_name,
-        source_id=file_metadata.source_id,
         actor=actor,
-        visible_content=visible_content,
         max_files_open=max_files_open,
     )
 
-    return closed_files
+    return evicted
 
 
 @router.patch("/{agent_id}/files/{file_id}/close", response_model=None, operation_id="close_file_for_agent")
@@ -1019,13 +1010,9 @@ async def close_file_for_agent(
     """
     actor = await server.user_manager.get_actor_or_default_async(actor_id=headers.actor_id)
 
-    # Use update_file_agent_by_id to close the file
-    await server.file_agent_manager.update_file_agent_by_id(
-        agent_id=agent_id,
-        file_id=file_id,
-        actor=actor,
-        is_open=False,
-    )
+    from letta.services.agent_open_files_manager import AgentOpenFilesManager
+
+    await AgentOpenFilesManager().close_file(agent_id=agent_id, file_id=file_id, actor=actor)
     return JSONResponse(status_code=status.HTTP_200_OK, content={"message": f"File id={file_id} successfully closed"})
 
 

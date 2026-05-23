@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy.exc import NoResultFound
 
-from letta.constants import PINECONE_TEXT_FIELD_NAME
+from letta.constants import FILE_STATE_SYSTEM_REFRESH_TOOLS, PINECONE_TEXT_FIELD_NAME
 from letta.functions.types import FileOpenRequest
 from letta.helpers.pinecone_utils import search_pinecone_index, should_use_pinecone
 from letta.helpers.tpuf_client import should_use_tpuf
@@ -66,6 +66,8 @@ class LettaFileToolExecutor(ToolExecutor):
         self.files_agents_manager = FileAgentManager()
         self.file_manager = FileManager()
         self.source_manager = SourceManager()
+        self.three_tier_tools = None  # lazily initialized with actor
+        self.conversation_id: Optional[str] = None
         self.logger = get_logger(__name__)
 
     async def execute(
@@ -82,9 +84,19 @@ class LettaFileToolExecutor(ToolExecutor):
             raise ValueError("Agent state is required for file tools")
 
         function_map = {
-            "open_files": self.open_files,
-            "grep_files": self.grep_files,
-            "semantic_search_files": self.semantic_search_files,
+            "search_file_contents": self.semantic_search_files,
+            "open_file": self._three_tier_open_file,
+            "close_file": self._three_tier_close_file,
+            "file_read_page": self._three_tier_file_read_page,
+            "file_read_next_page": self._three_tier_file_read_next_page,
+            "file_read_prev_page": self._three_tier_file_read_prev_page,
+            "file_read_range": self._three_tier_file_read_range,
+            "file_grep": self._three_tier_file_grep,
+            "update_file_core": self._three_tier_update_file_core,
+            "write_archive": self._three_tier_write_archive,
+            "search_archives": self._three_tier_search_archives,
+            "attach_folder": self._attach_folder,
+            "detach_folder": self._detach_folder,
         }
 
         if function_name not in function_map:
@@ -92,7 +104,10 @@ class LettaFileToolExecutor(ToolExecutor):
 
         function_args_copy = function_args.copy()
         try:
+            agent_state = await self._ensure_fresh_file_limits(agent_state)
             func_return = await function_map[function_name](agent_state, **function_args_copy)
+            if function_name in FILE_STATE_SYSTEM_REFRESH_TOOLS:
+                await self._recompile_conversation_system_message()
             return ToolExecutionResult(
                 status="success",
                 func_return=func_return,
@@ -851,3 +866,85 @@ class LettaFileToolExecutor(ToolExecutor):
         self.logger.info(f"Semantic search completed: {total_passages} matches across {file_count} files")
 
         return "\n".join(formatted_results)
+
+    async def _ensure_fresh_file_limits(self, agent_state: AgentState) -> AgentState:
+        """Reload per-file page size from DB so agent setting changes apply mid-session."""
+        try:
+            limit = await self.agent_manager.get_agent_per_file_view_window_char_limit_async(
+                agent_id=agent_state.id,
+                actor=self.actor,
+            )
+            if limit is not None:
+                agent_state.per_file_view_window_char_limit = limit
+        except Exception as e:
+            self.logger.debug("Could not refresh per_file_view_window_char_limit: %s", e)
+        return agent_state
+
+    async def _recompile_conversation_system_message(self) -> None:
+        if not self.conversation_id or self.conversation_id == "default":
+            return
+        from letta.services.conversation_manager import ConversationManager
+
+        try:
+            await ConversationManager().recompile_system_message_for_conversation(
+                conversation_id=self.conversation_id,
+                actor=self.actor,
+                update_timestamp=False,
+            )
+        except Exception as e:
+            self.logger.warning("Failed to recompile conversation system message after file tool: %s", e)
+
+    def _get_three_tier_tools(self) -> "ThreeTierFileTools":
+        from letta.services.tool_executor.three_tier_file_tools import ThreeTierFileTools
+
+        if self.three_tier_tools is None:
+            self.three_tier_tools = ThreeTierFileTools(actor=self.actor, agent_manager=self.agent_manager)
+        self.three_tier_tools.conversation_id = self.conversation_id
+        return self.three_tier_tools
+
+    async def _three_tier_open_file(self, agent_state: AgentState, file_id: str) -> dict:
+        return await self._get_three_tier_tools().open_file(agent_state, file_id)
+
+    async def _three_tier_close_file(self, agent_state: AgentState, file_id: str) -> dict:
+        return await self._get_three_tier_tools().close_file(agent_state, file_id)
+
+    async def _three_tier_file_read_page(self, agent_state: AgentState, file_id: str) -> dict:
+        return await self._get_three_tier_tools().file_read_page(agent_state, file_id)
+
+    async def _three_tier_file_read_next_page(self, agent_state: AgentState, file_id: str) -> dict:
+        return await self._get_three_tier_tools().file_read_next_page(agent_state, file_id)
+
+    async def _three_tier_file_read_prev_page(self, agent_state: AgentState, file_id: str) -> dict:
+        return await self._get_three_tier_tools().file_read_prev_page(agent_state, file_id)
+
+    async def _three_tier_file_read_range(self, agent_state: AgentState, file_id: str, start_char: int, end_char: int) -> dict:
+        return await self._get_three_tier_tools().file_read_range(agent_state, file_id, start_char, end_char)
+
+    async def _three_tier_file_grep(self, agent_state: AgentState, file_id: str, pattern: str, max_hits: int = 20) -> dict:
+        return await self._get_three_tier_tools().file_grep(agent_state, file_id, pattern, max_hits)
+
+    async def _three_tier_update_file_core(self, agent_state: AgentState, file_id: str, new_summary: str) -> dict:
+        return await self._get_three_tier_tools().update_file_core(agent_state, file_id, new_summary)
+
+    async def _three_tier_write_archive(
+        self, agent_state: AgentState, file_id: str, title: str, content: str, tags: Optional[List[str]] = None
+    ) -> dict:
+        return await self._get_three_tier_tools().write_archive(agent_state, file_id, title, content, tags)
+
+    async def _three_tier_search_archives(
+        self,
+        agent_state: AgentState,
+        query: str,
+        file_id: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        limit: int = 10,
+    ) -> dict:
+        return await self._get_three_tier_tools().search_archives(agent_state, query, file_id, tags, limit)
+
+    async def _attach_folder(self, agent_state: AgentState, folder_id: str) -> dict:
+        await self.agent_manager.attach_source_async(agent_id=agent_state.id, source_id=folder_id, actor=self.actor)
+        return {"status": "success", "folder_id": folder_id}
+
+    async def _detach_folder(self, agent_state: AgentState, folder_id: str) -> dict:
+        await self.agent_manager.detach_source_async(agent_id=agent_state.id, source_id=folder_id, actor=self.actor)
+        return {"status": "success", "folder_id": folder_id}
