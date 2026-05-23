@@ -316,6 +316,30 @@ async def test_provider_context_window_async():
     assert context_window > 0
 
 
+@pytest.mark.asyncio
+async def test_openai_provider_uses_context_length_from_model_list():
+    provider = OpenAIProvider(
+        name="test_openai",
+        api_key_enc=Secret.from_plaintext("test_key"),
+        base_url="https://api.example.com/v1",
+    )
+    result = await provider._do_model_checks_for_name_and_context_size_async(
+        {"id": "vendor/some-new-model", "context_length": 256000}
+    )
+    assert result == ("vendor/some-new-model", 256000)
+
+
+@pytest.mark.asyncio
+async def test_openai_provider_kimi_k26_context_window():
+    provider = OpenAIProvider(
+        name="test_openai",
+        api_key_enc=Secret.from_plaintext("test_key"),
+        base_url="https://api.siliconflow.com/v1",
+    )
+    context_window = await provider.get_model_context_window_size_async("Pro/moonshotai/Kimi-K2.6")
+    assert context_window == 262144
+
+
 def test_provider_handle_generation():
     """Test that providers generate handles correctly."""
     provider = OpenAIProvider(

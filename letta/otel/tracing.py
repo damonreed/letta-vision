@@ -467,8 +467,10 @@ def safe_json_dumps(data) -> str:
 
                 return json.dumps({"base64": base64.b64encode(data).decode("ascii")})
 
-        # Normal case: try direct serialization
-        return json.dumps(data)
+        # Normal case: redact vision/base64 payloads before serialization
+        from letta.helpers.log_redaction import redact_llm_payload_for_log
+
+        return json.dumps(redact_llm_payload_for_log(data), default=str)
     except Exception as e:
         # Last resort: return error message
         logger.warning(f"Failed to serialize data to JSON: {e}", exc_info=True)
@@ -487,10 +489,17 @@ def log_event(name: str, attributes: Optional[Dict[str, Any]] = None, timestamp:
         if timestamp is None:
             timestamp = time.time_ns()
 
+        from letta.helpers.log_redaction import safe_log_json
+
         def _safe_convert(v):
             if isinstance(v, (str, bool, int, float)):
+                if isinstance(v, str) and len(v) > 2000:
+                    return v[:2000] + "… [truncated]"
                 return v
-            return str(v)
+            if isinstance(v, (dict, list)):
+                return safe_log_json(v)
+            s = str(v)
+            return s[:2000] + "… [truncated]" if len(s) > 2000 else s
 
         attributes = {k: _safe_convert(v) for k, v in attributes.items()} if attributes else None
         current_span.add_event(name=name, attributes=attributes, timestamp=timestamp)

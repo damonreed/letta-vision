@@ -31,13 +31,18 @@ async def list_providers(
     order_by: Literal["created_at"] = Query("created_at", description="Field to sort by"),
     name: Optional[str] = Query(None, description="Filter providers by name"),
     provider_type: Optional[ProviderType] = Query(None, description="Filter providers by type"),
+    provider_category: Optional[List[ProviderCategory]] = Query(
+        None,
+        description="Filter by provider category. Omit for BYOK-only (legacy default). Pass base and/or byok to include built-in env-backed providers.",
+    ),
     headers: HeaderParams = Depends(get_headers),
     server: "SyncServer" = Depends(get_letta_server),
 ):
     """
-    Get a list of all custom providers.
+    Get a list of providers. Defaults to BYOK-only when provider_category is omitted.
     """
     actor = await server.user_manager.get_actor_or_default_async(actor_id=headers.actor_id)
+    categories = provider_category if provider_category is not None else [ProviderCategory.byok]
     providers = await server.provider_manager.list_providers_async(
         before=before,
         after=after,
@@ -45,7 +50,7 @@ async def list_providers(
         actor=actor,
         name=name,
         provider_type=provider_type,
-        provider_category=[ProviderCategory.byok],
+        provider_category=categories,
         ascending=(order == "asc"),
     )
     return providers

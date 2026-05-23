@@ -59,14 +59,21 @@ class AnthropicTokenCounter(TokenCounter):
     @trace_method
     @async_redis_cache(
         key_func=lambda self,
-        messages: f"anthropic_message_tokens:{self.model}:{hashlib.sha256(json.dumps(messages, sort_keys=True).encode()).hexdigest()[:16]}",
+        messages: f"anthropic_message_tokens:v2:{self.model}:{hashlib.sha256(json.dumps(messages, sort_keys=True).encode()).hexdigest()[:16]}",
         prefix="token_counter",
         ttl_s=3600,  # cache for 1 hour
     )
     async def count_message_tokens(self, messages: List[Dict[str, Any]]) -> int:
         if not messages:
             return 0
-        return await self.client.count_tokens(model=self.model, messages=messages)
+        from letta.services.context_window_calculator.message_payload_for_token_estimate import (
+            ESTIMATED_TOKENS_PER_IMAGE,
+            strip_images_from_api_messages_for_token_estimate,
+        )
+
+        redacted_messages, image_count = strip_images_from_api_messages_for_token_estimate(messages)
+        result = await self.client.count_tokens(model=self.model, messages=redacted_messages)
+        return result + image_count * ESTIMATED_TOKENS_PER_IMAGE
 
     @trace_method
     @async_redis_cache(
@@ -115,7 +122,14 @@ class ApproxTokenCounter(TokenCounter):
     async def count_message_tokens(self, messages: List[Dict[str, Any]]) -> int:
         if not messages:
             return 0
-        return self._approx_token_count(json.dumps(messages))
+        from letta.services.context_window_calculator.message_payload_for_token_estimate import (
+            ESTIMATED_TOKENS_PER_IMAGE,
+            strip_images_from_api_messages_for_token_estimate,
+        )
+
+        redacted_messages, image_count = strip_images_from_api_messages_for_token_estimate(messages)
+        text_tokens = self._approx_token_count(json.dumps(redacted_messages))
+        return text_tokens + image_count * ESTIMATED_TOKENS_PER_IMAGE
 
     async def count_tool_tokens(self, tools: List[OpenAITool]) -> int:
         if not tools:
@@ -149,14 +163,21 @@ class GeminiTokenCounter(TokenCounter):
     @trace_method
     @async_redis_cache(
         key_func=lambda self,
-        messages: f"gemini_message_tokens:{self.model}:{hashlib.sha256(json.dumps(messages, sort_keys=True).encode()).hexdigest()[:16]}",
+        messages: f"gemini_message_tokens:v2:{self.model}:{hashlib.sha256(json.dumps(messages, sort_keys=True).encode()).hexdigest()[:16]}",
         prefix="token_counter",
         ttl_s=3600,  # cache for 1 hour
     )
     async def count_message_tokens(self, messages: List[Dict[str, Any]]) -> int:
         if not messages:
             return 0
-        return await self.client.count_tokens(model=self.model, messages=messages)
+        from letta.services.context_window_calculator.message_payload_for_token_estimate import (
+            ESTIMATED_TOKENS_PER_IMAGE,
+            strip_images_from_api_messages_for_token_estimate,
+        )
+
+        redacted_messages, image_count = strip_images_from_api_messages_for_token_estimate(messages)
+        result = await self.client.count_tokens(model=self.model, messages=redacted_messages)
+        return result + image_count * ESTIMATED_TOKENS_PER_IMAGE
 
     @trace_method
     @async_redis_cache(
@@ -217,7 +238,7 @@ class TiktokenCounter(TokenCounter):
     @trace_method
     @async_redis_cache(
         key_func=lambda self,
-        messages: f"tiktoken_message_tokens:{self.model}:{hashlib.sha256(json.dumps(messages, sort_keys=True).encode()).hexdigest()[:16]}",
+        messages: f"tiktoken_message_tokens:v2:{self.model}:{hashlib.sha256(json.dumps(messages, sort_keys=True).encode()).hexdigest()[:16]}",
         prefix="token_counter",
         ttl_s=3600,  # cache for 1 hour
     )
@@ -237,8 +258,14 @@ class TiktokenCounter(TokenCounter):
 
         try:
             from letta.local_llm.utils import num_tokens_from_messages
+            from letta.services.context_window_calculator.message_payload_for_token_estimate import (
+                ESTIMATED_TOKENS_PER_IMAGE,
+                strip_images_from_api_messages_for_token_estimate,
+            )
 
-            result = num_tokens_from_messages(messages=messages, model=self.model)
+            redacted_messages, image_count = strip_images_from_api_messages_for_token_estimate(messages)
+            result = num_tokens_from_messages(messages=redacted_messages, model=self.model)
+            result += image_count * ESTIMATED_TOKENS_PER_IMAGE
             logger.debug(f"TiktokenCounter.count_message_tokens: completed successfully, tokens={result}")
             return result
         except Exception as e:

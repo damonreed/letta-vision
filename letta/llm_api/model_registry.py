@@ -67,20 +67,23 @@ def _model_identifiers(model: str, handle: str | None = None) -> list[str]:
 
 
 def _matches_pattern(model_id: str, pattern: str) -> bool:
-    if "*" in pattern or "?" in pattern:
-        return fnmatch.fnmatch(model_id, pattern)
-    return model_id == pattern
+    model_id_lower = model_id.lower()
+    pattern_lower = pattern.lower()
+    if "*" in pattern_lower or "?" in pattern_lower:
+        return fnmatch.fnmatch(model_id_lower, pattern_lower)
+    return model_id_lower == pattern_lower
 
 
 def model_supports_vision(model: str, handle: str | None = None) -> bool:
     """Return True if the model is flagged as vision-capable in the registry."""
     identifiers = _model_identifiers(model, handle)
-    extra = _load_extra_vision_models()
+    extra = {x.lower() for x in _load_extra_vision_models()}
     for ident in identifiers:
-        if ident in extra:
+        if ident.lower() in extra:
             return True
+        ident_lower = ident.lower()
         for _, pattern in VISION_CAPABLE_MODELS:
-            if _matches_pattern(ident, pattern):
+            if _matches_pattern(ident_lower, pattern):
                 return True
     return False
 

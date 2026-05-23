@@ -228,7 +228,9 @@ class GoogleVertexClient(LLMClientBase):
         except errors.APIError as e:
             raise self.handle_llm_error(e)
         except Exception as e:
-            logger.error(f"Error streaming {self._provider_name()} request: {e} with request data: {json.dumps(request_data)}")
+            from letta.helpers.log_redaction import safe_log_json
+
+            logger.error(f"Error streaming {self._provider_name()} request: {e} with request data: {safe_log_json(request_data)}")
             raise e
         # Direct yield - keeps response alive in generator's local scope throughout iteration
         # This is required because the SDK's connection lifecycle is tied to the response object

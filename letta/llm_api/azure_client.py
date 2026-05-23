@@ -8,6 +8,7 @@ from openai.types.chat.chat_completion_chunk import ChatCompletionChunk
 from openai.types.responses.response_stream_event import ResponseStreamEvent
 
 from letta.helpers.json_helpers import sanitize_unicode_surrogates
+from letta.helpers.log_redaction import safe_log_json
 from letta.llm_api.openai_client import OpenAIClient
 from letta.log import get_logger
 from letta.otel.tracing import trace_method
@@ -122,7 +123,7 @@ class AzureClient(OpenAIClient):
                     stream=True,
                 )
             except Exception as e:
-                logger.error(f"Error streaming Azure Responses request: {e} with request data: {json.dumps(request_data)}")
+                logger.error(f"Error streaming Azure Responses request: {e} with request data: {safe_log_json(request_data)}")
                 raise e
         else:
             try:
@@ -132,7 +133,7 @@ class AzureClient(OpenAIClient):
                     stream_options={"include_usage": True},
                 )
             except Exception as e:
-                logger.error(f"Error streaming Azure Chat Completions request: {e} with request data: {json.dumps(request_data)}")
+                logger.error(f"Error streaming Azure Chat Completions request: {e} with request data: {safe_log_json(request_data)}")
                 raise e
         return response_stream
 

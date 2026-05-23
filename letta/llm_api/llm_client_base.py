@@ -14,6 +14,7 @@ from letta.schemas.enums import AgentType, LLMCallType, ProviderCategory
 from letta.schemas.llm_config import LLMConfig
 from letta.schemas.message import Message
 from letta.schemas.openai.chat_completion_response import ChatCompletionResponse
+from letta.helpers.log_redaction import redact_llm_payload_for_log
 from letta.schemas.provider_trace import BillingContext, ProviderTrace
 from letta.schemas.usage import LettaUsageStatistics
 from letta.services.telemetry_manager import TelemetryManager
@@ -117,8 +118,10 @@ class LLMClientBase:
                         await self._telemetry_manager.create_provider_trace_async(
                             actor=pydantic_actor,
                             provider_trace=ProviderTrace(
-                                request_json=request_data,
-                                response_json=response_data if response_data else {"error": error_msg, "error_type": error_type},
+                                request_json=redact_llm_payload_for_log(request_data),
+                                response_json=redact_llm_payload_for_log(
+                                    response_data if response_data else {"error": error_msg, "error_type": error_type}
+                                ),
                                 step_id=self._telemetry_step_id,
                                 agent_id=self._telemetry_agent_id,
                                 agent_tags=self._telemetry_agent_tags,
@@ -179,8 +182,8 @@ class LLMClientBase:
             await self._telemetry_manager.create_provider_trace_async(
                 actor=pydantic_actor,
                 provider_trace=ProviderTrace(
-                    request_json=request_data,
-                    response_json=response_json,
+                    request_json=redact_llm_payload_for_log(request_data),
+                    response_json=redact_llm_payload_for_log(response_json),
                     step_id=self._telemetry_step_id,
                     agent_id=self._telemetry_agent_id,
                     agent_tags=self._telemetry_agent_tags,
@@ -224,14 +227,14 @@ class LLMClientBase:
         )
 
         try:
-            log_event(name="llm_request_sent", attributes=request_data)
+            log_event(name="llm_request_sent", attributes=redact_llm_payload_for_log(request_data))
             response_data = await self.request_async(request_data, llm_config)
             if step_id and telemetry_manager:
                 telemetry_manager.create_provider_trace(
                     actor=self.actor,
                     provider_trace=ProviderTrace(
-                        request_json=request_data,
-                        response_json=response_data,
+                        request_json=redact_llm_payload_for_log(request_data),
+                        response_json=redact_llm_payload_for_log(response_data),
                         step_id=step_id,
                         call_type=LLMCallType.agent_step,
                     ),
@@ -258,14 +261,14 @@ class LLMClientBase:
         """
 
         try:
-            log_event(name="llm_request_sent", attributes=request_data)
+            log_event(name="llm_request_sent", attributes=redact_llm_payload_for_log(request_data))
             response_data = await self.request_async(request_data, llm_config)
             if settings.track_provider_trace and telemetry_manager:
                 await telemetry_manager.create_provider_trace_async(
                     actor=self.actor,
                     provider_trace=ProviderTrace(
-                        request_json=request_data,
-                        response_json=response_data,
+                        request_json=redact_llm_payload_for_log(request_data),
+                        response_json=redact_llm_payload_for_log(response_data),
                         step_id=step_id,
                         call_type=LLMCallType.agent_step,
                     ),

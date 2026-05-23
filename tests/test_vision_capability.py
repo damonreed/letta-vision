@@ -26,6 +26,13 @@ def test_registry_kimi_k26():
     assert model_supports_vision("moonshotai/kimi-k2.6", handle="openrouter/moonshotai/kimi-k2.6")
 
 
+def test_registry_kimi_k26_openai_proxy_handle_case():
+    assert model_supports_vision(
+        "moonshotai/Kimi-K2.6",
+        handle="openai-proxy/moonshotai/Kimi-K2.6",
+    )
+
+
 def test_registry_text_only():
     assert not model_supports_vision("meta-llama/llama-3.1-8b-instruct")
 

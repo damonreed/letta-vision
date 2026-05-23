@@ -17,6 +17,15 @@ ALLOWED_PREFIXES = {"gpt-4", "gpt-5", "o1", "o3", "o4"}
 DISALLOWED_KEYWORDS = {"transcribe", "search", "realtime", "tts", "audio", "computer", "o1-mini", "o1-preview", "o1-pro"}
 DEFAULT_EMBEDDING_BATCH_SIZE = 1024
 
+# Keys some OpenAI-compatible gateways include on /v1/models entries (OpenRouter, Nebius verbose, etc.)
+MODEL_CONTEXT_WINDOW_KEYS = (
+    "context_length",
+    "max_context_length",
+    "context_window",
+    "max_context_tokens",
+    "max_model_len",
+)
+
 
 class OpenAIProvider(Provider):
     provider_type: Literal[ProviderType.openai] = Field(ProviderType.openai, description="The type of the provider.")
@@ -245,6 +254,21 @@ class OpenAIProvider(Provider):
             configs.sort(key=lambda x: x.model, reverse=True)
         return configs
 
+    @staticmethod
+    def _context_window_from_model_record(model: dict, length_key: str = "context_length") -> int | None:
+        """Read context window from provider model list payload when present."""
+        keys = (length_key,) + tuple(k for k in MODEL_CONTEXT_WINDOW_KEYS if k != length_key)
+        for key in keys:
+            if key not in model or model[key] is None:
+                continue
+            try:
+                value = int(model[key])
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                return value
+        return None
+
     def _do_model_checks_for_name_and_context_size(self, model: dict, length_key: str = "context_length") -> tuple[str, int] | None:
         """Sync version - uses sync get_model_context_window_size (for subclasses with hardcoded values)."""
         if "id" not in model:
@@ -252,7 +276,9 @@ class OpenAIProvider(Provider):
             return None
 
         model_name = model["id"]
-        context_window_size = self.get_model_context_window_size(model_name)
+        context_window_size = self._context_window_from_model_record(model, length_key)
+        if context_window_size is None:
+            context_window_size = self.get_model_context_window_size(model_name)
 
         if not context_window_size:
             logger.info("No context window size found for model: %s", model_name)
@@ -269,7 +295,9 @@ class OpenAIProvider(Provider):
             return None
 
         model_name = model["id"]
-        context_window_size = await self.get_model_context_window_size_async(model_name)
+        context_window_size = self._context_window_from_model_record(model, length_key)
+        if context_window_size is None:
+            context_window_size = await self.get_model_context_window_size_async(model_name)
 
         if not context_window_size:
             logger.info("No context window size found for model: %s", model_name)
@@ -288,9 +316,13 @@ class OpenAIProvider(Provider):
 
     def get_model_context_window_size(self, model_name: str) -> int | None:
         """Get the context window size for a model (sync fallback)."""
-        basename = model_name.rsplit("/", 1)[-1].lower()
-        if basename in LLM_MAX_CONTEXT_WINDOW:
-            return LLM_MAX_CONTEXT_WINDOW[basename]
+        from letta.model_specs.litellm_model_specs import context_window_lookup_candidates, normalize_model_basename
+
+        for candidate in context_window_lookup_candidates(model_name):
+            basename = normalize_model_basename(candidate)
+            if basename in LLM_MAX_CONTEXT_WINDOW:
+                return LLM_MAX_CONTEXT_WINDOW[basename]
+
         return LLM_MAX_CONTEXT_WINDOW["DEFAULT"]
 
     async def get_model_context_window_size_async(self, model_name: str) -> int | None:
@@ -299,17 +331,20 @@ class OpenAIProvider(Provider):
         Uses litellm model specifications which covers all OpenAI models.
         Falls back to LLM_MAX_CONTEXT_WINDOW with normalized name matching.
         """
-        from letta.model_specs.litellm_model_specs import get_context_window
+        from letta.model_specs.litellm_model_specs import (
+            context_window_lookup_candidates,
+            normalize_model_basename,
+            resolve_context_window,
+        )
 
-        context_window = await get_context_window(model_name)
+        context_window = await resolve_context_window(model_name)
         if context_window is not None:
             return context_window
 
-        # Try matching against LLM_MAX_CONTEXT_WINDOW with basename
-        # e.g. "zai-org/GLM-5" -> "glm-5", "accounts/fireworks/models/glm-5" -> "glm-5"
-        basename = model_name.rsplit("/", 1)[-1].lower()
-        if basename in LLM_MAX_CONTEXT_WINDOW:
-            return LLM_MAX_CONTEXT_WINDOW[basename]
+        for candidate in context_window_lookup_candidates(model_name):
+            basename = normalize_model_basename(candidate)
+            if basename in LLM_MAX_CONTEXT_WINDOW:
+                return LLM_MAX_CONTEXT_WINDOW[basename]
 
         logger.debug(
             "Model %s not found in litellm specs or context window map. Using default of %s",

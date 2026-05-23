@@ -368,7 +368,9 @@ class AnthropicClient(LLMClientBase):
         try:
             return await client.beta.messages.create(**request_data, betas=betas)
         except Exception as e:
-            logger.error(f"Error streaming Anthropic request: {e} with request data: {json.dumps(request_data)}")
+            from letta.helpers.log_redaction import safe_log_json
+
+            logger.error(f"Error streaming Anthropic request: {e} with request data: {safe_log_json(request_data)}")
             raise e
 
     @trace_method

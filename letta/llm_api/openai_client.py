@@ -33,6 +33,7 @@ from letta.errors import (
     LLMUnprocessableEntityError,
 )
 from letta.helpers.json_helpers import sanitize_unicode_surrogates
+from letta.helpers.log_redaction import safe_log_json
 from letta.llm_api.error_utils import is_context_window_overflow_message, is_insufficient_credits_message
 from letta.llm_api.helpers import (
     add_inner_thoughts_to_functions,
@@ -1086,7 +1087,7 @@ class OpenAIClient(LLMClientBase):
                     # stream_options={"include_usage": True},
                 )
             except Exception as e:
-                logger.error(f"Error streaming OpenAI Responses request: {e} with request data: {json.dumps(request_data)}")
+                logger.error(f"Error streaming OpenAI Responses request: {e} with request data: {safe_log_json(request_data)}")
                 raise e
         else:
             try:
@@ -1096,7 +1097,7 @@ class OpenAIClient(LLMClientBase):
                     stream_options={"include_usage": True},
                 )
             except Exception as e:
-                logger.error(f"Error streaming OpenAI Chat Completions request: {e} with request data: {json.dumps(request_data)}")
+                logger.error(f"Error streaming OpenAI Chat Completions request: {e} with request data: {safe_log_json(request_data)}")
                 raise e
         return response_stream
 

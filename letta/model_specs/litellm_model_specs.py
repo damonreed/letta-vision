@@ -104,6 +104,64 @@ async def get_context_window(model_name: str) -> Optional[int]:
     return await get_max_input_tokens(model_name)
 
 
+def normalize_model_basename(model_name: str) -> str:
+    """Normalize a model id to a comparable basename (lowercase, hyphens)."""
+    return model_name.rsplit("/", 1)[-1].lower().replace("_", "-")
+
+
+def context_window_lookup_candidates(model_name: str) -> list[str]:
+    """Build model id variants to match litellm spec keys and local fallbacks."""
+    candidates: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: str) -> None:
+        if value and value not in seen:
+            seen.add(value)
+            candidates.append(value)
+
+    add(model_name)
+    basename = normalize_model_basename(model_name)
+    add(basename)
+
+    if "/" in model_name:
+        org, rest = model_name.split("/", 1)
+        rest_lower = rest.lower()
+        org_lower = org.lower()
+        add(f"moonshot/{rest_lower}")
+        add(f"openrouter/{org_lower}/{rest_lower}")
+        add(f"openrouter/moonshotai/{rest_lower}")
+
+    return candidates
+
+
+@alru_cache(maxsize=1)
+async def _basename_to_litellm_spec_key() -> dict[str, str]:
+    """Map normalized basenames to a litellm spec key (first match wins)."""
+    specs = await load_model_specs()
+    index: dict[str, str] = {}
+    for key in specs:
+        norm = normalize_model_basename(key)
+        if norm not in index:
+            index[norm] = key
+    return index
+
+
+async def resolve_context_window(model_name: str) -> Optional[int]:
+    """Resolve context window via exact litellm keys, aliases, then basename index."""
+    for candidate in context_window_lookup_candidates(model_name):
+        context_window = await get_context_window(candidate)
+        if context_window is not None:
+            return context_window
+
+    norm = normalize_model_basename(model_name)
+    index = await _basename_to_litellm_spec_key()
+    spec_key = index.get(norm)
+    if spec_key:
+        return await get_context_window(spec_key)
+
+    return None
+
+
 async def get_litellm_provider(model_name: str) -> Optional[str]:
     """Get the litellm provider for a model.
 

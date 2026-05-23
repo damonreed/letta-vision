@@ -367,7 +367,11 @@ def simple_formatter(
             content = msg.get("content") if isinstance(msg, dict) else None
             # Normalize list-of-blocks content (multimodal) to string
             if isinstance(content, list):
-                content = " ".join(b.get("text", str(b)) if isinstance(b, dict) else str(b) for b in content)
+                from letta.services.context_window_calculator.message_payload_for_token_estimate import (
+                    openai_content_block_to_plaintext,
+                )
+
+                content = " ".join(openai_content_block_to_plaintext(b) for b in content)
             content = content or ""
             tool_calls = msg.get("tool_calls") if isinstance(msg, dict) else None
             if tool_calls and isinstance(tool_calls, list):
