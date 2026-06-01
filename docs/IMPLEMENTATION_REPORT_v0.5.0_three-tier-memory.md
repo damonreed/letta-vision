@@ -1,9 +1,9 @@
-# Implementation Report: Three-Tier Filesystem Memory (v0.5.0 candidate)
+# Implementation Report: Three-Tier Filesystem Memory (v0.5.0)
 
 **To:** Ada  
 **From:** Damon (letta-stack)  
-**Date:** 2026-05-23  
-**Release candidate:** `v0.5.0` across `letta-vision`, `letta-vision-client`, `letta-vision-deploy`  
+**Date:** 2026-06-01  
+**Released:** `v0.5.0` across `letta-vision`, `letta-vision-client`, and `letta-vision-deploy`  
 **Baseline:** `v0.4.0` (LLM failure handling, image persistence, MCP)  
 **Specification:** [FR: Filesystem Redesign — Three-Tier Memory Hierarchy](FR_letta-vision_Filesystem-Redesign-Three-Tier-Memory.md)
 
@@ -13,11 +13,13 @@
 
 We implemented Ades's three-tier filesystem memory design as specified in the FR, through **Phases 1–6**. The core property holds: **read content lives in conversation history; file headlines live in stable, shared core blocks; archives are agent-written, semantically searchable topical notes.** Legacy `FileBlock` page injection is removed from the compile path; `visible_content` is no longer written on read.
 
-Extended testing with Lyra (agent `agent-35a1c263-f1f4-4855-95a1-ad760b3cc414`, conversation **v0.5.0 Testing**) surfaced several integration bugs and UX gaps. Those are fixed in-tree. The web client gained file-memory visibility, a system-context inspector, and **chat stream self-recovery** so frozen SSE sessions no longer require a full page reload.
+Extended testing with Lyra (agent `agent-35a1c263-f1f4-4855-95a1-ad760b3cc414`, conversation **v0.5.0 Testing**) surfaced several integration bugs and UX gaps. Those are fixed in-tree. The web client gained file-memory visibility, a system-context inspector, **chat stream self-recovery** so frozen SSE sessions no longer require a full page reload, and operator surfaces for providers, text-file creation, and agent system-prompt editing.
+
+Post-testing polish through **2026-06-01** added the **`add_text_file`** tool, a full **`letta_v1.py` instruction rewrite** (memory terminology, retrieval order, E2B sandbox docs), multimodal tool-result formatting for E2B/MCP, context-window/token-estimate fixes for vision models, and LLM request log redaction.
 
 **Phase 7 (legacy tool removal and column drop) is intentionally deferred** to a follow-on minor release after agents are migrated off old tool names.
 
-This report is submitted for your review. If the deviations and open items below are acceptable, we will tag **v0.5.0**.
+**v0.5.0 is tagged** on all three stack repos with release notes and migration steps below.
 
 ---
 
@@ -87,10 +89,12 @@ Design decisions preserved from the FR:
 Registered tools (`FILES_TOOLS` in `letta/constants.py`):
 
 ```
-attach_folder, detach_folder, open_file, close_file,
+add_text_file, attach_folder, detach_folder, open_file, close_file,
 file_read_page, file_read_next_page, file_read_prev_page, file_read_range, file_grep,
 update_file_headline, write_file_archive, search_file_archives, search_file_contents
 ```
+
+**`add_text_file`** (post-FR): creates a text file in an attached folder, seeds an optional headline, and kicks off async ingestion for `search_file_contents`. Triggers the same live system refresh as attach/open/headline mutations.
 
 Legacy names (`open_files`, `grep_files`, `semantic_search_files`) are **not** in `FILES_TOOLS` but executor stubs may still exist until Phase 7. Renamed tools (`update_file_core`, `write_archive`, `search_archives`) remain as executor aliases for agents created before the rename.
 
@@ -121,7 +125,8 @@ File tools that change what appears in system context set a pending refresh flag
 
 ```python
 FILE_STATE_SYSTEM_REFRESH_TOOLS = {
-    attach_folder, detach_folder, open_file, close_file, update_file_headline
+    add_text_file, attach_folder, detach_folder, open_file, close_file,
+    update_file_headline,  # + deprecated alias update_file_core
 }
 ```
 
@@ -129,7 +134,23 @@ After successful execution, `_pending_file_system_refresh` triggers `refresh_ope
 
 ### Agent instructions (`letta_v1.py`)
 
-Base instructions replaced per FR §7, with **two empirical refinements** after Lyra testing (see Deviations).
+Base instructions replaced per FR §7, with **two empirical refinements** after Lyra testing (see Deviations). Final pre-release rewrite adds:
+
+- **`<memory_terminology>`** — disambiguates memory blocks, archival memory, file headlines, and file reading notes (avoids agents conflating `write_file_archive` with `archival_memory_insert`).
+- **`<retrieval>`** — fixed search order: archival → conversation → file archives → file contents → grep/read.
+- **`<code_execution>`** — documents E2B sandbox constraints, preinstalled libs, and PIL image return affordance.
+- Tool names aligned to shipped registry (`update_file_headline`, `write_file_archive`, `search_file_archives`).
+
+### Multimodal tool results (E2B + MCP)
+
+- **`e2b_result_format.py`** — when `run_code` ends with a `PIL.Image.Image`, the tool return carries an inline image block for chat rendering.
+- **`mcp/tool_result_formatter.py`** — normalizes MCP tool payloads with embedded images.
+- **`Message` ORM fix** — legacy text content no longer overwrites multimodal function responses on serialization (regression test in `test_message_serialization.py`).
+
+### Context window and logging (v0.5.0 companion work)
+
+- **`message_payload_for_token_estimate.py`** — token estimates include image blocks; model name normalization for context-window lookup (e.g. `kimi-k2.6`).
+- **`log_redaction.py`** — LLM request logging redacts sensitive payload fields across Anthropic, OpenAI, Azure, and Vertex clients.
 
 ---
 
@@ -149,8 +170,11 @@ Base instructions replaced per FR §7, with **two empirical refinements** after 
 
 | Surface | Purpose |
 |---------|---------|
-| **`Files.svelte`** | Folder upload/management (existing, extended) |
+| **`Files.svelte`** | Folder upload/management; **Create text file** modal (`POST /api/folders/{id}/text-files`) |
+| **`FileViewerModal.svelte`** | In-browser file content preview |
 | **`AgentFiles.svelte`** | Per-agent attached folders + open-files panel |
+| **`Agents.svelte`** | System prompt editor with save + bulk conversation recompile |
+| **`Providers.svelte`** | Org-scoped LLM provider CRUD (pairs with server `/v1/providers`) |
 | **`Chat.svelte` — memory sidebar** | Blocks + open files quick view |
 | **`SystemContextModal.svelte`** | Inspect compiled system prompt; refreshes after streams |
 | **Context button in chat header** | Opens modal; pulls fresh history on open |
@@ -223,6 +247,9 @@ Issues found during live testing and resolved before this report:
 | **Wrong file ID (UUID typo)** | Agent copied `file-8b0f61cf-…` with one char wrong | `FileAgentManager.resolve_file_id_for_agent()` — name/path match + single-edit-distance UUID correction |
 | **Reads failed after resolution** | Resolution path checked `FileMetadata.is_deleted` on Pydantic schema | Removed invalid attribute access; join through `files` table in `list_files_for_agent` |
 | **Chat frozen after stream death** | No stall detection; pings dropped; no post-stream history sync | Stream recovery module (see above) |
+| **Multimodal tool images lost in history** | Legacy `content` field overwrote function response with images | ORM serialization preserves image blocks in tool returns |
+| **Agents confused archive vs file reading notes** | Overlapping terminology in instructions | `letta_v1.py` memory_terminology + retrieval order rewrite |
+| **No agent-authored file creation** | Upload-only workflow | `add_text_file` tool + client text-file modal |
 
 ---
 
@@ -242,7 +269,9 @@ Issues found during live testing and resolved before this report:
 
 ### Deploy
 
-`letta-vision-deploy` docker compose: run migration on `letta-vision` container start, rebuild both images after pull. Lyra's agent required one manual refresh after deploy to drop stale tool/instruction references from pre-v0.5.0 state.
+`letta-vision-deploy` docker compose: run migration on `letta-vision` container start, rebuild both images after pull. Set `LETTA_VERSION=0.5.0`. Lyra's agent required one manual refresh after deploy to drop stale tool/instruction references from pre-v0.5.0 state.
+
+**v0.5.0 deploy additions:** `MODEL_OVERRIDES_PATH` shared volume mount, `LETTA_ENCRYPTION_KEY`, `LETTA_TRACK_PROVIDER_TRACE`, `GLOBAL_MAX_CONTEXT_WINDOW_LIMIT`, OpenRouter attribution env vars.
 
 ---
 
@@ -284,13 +313,13 @@ Agents created or refreshed after v0.5.0 already receive the new tool set via `a
 
 ---
 
-## Recommendation
+## Release status
 
 The implementation delivers the FR's central design property — **three tiers with distinct lifetimes and costs, read content in history, stable shared headlines, agent-written searchable archives** — through Phase 6, with documented instruction deviations that improved empirical agent behavior.
 
-Phase 7 deprecation is cleanly separable. Chat robustness and system-context visibility are operator-quality additions appropriate for a self-hosted alpha.
+Phase 7 deprecation is cleanly separable. Chat robustness, provider management, and system-context visibility are operator-quality additions appropriate for a self-hosted alpha.
 
-**Proposed action:** Ada approves this report → tag **`v0.5.0`** on `letta-vision`, `letta-vision-client`, and `letta-vision-deploy` with release notes summarizing migration steps (run migration, backfill optional, refresh agent prompts, rebuild containers).
+**Released 2026-06-01:** **`v0.5.0`** tagged on `letta-vision`, `letta-vision-client`, and `letta-vision-deploy`. See `docs/RELEASE_NOTES_v0.5.0.md` in each repo for upgrade steps (run migration, optional backfill, refresh agent prompts, rebuild containers).
 
 ---
 
@@ -301,7 +330,10 @@ Phase 7 deprecation is cleanly separable. Chat robustness and system-context vis
 | Path | Role |
 |------|------|
 | `alembic/versions/f1a2b3c4d5e6_add_three_tier_filesystem_memory.py` | Schema |
-| `letta/services/tool_executor/three_tier_file_tools.py` | Tool handlers |
+| `letta/services/tool_executor/three_tier_file_tools.py` | Tool handlers (incl. `add_text_file`) |
+| `letta/services/tool_executor/e2b_result_format.py` | PIL image tool returns |
+| `letta/helpers/log_redaction.py` | Safe LLM request logging |
+| `letta/services/context_window_calculator/message_payload_for_token_estimate.py` | Image-aware token estimates |
 | `letta/services/files/char_page_reader.py` | Paging |
 | `letta/schemas/memory.py` | Compile: directories + open_files |
 | `letta/prompts/system_prompts/letta_v1.py` | Agent instructions |
@@ -319,7 +351,11 @@ Phase 7 deprecation is cleanly separable. Chat robustness and system-context vis
 | `frontend/src/lib/chatStreamRecovery.js` | Stall detection |
 | `frontend/src/lib/SystemContextModal.svelte` | System prompt inspector |
 | `frontend/src/lib/AgentFiles.svelte` | Agent filesystem panel |
+| `frontend/src/lib/components/FileViewerModal.svelte` | File preview |
+| `frontend/src/routes/Providers.svelte` | Provider management |
+| `frontend/src/routes/Files.svelte` | Text file creation UI |
 | `backend/sse.py` | Keepalive forwarding |
+| `backend/context_refresh.py` | Conversation recompile helpers |
 
 ---
 

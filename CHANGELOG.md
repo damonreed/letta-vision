@@ -9,6 +9,34 @@ Fork releases use `v0.x.y` tags (diverged from upstream Letta `0.16.x` at v0.2.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-01
+
+### Added
+
+- Three-tier filesystem memory: `file_core_blocks`, `agent_open_files`, `file_archives` (migration `f1a2b3c4d5e6`).
+- Read/nav tools: `file_read_page`, `file_read_next_page`, `file_read_prev_page`, `file_read_range`, `file_grep` via `CharPageReader`.
+- Headline and archive tools: `update_file_headline`, `write_file_archive`, `search_file_archives`; `search_file_contents` rename.
+- `add_text_file` — create text files in attached folders with optional headline and async ingestion.
+- REST `/v1/file-memory/*` endpoints; conversation-scoped system recompile (`recompile_system_message_for_conversation`).
+- Live system refresh after file-state tool mutations (`FILE_STATE_SYSTEM_REFRESH_TOOLS` in `LettaAgentV3`).
+- E2B PIL image tool returns (`e2b_result_format.py`); MCP multimodal tool result formatter.
+- LLM request log redaction (`log_redaction.py`); image-aware token estimates.
+- Scripts: `backfill_file_core_blocks.py`, `refresh_letta_v1_system_prompts.py`.
+- Tests: `test_three_tier_memory_compile.py`, `test_char_page_reader.py`, `test_add_text_file_tool.py`, and related coverage.
+
+### Changed
+
+- `letta_v1.py` rewrite: memory terminology, retrieval order, E2B sandbox documentation, final tool names.
+- System prompt: `<directories>` shows file headlines for all attached files; `<open_files>` for active reading slots only.
+- Context window lookup: model name normalization; `kimi-k2.6` support.
+
+### Fixed
+
+- `file_read_next_page` boundary skip; timezone on `update_file_headline`; archive search eager-load crash.
+- Stale page-size limit during tool loop; stale system context after file mutations.
+- `CONVERSATION_ID: default` in named conversations; fuzzy file ID resolution.
+- Multimodal tool returns no longer overwritten by legacy text content on serialization.
+
 ## [0.4.0] - 2026-05-21
 
 ### Added
@@ -43,7 +71,8 @@ Fork releases use `v0.x.y` tags (diverged from upstream Letta `0.16.x` at v0.2.0
 
 Pre-vision baseline: multimodal content blocks validated via K2.6 smoke test; partial timeout wiring.
 
-[Unreleased]: https://github.com/damonreed/letta-vision/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/damonreed/letta-vision/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/damonreed/letta-vision/releases/tag/v0.5.0
 [0.4.0]: https://github.com/damonreed/letta-vision/releases/tag/v0.4.0
 [0.3.0]: https://github.com/damonreed/letta-vision/releases/tag/v0.3.0
 [0.2.0]: https://github.com/damonreed/letta-vision/releases/tag/v0.2.0
