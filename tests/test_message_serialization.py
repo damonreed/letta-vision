@@ -382,3 +382,46 @@ def test_orm_to_pydantic_preserves_multimodal_tool_return_over_legacy_content():
 
     openai = Message.to_openai_dicts_from_list([model])
     assert any(p["type"] == "image_url" for p in openai[0]["content"])
+
+
+def test_dedupe_tool_messages_keeps_same_tool_call_id_across_steps():
+    """Provider-reused tool_call_ids must not collapse distinct step executions."""
+    reused_id = "functions.scenecraft_inspect_asset:6"
+    messages = [
+        Message(
+            role=MessageRole.tool,
+            step_id="step-bronn",
+            tool_call_id=reused_id,
+            content="bronn",
+        ),
+        Message(
+            role=MessageRole.tool,
+            step_id="step-morbiena",
+            tool_call_id=reused_id,
+            content="morbiena",
+        ),
+    ]
+    deduped = Message.dedupe_tool_messages_for_llm_api(messages)
+    assert len(deduped) == 2
+    assert [m.content for m in deduped] == ["bronn", "morbiena"]
+
+
+def test_dedupe_tool_messages_drops_true_duplicate_same_step():
+    reused_id = "functions.scenecraft_inspect_asset:6"
+    messages = [
+        Message(
+            role=MessageRole.tool,
+            step_id="step-dup",
+            tool_call_id=reused_id,
+            content="first",
+        ),
+        Message(
+            role=MessageRole.tool,
+            step_id="step-dup",
+            tool_call_id=reused_id,
+            content="duplicate",
+        ),
+    ]
+    deduped = Message.dedupe_tool_messages_for_llm_api(messages)
+    assert len(deduped) == 1
+    assert deduped[0].content == "first"

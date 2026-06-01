@@ -296,6 +296,67 @@ def test_openai_client_handle_llm_error_non_credit_api_error():
     assert not isinstance(result, LLMInsufficientCreditsError)
 
 
+def test_openai_client_handle_llm_error_openrouter_image_payload_limit():
+    """OpenRouter 30MB image cap should map to a clear LLMBadRequestError."""
+    from letta.llm_api.error_utils import openrouter_image_payload_limit_user_message
+    from letta.llm_api.openai_client import OpenAIClient
+
+    client = OpenAIClient()
+    request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
+    error = openai.APIError(message="Downloaded image content cannot exceed 30MB", request=request, body=None)
+    llm_config = LLMConfig(
+        model="moonshotai/kimi-k2.6",
+        model_endpoint_type="openrouter",
+        provider_name="openrouter",
+        context_window=262144,
+    )
+    result = client.handle_llm_error(error, llm_config=llm_config)
+    assert isinstance(result, LLMBadRequestError)
+    assert result.message == openrouter_image_payload_limit_user_message()
+    assert result.details.get("error_kind") == "openrouter_image_payload_limit"
+
+
+@pytest.mark.asyncio
+async def test_letta_llm_stream_adapter_propagates_openrouter_image_limit(monkeypatch):
+    """Regression: OpenRouter image cap errors must not be masked as empty-stream retries."""
+
+    class FakeAsyncStream:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
+            raise openai.APIError(message="Downloaded image content cannot exceed 30MB", request=request, body=None)
+
+    async def fake_stream_async(self, request_data: dict, llm_config: LLMConfig):
+        return FakeAsyncStream()
+
+    from letta.llm_api.openai_client import OpenAIClient
+
+    monkeypatch.setattr(OpenAIClient, "stream_async", fake_stream_async, raising=True)
+
+    llm_client = OpenAIClient()
+    llm_config = LLMConfig(
+        model="moonshotai/kimi-k2.6",
+        model_endpoint_type="openrouter",
+        provider_name="openrouter",
+        context_window=262144,
+    )
+    adapter = LettaLLMStreamAdapter(llm_client=llm_client, llm_config=llm_config, call_type=LLMCallType.agent_step)
+
+    gen = adapter.invoke_llm(request_data={}, messages=[], tools=[], use_assistant_message=True)
+    with pytest.raises(LLMBadRequestError) as exc_info:
+        async for _ in gen:
+            pass
+    assert exc_info.value.details.get("error_kind") == "openrouter_image_payload_limit"
+
+
 @pytest.mark.asyncio
 async def test_letta_llm_stream_adapter_raises_empty_response_error_for_anthropic(monkeypatch):
     """LET-7679: Empty streaming responses (no content blocks) should raise LLMEmptyResponseError.

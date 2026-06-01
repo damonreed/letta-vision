@@ -92,9 +92,14 @@ class LettaFileToolExecutor(ToolExecutor):
             "file_read_prev_page": self._three_tier_file_read_prev_page,
             "file_read_range": self._three_tier_file_read_range,
             "file_grep": self._three_tier_file_grep,
-            "update_file_core": self._three_tier_update_file_core,
-            "write_archive": self._three_tier_write_archive,
-            "search_archives": self._three_tier_search_archives,
+            "update_file_headline": self._three_tier_update_file_headline,
+            "write_file_archive": self._three_tier_write_file_archive,
+            "search_file_archives": self._three_tier_search_file_archives,
+            # Deprecated tool names (agents created before rename)
+            "update_file_core": self._three_tier_update_file_headline,
+            "write_archive": self._three_tier_write_file_archive,
+            "search_archives": self._three_tier_search_file_archives,
+            "add_text_file": self._three_tier_add_text_file,
             "attach_folder": self._attach_folder,
             "detach_folder": self._detach_folder,
         }
@@ -902,6 +907,18 @@ class LettaFileToolExecutor(ToolExecutor):
         self.three_tier_tools.conversation_id = self.conversation_id
         return self.three_tier_tools
 
+    async def _three_tier_add_text_file(
+        self,
+        agent_state: AgentState,
+        folder_id: str,
+        file_name: str,
+        content: str,
+        headline: Optional[str] = None,
+    ) -> dict:
+        return await self._get_three_tier_tools().add_text_file(
+            agent_state, folder_id, file_name, content, headline
+        )
+
     async def _three_tier_open_file(self, agent_state: AgentState, file_id: str) -> dict:
         return await self._get_three_tier_tools().open_file(agent_state, file_id)
 
@@ -923,15 +940,15 @@ class LettaFileToolExecutor(ToolExecutor):
     async def _three_tier_file_grep(self, agent_state: AgentState, file_id: str, pattern: str, max_hits: int = 20) -> dict:
         return await self._get_three_tier_tools().file_grep(agent_state, file_id, pattern, max_hits)
 
-    async def _three_tier_update_file_core(self, agent_state: AgentState, file_id: str, new_summary: str) -> dict:
-        return await self._get_three_tier_tools().update_file_core(agent_state, file_id, new_summary)
+    async def _three_tier_update_file_headline(self, agent_state: AgentState, file_id: str, new_summary: str) -> dict:
+        return await self._get_three_tier_tools().update_file_headline(agent_state, file_id, new_summary)
 
-    async def _three_tier_write_archive(
+    async def _three_tier_write_file_archive(
         self, agent_state: AgentState, file_id: str, title: str, content: str, tags: Optional[List[str]] = None
     ) -> dict:
-        return await self._get_three_tier_tools().write_archive(agent_state, file_id, title, content, tags)
+        return await self._get_three_tier_tools().write_file_archive(agent_state, file_id, title, content, tags)
 
-    async def _three_tier_search_archives(
+    async def _three_tier_search_file_archives(
         self,
         agent_state: AgentState,
         query: str,
@@ -939,7 +956,7 @@ class LettaFileToolExecutor(ToolExecutor):
         tags: Optional[List[str]] = None,
         limit: int = 10,
     ) -> dict:
-        return await self._get_three_tier_tools().search_archives(agent_state, query, file_id, tags, limit)
+        return await self._get_three_tier_tools().search_file_archives(agent_state, query, file_id, tags, limit)
 
     async def _attach_folder(self, agent_state: AgentState, folder_id: str) -> dict:
         await self.agent_manager.attach_source_async(agent_id=agent_state.id, source_id=folder_id, actor=self.actor)

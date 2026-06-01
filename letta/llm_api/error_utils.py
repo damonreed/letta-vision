@@ -23,6 +23,20 @@ def is_context_window_overflow_message(msg: str) -> bool:
     )
 
 
+def is_openrouter_image_payload_limit_message(msg: str) -> bool:
+    """OpenRouter rejects requests when cumulative in-context image bytes exceed ~30MB."""
+    lower = msg.lower()
+    return "downloaded image content cannot exceed" in lower or "image content cannot exceed 30mb" in lower
+
+
+def openrouter_image_payload_limit_user_message() -> str:
+    return (
+        "OpenRouter rejected this request because the total in-context image payload exceeds "
+        "its 30MB limit. Try compressing images, sending fewer images per turn, or starting a "
+        "new conversation for a fresh image budget."
+    )
+
+
 def is_insufficient_credits_message(msg: str) -> bool:
     """Best-effort detection for insufficient credits/quota/billing errors.
 

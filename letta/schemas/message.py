@@ -2647,11 +2647,26 @@ class Message(BaseMessage):
         return messages
 
     @staticmethod
-    def dedupe_tool_messages_for_llm_api(messages: List[Message]) -> List[Message]:
-        """Dedupe duplicate tool returns across tool-role messages by tool_call_id.
+    def _tool_return_dedupe_key(tool_call_id: Optional[str], step_id: Optional[str]):
+        """Key for deduping tool returns.
 
-        - For explicit tool_returns arrays: keep the first occurrence of each tool_call_id,
-          drop subsequent duplicates within the request.
+        Some providers (e.g. Kimi via OpenRouter) reuse tool_call_ids such as
+        ``functions.scenecraft_inspect_asset:6`` across separate invocations. Pairing
+        with step_id distinguishes distinct executions while still collapsing true
+        duplicates (same tool_call_id and step_id).
+        """
+        if not tool_call_id:
+            return None
+        if step_id:
+            return (tool_call_id, step_id)
+        return tool_call_id
+
+    @staticmethod
+    def dedupe_tool_messages_for_llm_api(messages: List[Message]) -> List[Message]:
+        """Dedupe duplicate tool returns across tool-role messages.
+
+        - For explicit tool_returns arrays: keep the first occurrence of each
+          (tool_call_id, step_id) pair, drop subsequent duplicates within the request.
         - For legacy single tool_call_id + content messages: keep the first, drop duplicates.
         - If a tool message has neither unique tool_returns nor content, drop it.
 
@@ -2664,7 +2679,7 @@ class Message(BaseMessage):
 
         logger = get_logger(__name__)
 
-        seen_ids: set[str] = set()
+        seen_keys: set = set()
         removed_tool_msgs = 0
         removed_tool_returns = 0
         result: List[Message] = []
@@ -2674,16 +2689,19 @@ class Message(BaseMessage):
                 result.append(m)
                 continue
 
+            msg_step_id = getattr(m, "step_id", None)
+
             # Prefer explicit tool_returns when present
             if m.tool_returns and len(m.tool_returns) > 0:
                 unique_returns = []
                 for tr in m.tool_returns:
                     tcid = getattr(tr, "tool_call_id", None)
-                    if tcid and tcid in seen_ids:
+                    key = Message._tool_return_dedupe_key(tcid, msg_step_id)
+                    if key is not None and key in seen_keys:
                         removed_tool_returns += 1
                         continue
-                    if tcid:
-                        seen_ids.add(tcid)
+                    if key is not None:
+                        seen_keys.add(key)
                     unique_returns.append(tr)
 
                 if unique_returns:
@@ -2693,11 +2711,12 @@ class Message(BaseMessage):
                 else:
                     # No unique returns left; if legacy content exists, fall back to legacy handling below
                     if m.tool_call_id and m.content and len(m.content) > 0:
-                        tcid = m.tool_call_id
-                        if tcid in seen_ids:
+                        key = Message._tool_return_dedupe_key(m.tool_call_id, msg_step_id)
+                        if key is not None and key in seen_keys:
                             removed_tool_msgs += 1
                             continue
-                        seen_ids.add(tcid)
+                        if key is not None:
+                            seen_keys.add(key)
                         result.append(m)
                     else:
                         removed_tool_msgs += 1
@@ -2706,11 +2725,12 @@ class Message(BaseMessage):
             else:
                 # Legacy single-response path
                 tcid = getattr(m, "tool_call_id", None)
-                if tcid:
-                    if tcid in seen_ids:
+                key = Message._tool_return_dedupe_key(tcid, msg_step_id)
+                if key is not None:
+                    if key in seen_keys:
                         removed_tool_msgs += 1
                         continue
-                    seen_ids.add(tcid)
+                    seen_keys.add(key)
                 result.append(m)
 
         if removed_tool_msgs or removed_tool_returns:

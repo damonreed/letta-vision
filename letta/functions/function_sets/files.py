@@ -4,6 +4,28 @@ if TYPE_CHECKING:
     from letta.schemas.agent import AgentState
 
 
+async def add_text_file(
+    agent_state: "AgentState",
+    folder_id: str,
+    file_name: str,
+    content: str,
+    headline: Optional[str] = None,
+) -> dict:
+    """
+    Create a plain-text file in a folder, store the given content, and ingest it for search.
+
+    Args:
+        folder_id (str): The folder (source) ID to store the file in.
+        file_name (str): Filename (e.g. notes.txt). A .txt suffix is added when missing.
+        content (str): Full text body to write into the file.
+        headline (Optional[str]): Optional short file headline for directory listings.
+
+    Returns:
+        dict: Created file metadata (file_id, file_name, folder_id, processing_status).
+    """
+    raise NotImplementedError("Tool not implemented. Please contact the Letta team.")
+
+
 async def attach_folder(agent_state: "AgentState", folder_id: str) -> dict:
     """
     Attach a folder of files to the agent.
@@ -32,7 +54,7 @@ async def detach_folder(agent_state: "AgentState", folder_id: str) -> dict:
 
 async def open_file(agent_state: "AgentState", file_id: str) -> dict:
     """
-    Open a file: attach its core headline to context without loading content.
+    Open a file: attach its file headline to context without loading content.
 
     Args:
         file_id (str): The file ID to open.
@@ -45,7 +67,7 @@ async def open_file(agent_state: "AgentState", file_id: str) -> dict:
 
 async def close_file(agent_state: "AgentState", file_id: str) -> dict:
     """
-    Close a file and detach its core headline from context.
+    Close a file and detach its file headline from context.
 
     Args:
         file_id (str): The file ID to close.
@@ -125,39 +147,39 @@ async def file_grep(agent_state: "AgentState", file_id: str, pattern: str, max_h
     raise NotImplementedError("Tool not implemented. Please contact the Letta team.")
 
 
-async def update_file_core(agent_state: "AgentState", file_id: str, new_summary: str) -> dict:
+async def update_file_headline(agent_state: "AgentState", file_id: str, new_summary: str) -> dict:
     """
-    Update the shared file core headline (a few sentences describing what the file is).
+    Update the shared file headline (a few sentences describing what the file is).
 
     Args:
         file_id (str): The file ID whose headline to update.
         new_summary (str): New short headline text (shared across agents; shown in directory listings).
 
     Returns:
-        dict: Updated file core block metadata.
+        dict: Updated file headline block metadata.
     """
     raise NotImplementedError("Tool not implemented. Please contact the Letta team.")
 
 
-async def write_archive(
+async def write_file_archive(
     agent_state: "AgentState", file_id: str, title: str, content: str, tags: Optional[List[str]] = None
 ) -> dict:
     """
-    Write a topical archive linked to a file.
+    Write a file reading note (topical archive) linked to a file.
 
     Args:
-        file_id (str): The file this archive is about.
+        file_id (str): The file this note is about.
         title (str): Short title naming the topical focus.
-        content (str): Archive body (1-8000 characters).
+        content (str): Note body (1-8000 characters).
         tags (Optional[List[str]]): Optional tags for later search.
 
     Returns:
-        dict: Created archive metadata including stored tags.
+        dict: Created file archive metadata including stored tags.
     """
     raise NotImplementedError("Tool not implemented. Please contact the Letta team.")
 
 
-async def search_archives(
+async def search_file_archives(
     agent_state: "AgentState",
     query: str,
     file_id: Optional[str] = None,
@@ -165,16 +187,16 @@ async def search_archives(
     limit: int = 10,
 ) -> dict:
     """
-    Semantic search over file archives.
+    Semantic search over file reading notes (file archives).
 
     Args:
         query (str): Natural-language search query.
-        file_id (Optional[str]): Limit search to one file's archives.
-        tags (Optional[List[str]]): Filter by archive tags.
+        file_id (Optional[str]): Limit search to one file's notes.
+        tags (Optional[List[str]]): Filter by note tags.
         limit (int): Maximum results to return.
 
     Returns:
-        dict: Ranked archive hits with provenance metadata.
+        dict: Ranked file archive hits with provenance metadata.
     """
     raise NotImplementedError("Tool not implemented. Please contact the Letta team.")
 

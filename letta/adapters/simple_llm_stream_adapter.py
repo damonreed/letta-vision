@@ -170,6 +170,7 @@ class SimpleLLMStreamAdapter(LettaLLMStreamAdapter):
             raise self.llm_client.handle_llm_error(e, llm_config=self.llm_config)
 
         stream_started = True
+        stream_failed = False
 
         try:
             # Process the stream and yield chunks immediately for TTFT
@@ -178,6 +179,7 @@ class SimpleLLMStreamAdapter(LettaLLMStreamAdapter):
                     # Yield each chunk immediately as it arrives
                     yield chunk
             except BaseException as e:
+                stream_failed = True
                 self.llm_request_finish_timestamp_ns = get_utc_timestamp_ns()
                 latency_ms = int((self.llm_request_finish_timestamp_ns - request_start_ns) / 1_000_000)
                 await self.llm_client.log_provider_trace_async(
@@ -250,7 +252,8 @@ class SimpleLLMStreamAdapter(LettaLLMStreamAdapter):
                 elif getattr(resp, "status", None) == "completed":
                     self._finish_reason = "stop"
 
-            self._validate_streaming_completion()
+            if not stream_failed:
+                self._validate_streaming_completion()
 
             # Log request and response data
             self.log_provider_trace(step_id=step_id, actor=actor)

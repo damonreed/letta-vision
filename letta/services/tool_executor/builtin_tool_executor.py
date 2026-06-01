@@ -9,6 +9,7 @@ from letta.schemas.sandbox_config import SandboxConfig
 from letta.schemas.tool import Tool
 from letta.schemas.tool_execution_result import ToolExecutionResult
 from letta.schemas.user import User
+from letta.services.tool_executor.e2b_result_format import e2b_execution_to_func_return
 from letta.services.tool_executor.tool_executor_base import ToolExecutor
 from letta.settings import tool_settings
 
@@ -123,8 +124,10 @@ class LettaBuiltinToolExecutor(ToolExecutor):
         params = {"code": tool_source_code + code}
 
         execution = await sbx.run_code(**params)
+        formatted = e2b_execution_to_func_return(execution)
+        if isinstance(formatted, list):
+            return formatted
 
-        # Parse results similar to e2b_sandbox.py
         if execution.results:
             func_return = execution.results[0].text if hasattr(execution.results[0], "text") else str(execution.results[0])
         elif execution.error:
@@ -173,21 +176,11 @@ class LettaBuiltinToolExecutor(ToolExecutor):
             # Leave empty for python
             params["language"] = language
 
-        res = self._llm_friendly_result(await sbx.run_code(**params))
-        return json.dumps(res, ensure_ascii=False)
-
-    def _llm_friendly_result(self, res):
-        out = {
-            "results": [r.text if hasattr(r, "text") else str(r) for r in res.results],
-            "logs": {
-                "stdout": getattr(res.logs, "stdout", []),
-                "stderr": getattr(res.logs, "stderr", []),
-            },
-        }
-        err = getattr(res, "error", None)
-        if err is not None:
-            out["error"] = err
-        return out
+        execution = await sbx.run_code(**params)
+        formatted = e2b_execution_to_func_return(execution)
+        if isinstance(formatted, list):
+            return formatted
+        return json.dumps(formatted, ensure_ascii=False)
 
     @trace_method
     async def web_search(

@@ -113,7 +113,8 @@ SEND_MESSAGE_TOOL_NAME = "send_message"
 # Base tools that cannot be edited, as they access agent state directly
 # Note that we don't include "conversation_search_date" for now
 BASE_TOOLS = [SEND_MESSAGE_TOOL_NAME, "conversation_search", "archival_memory_insert", "archival_memory_search"]
-DEPRECATED_LETTA_TOOLS = ["archival_memory_insert", "archival_memory_search"]
+# Archival memory (passages) remains supported; distinct from file reading notes (write_file_archive / search_file_archives).
+DEPRECATED_LETTA_TOOLS: list[str] = []
 # Base memory tools CAN be edited, and are added by default by the server
 BASE_MEMORY_TOOLS = ["core_memory_append", "core_memory_replace", "memory", "memory_apply_patch"]
 # New v2 collection of the base memory tools (effecitvely same as sleeptime set), to pair with memgpt_v2 prompt
@@ -168,6 +169,7 @@ BUILTIN_TOOLS = ["run_code", "run_code_with_tools", "web_search", "fetch_webpage
 
 # Built in tools
 FILES_TOOLS = [
+    "add_text_file",
     "attach_folder",
     "detach_folder",
     "open_file",
@@ -177,19 +179,22 @@ FILES_TOOLS = [
     "file_read_prev_page",
     "file_read_range",
     "file_grep",
-    "update_file_core",
-    "write_archive",
-    "search_archives",
+    "update_file_headline",
+    "write_file_archive",
+    "search_file_archives",
     "search_file_contents",
 ]
 
 # File tools that mutate in-context <open_files> / directories and require system prompt refresh.
 FILE_STATE_SYSTEM_REFRESH_TOOLS = frozenset(
     {
+        "add_text_file",
         "attach_folder",
         "detach_folder",
         "open_file",
         "close_file",
+        "update_file_headline",
+        # Deprecated aliases (existing agents may still call these until tools are re-synced)
         "update_file_core",
     }
 )
@@ -289,6 +294,13 @@ LLM_MAX_CONTEXT_WINDOW = {
     "kimi-k2.6": 262144,
     "kimi-k2-thinking": 256000,
     "kimi-k2-0905": 262144,
+    # minimax (OpenAI-compatible BYOK and native M3)
+    "minimax-m3": 1_000_000,
+    "minimax-m2.7": 200000,
+    "minimax-m2.5": 200000,
+    "minimax-m2.1": 200000,
+    "minimax-m2.1-lightning": 200000,
+    "minimax-m2": 200000,
     ## OpenAI models: https://platform.openai.com/docs/models/overview
     # gpt-5
     "gpt-5": 272000,

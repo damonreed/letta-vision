@@ -52,7 +52,7 @@ A file core memory block holds a short, stable headline describing what the file
 
 > *"This file contains the season summaries of 'Rogue's Harbor', an adventure story about how Lachance and Rhiannah met, fell in love, and finally were together."*
 
-It does **not** hold file content. It does **not** change on navigation. It changes only when the agent's understanding of what the file is has materially shifted, via the `update_file_core` tool.
+It does **not** hold file content. It does **not** change on navigation. It changes only when the agent's understanding of what the file is has materially shifted, via the `update_file_headline` tool.
 
 ### 3.2 Archives (retrievable on demand)
 
@@ -70,10 +70,10 @@ Documents in folders attached to an agent. Hold raw detail. Read page-by-page in
 
 Two distinct retrieval surfaces exist over file content:
 
-- **`search_archives`** — searches the archives *about* files (tier 2). Cheap entry point; what other agents have observed and concluded.
+- **`search_file_archives`** — searches the archives *about* files (tier 2). Cheap entry point; what other agents have observed and concluded.
 - **`search_file_contents`** — searches the raw content *of* files via the existing folder RAG / source-passage index. Folder ingestion already produces these passages; this FR just renames the tool to disambiguate it from archive search.
 
-The agent uses `search_archives` first and escalates to `search_file_contents` or direct reading only when archives aren't enough. See §6 for search semantics.
+The agent uses `search_file_archives` first and escalates to `search_file_contents` or direct reading only when archives aren't enough. See §6 for search semantics.
 
 ---
 
@@ -159,7 +159,7 @@ Existing passages (`source_passages`, `archival_passages`) are unaffected. `file
 - File archives carry stronger provenance (author agent, source conversation) than passages or archival-memory collections need.
 - File archives have a mandatory `file_id` linkage; passages have it optionally; archival-memory collections don't have one at all.
 
-The tool names `write_archive` and `search_archives` remain — they refer to the agent-facing concept, not the table name.
+The tool names `write_file_archive` and `search_file_archives` refer to the agent-facing concept, not the `file_archives` table name.
 
 ### 4.4 What read content looks like in messages
 
@@ -272,7 +272,7 @@ Regex or literal pattern search within a file. Returns hits with surrounding con
 ### 5.4 Headline editing
 
 ```
-update_file_core(file_id: str, new_summary: str) -> {
+update_file_headline(file_id: str, new_summary: str) -> {
     status,
     file_id,
     previous_summary: str,
@@ -294,7 +294,7 @@ Enforces `char_limit` on `new_summary`.
 ### 5.5 Archive writing
 
 ```
-write_archive(
+write_file_archive(
     file_id: str,
     title: str,
     content: str,
@@ -326,14 +326,14 @@ Commits a topical archive linked to a file.
 1. Lowercase the entire tag.
 2. Trim leading and trailing whitespace.
 3. Collapse internal whitespace runs to a single hyphen.
-4. **Length check**: if the normalized tag exceeds 32 characters, drop that tag from the call and add it to `tags_rejected`. Do **not** silently truncate; do **not** reject the entire `write_archive` call. All other valid tags are accepted as normal.
+4. **Length check**: if the normalized tag exceeds 32 characters, drop that tag from the call and add it to `tags_rejected`. Do **not** silently truncate; do **not** reject the entire `write_file_archive` call. All other valid tags are accepted as normal.
 
 This lenient behavior keeps the agent's archive committed even when one tag is malformed, surfaces the rejection in the response so the agent can correct on a follow-up call, and avoids the failure mode where a single bad tag blocks a substantive note from being saved.
 
 ### 5.6 Searching archives
 
 ```
-search_archives(
+search_file_archives(
     query: str,
     file_id: str = None,
     tags: list[str] = None,
@@ -388,9 +388,9 @@ search_file_contents(
 }
 ```
 
-Semantic search over **source passages** — the folder-RAG index built when files are ingested. This is the same retrieval surface as the existing `semantic_search_files` tool; the rename to `search_file_contents` exists to disambiguate it from `search_archives` at the verb level.
+Semantic search over **source passages** — the folder-RAG index built when files are ingested. This is the same retrieval surface as the existing `semantic_search_files` tool; the rename to `search_file_contents` exists to disambiguate it from `search_file_archives` at the verb level.
 
-`search_archives` retrieves what has been *written about* files. `search_file_contents` retrieves what is *inside* files. Two distinct retrieval substrates, two distinct verbs, no ambiguity at the point of agent decision-making.
+`search_file_archives` retrieves what has been *written about* files. `search_file_contents` retrieves what is *inside* files. Two distinct retrieval substrates, two distinct verbs, no ambiguity at the point of agent decision-making.
 
 ---
 
@@ -408,7 +408,7 @@ Tag-scoped combined with `file_id` is valid and equivalent to vertical search fu
 
 ### 6.2 Heuristic across the two search tools
 
-Start with `search_archives`. It is cheaper (smaller index, distilled content) and surfaces what has already been observed and concluded — often it answers the question directly or points at the file that will. Escalate to `search_file_contents` when archives don't cover the question, or to `file_read_page` / `file_grep` when you already know which file you need and want the source.
+Start with `search_file_archives`. It is cheaper (smaller index, distilled content) and surfaces what has already been observed and concluded — often it answers the question directly or points at the file that will. Escalate to `search_file_contents` when archives don't cover the question, or to `file_read_page` / `file_grep` when you already know which file you need and want the source.
 
 The agent's instructions in §7 carry this heuristic in one sentence.
 
@@ -418,7 +418,7 @@ Every archive search result includes `author_agent_id`, `source_conversation_id`
 
 ### 6.4 Escalation gradient
 
-`search_archives` → `search_file_contents` → `open_file` + `file_read_page` / `file_grep`. Each step is more expensive and more detailed than the last. The agent decides how far to descend based on what its current question requires.
+`search_file_archives` → `search_file_contents` → `open_file` + `file_read_page` / `file_grep`. Each step is more expensive and more detailed than the last. The agent decides how far to descend based on what its current question requires.
 
 ---
 
@@ -463,9 +463,9 @@ File system tools:
 - file_read_next_page(file_id) / file_read_prev_page(file_id) — navigate without reading the current page
 - file_read_range(file_id, start, end) — read a specific character range
 - file_grep(file_id, pattern) — search within a file; returns hits with character offsets
-- update_file_core(file_id, new_summary) — revise the shared headline (shared mutation; use deliberately)
-- write_archive(file_id, title, content, tags) — commit a topical archive linked to a file
-- search_archives(query, file_id=None, tags=None) — semantic search over archives, optionally scoped
+- update_file_headline(file_id, new_summary) — revise the shared headline (shared mutation; use deliberately)
+- write_file_archive(file_id, title, content, tags) — commit a topical archive linked to a file
+- search_file_archives(query, file_id=None, tags=None) — semantic search over archives, optionally scoped
 - search_file_contents(query, folder_id=None) — semantic search over the raw contents of files (folder index)
 
 Prefer the obvious next action over preflight planning. Read a page before searching for the perfect spot to start. Use 1–3 specific tags per archive, not ten generic ones. Headlines are one sentence; archives are focused topical notes on one aspect of the file, not exhaustive summaries. Write archives after synthesizing something, not before. If a search doesn't find what you need on the first try, the next tool call will get you closer — engage with content rather than looping on retrieval.
@@ -474,11 +474,11 @@ Prefer the obvious next action over preflight planning. Read a page before searc
 <search_semantics>
 You have two retrieval tools over file material. They search different things.
 
-search_archives retrieves what has been written about files — distilled topical notes from past conversations. Cheap, opinionated, often directly answers the question or points at the right file.
+search_file_archives retrieves what has been written about files — distilled topical notes from past conversations. Cheap, opinionated, often directly answers the question or points at the right file.
 
 search_file_contents retrieves what is inside files — passages from the raw text indexed when folders were ingested. More detailed, less interpreted, useful when archives don't cover the question or when you need the source's own words.
 
-Start with search_archives. Escalate to search_file_contents or file_read_page when archives are not enough.
+Start with search_file_archives. Escalate to search_file_contents or file_read_page when archives are not enough.
 
 Archive search has three modes depending on how you scope it:
 
@@ -532,15 +532,15 @@ Build in this sequence. Each phase should be independently testable before movin
 
 ### Phase 4: Headline editing
 
-16. Implement `update_file_core`. Enforce char_limit. Append to history table.
+16. Implement `update_file_headline`. Enforce char_limit. Append to history table.
 17. REST endpoints: `GET /v1/files/{file_id}/core`, `PATCH /v1/files/{file_id}/core` in new `file_memory` router.
 18. Migrate existing `open_file_for_agent` / `close_file_for_agent` REST to use `AgentOpenFilesManager`.
 19. **Test:** Agent A updates a file's core; Agent B opens the same file and sees the new headline.
 
 ### Phase 5: Archives
 
-20. Implement `write_archive` with tag normalization per §5.5. Generate embedding using the agent's configured embedding model.
-21. Implement `search_archives` with the three filter modes; reuse cosine search patterns from `passage_manager`.
+20. Implement `write_file_archive` with tag normalization per §5.5. Generate embedding using the agent's configured embedding model.
+21. Implement `search_file_archives` with the three filter modes; reuse cosine search patterns from `passage_manager`.
 22. REST endpoints: `POST /v1/file-archives/search`, `GET /v1/files/{file_id}/archives`, `GET /v1/file-archives/{id}`.
 23. **Test:** an agent writes archives during a conversation; horizontal, vertical, and tag-scoped searches return correct results with provenance. Tag normalization: malformed tag dropped, archive committed, response includes `tags_accepted` and `tags_rejected`.
 
@@ -578,15 +578,15 @@ Each criterion is testable with a deterministic scenario.
 
 2. **Headline stability.** An agent opens a file, performs ten read operations, and never edits the headline. The headline string is byte-identical before and after.
 
-3. **Headline editing is shared.** Agent A calls `update_file_core(file_id, new_summary)`. Agent B (different agent, same Letta server) opens the same file. Agent B's system prompt contains `new_summary`.
+3. **Headline editing is shared.** Agent A calls `update_file_headline(file_id, new_summary)`. Agent B (different agent, same Letta server) opens the same file. Agent B's system prompt contains `new_summary`.
 
-4. **Archive horizontal search finds the file.** Setup: file F exists with archive A1 about topic T, no agent has opened F. Action: agent without F open calls `search_archives(query=T)`. Result: A1 is returned with `file_id=F` and a usable `file_name`.
+4. **Archive horizontal search finds the file.** Setup: file F exists with archive A1 about topic T, no agent has opened F. Action: agent without F open calls `search_file_archives(query=T)`. Result: A1 is returned with `file_id=F` and a usable `file_name`.
 
-5. **Archive vertical search restricts correctly.** Setup: files F1, F2 each have archives about topic T. Action: agent calls `search_archives(query=T, file_id=F1)`. Result: only F1's archives are returned.
+5. **Archive vertical search restricts correctly.** Setup: files F1, F2 each have archives about topic T. Action: agent calls `search_file_archives(query=T, file_id=F1)`. Result: only F1's archives are returned.
 
-6. **Archive tag search spans files.** Setup: archives across F1, F2, F3 are tagged `symbolism`. Action: agent calls `search_archives(query="symbolism", tags=["symbolism"])`. Result: archives from all three files appear.
+6. **Archive tag search spans files.** Setup: archives across F1, F2, F3 are tagged `symbolism`. Action: agent calls `search_file_archives(query="symbolism", tags=["symbolism"])`. Result: archives from all three files appear.
 
-7. **Provenance is preserved.** Every archive returned from `search_archives` includes non-null `author_agent_id`, `source_conversation_id`, and `created_at`.
+7. **Provenance is preserved.** Every archive returned from `search_file_archives` includes non-null `author_agent_id`, `source_conversation_id`, and `created_at`.
 
 8. **Closing detaches the headline.** An agent opens a file (headline visible in system prompt), then closes it. On the next compile, the headline is absent.
 
@@ -596,9 +596,9 @@ Each criterion is testable with a deterministic scenario.
 
 11. **LRU eviction at `max_files_open`.** Open N+1 distinct files in sequence where N = `max_files_open`. The first-opened file's `agent_open_files` row is removed; its headline is absent from the next compile; the N most recent files remain open and visible.
 
-12. **Tag normalization is lenient.** Call `write_archive` with tags including one ≥ 32 chars after normalization. The archive is committed; the response's `tags_accepted` excludes the bad tag; `tags_rejected` includes it; other valid tags are accepted.
+12. **Tag normalization is lenient.** Call `write_file_archive` with tags including one ≥ 32 chars after normalization. The archive is committed; the response's `tags_accepted` excludes the bad tag; `tags_rejected` includes it; other valid tags are accepted.
 
-13. **Two search tools, two surfaces.** `search_archives` returns rows from `file_archives` only. `search_file_contents` returns rows from `source_passages` only. Neither surfaces results from the other's substrate.
+13. **Two search tools, two surfaces.** `search_file_archives` returns rows from `file_archives` only. `search_file_contents` returns rows from `source_passages` only. Neither surfaces results from the other's substrate.
 
 ---
 
@@ -616,9 +616,9 @@ Out of scope for this FR, addressed in follow-ups:
 
 5. **Per-conversation archive scoping.** All archives are visible to any agent that can see the file. Per-conversation private archives are not supported in v1.
 
-6. **Archive editing across agents.** `update_file_core` is the only cross-agent shared mutation. Archives are immutable; if a later conversation supersedes an earlier archive's interpretation, the agent writes a new archive rather than editing the old one. Archive supersession is left to retrieval ranking (recency, similarity).
+6. **Archive editing across agents.** `update_file_headline` is the only cross-agent shared mutation. Archives are immutable; if a later conversation supersedes an earlier archive's interpretation, the agent writes a new archive rather than editing the old one. Archive supersession is left to retrieval ranking (recency, similarity).
 
-7. **Unified retrieval tool.** A single tool returning both archive hits and file-content hits as a ranked, type-tagged result set is an attractive future direction but is **not** in this FR. The v1 design ships two clearly distinct verbs (`search_archives`, `search_file_contents`). Unifying them is contingent on empirical observation of how agents choose between them in practice.
+7. **Unified retrieval tool.** A single tool returning both archive hits and file-content hits as a ranked, type-tagged result set is an attractive future direction but is **not** in this FR. The v1 design ships two clearly distinct verbs (`search_file_archives`, `search_file_contents`). Unifying them is contingent on empirical observation of how agents choose between them in practice.
 
 8. **Backwards compatibility with old filesystem tools.** Once Phase 7 ships, the old tool names (`open_files`, `grep_files`, `semantic_search_files`) are removed. No long-term parallel API surface.
 
@@ -634,7 +634,7 @@ Items that need a decision; each carries a recommendation. The recommendation is
 
 3. **`per_file_view_window_char_limit` default.** Keep current default; revisit after empirical use shows whether pages should be larger or smaller.
 
-4. **`write_archive` verb naming.** Ship with `write_archive` and revisit after observing usage. The right verb sometimes only becomes obvious once the wrong one is in production.
+4. **`write_file_archive` verb naming.** Ship with `write_file_archive` and revisit after observing usage. The right verb sometimes only becomes obvious once the wrong one is in production.
 
 5. **Tag namespace.** Free-form for v1. A controlled vocabulary can be layered on later if archive sprawl makes search noisy; pre-engineering it now would constrain agents in ways we can't yet predict.
 
@@ -642,7 +642,7 @@ Items that need a decision; each carries a recommendation. The recommendation is
 
 7. **Org-level visibility scoping.** Add nullable `organization_id` via `OrganizationMixin` on all new tables now, even though it's unused in single-org v1. **Decided.** Easier than retrofitting.
 
-8. **Tag rejection granularity.** Reject individual tags that exceed the length limit; accept the rest of the `write_archive` call; surface accepted and rejected sets in the response. **Decided: lenient (per-tag rejection).** Avoids the failure mode where a single bad tag blocks an otherwise substantive archive.
+8. **Tag rejection granularity.** Reject individual tags that exceed the length limit; accept the rest of the `write_file_archive` call; surface accepted and rejected sets in the response. **Decided: lenient (per-tag rejection).** Avoids the failure mode where a single bad tag blocks an otherwise substantive archive.
 
 ---
 
@@ -658,9 +658,9 @@ A few patterns worth being explicit about for the implementing agent. (The deplo
 
 - **`agent_open_files` join is the right hook point** for system-prompt compilation, not a new method on the agent or memory class. Keep the file-open state as data, not behavior.
 
-- **Embedding generation must be synchronous in `write_archive`.** Async embedding creates a confusing failure mode where the agent writes an archive and a subsequent search doesn't find it. Synchronous is acceptable here because archive volume is bounded by agent reasoning speed, not bulk ingestion.
+- **Embedding generation must be synchronous in `write_file_archive`.** Async embedding creates a confusing failure mode where the agent writes an archive and a subsequent search doesn't find it. Synchronous is acceptable here because archive volume is bounded by agent reasoning speed, not bulk ingestion.
 
-- **Don't overthink the headline auto-generation in §9.** A one-shot summarization of the first 3–5 pages of the file using the agent's configured LLM is sufficient. Don't build a multi-stage summarization pipeline. The headline will be refined by agents through `update_file_core` over time; perfect first-pass quality is not required.
+- **Don't overthink the headline auto-generation in §9.** A one-shot summarization of the first 3–5 pages of the file using the agent's configured LLM is sufficient. Don't build a multi-stage summarization pipeline. The headline will be refined by agents through `update_file_headline` over time; perfect first-pass quality is not required.
 
 - **Char offsets, not byte offsets, everywhere.** `cursor_char`, `char_range`, `start_char`/`end_char`, `char_offset`. Page boundaries align to valid UTF-8 codepoint boundaries; never split a codepoint. The FR previously used "byte" in early drafts; that was wrong and has been corrected throughout.
 
@@ -684,4 +684,4 @@ Mentioned only to confirm the design accommodates them without rework:
 
 ## 15. Summary
 
-This FR replaces Letta's mutable-block filesystem with a three-tier hierarchy where each tier has a distinct role: memory blocks for always-in-context anchors, archives for retrievable topical notes, files for raw detail read on demand. Read content moves from system-context block mutation to conversation-history tool results, restoring cross-turn recall and unlocking provider prompt caching. Archives capture the topical residue of engagement with files in the voice of the conversation that produced them, written by the main LLM in-context rather than by a background summarizer. Two retrieval verbs over file material — `search_archives` for distilled notes, `search_file_contents` for source passages — give agents an unambiguous choice at the point of action. The result is a filesystem that matches how modern models are trained to work, scales naturally to images and other modalities, and accumulates institutional knowledge as a byproduct of normal agent use.
+This FR replaces Letta's mutable-block filesystem with a three-tier hierarchy where each tier has a distinct role: memory blocks for always-in-context anchors, archives for retrievable topical notes, files for raw detail read on demand. Read content moves from system-context block mutation to conversation-history tool results, restoring cross-turn recall and unlocking provider prompt caching. Archives capture the topical residue of engagement with files in the voice of the conversation that produced them, written by the main LLM in-context rather than by a background summarizer. Two retrieval verbs over file material — `search_file_archives` for distilled notes, `search_file_contents` for source passages — give agents an unambiguous choice at the point of action. The result is a filesystem that matches how modern models are trained to work, scales naturally to images and other modalities, and accumulates institutional knowledge as a byproduct of normal agent use.

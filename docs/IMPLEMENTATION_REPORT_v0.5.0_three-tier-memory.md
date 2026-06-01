@@ -28,8 +28,8 @@ This report is submitted for your review. If the deviations and open items below
 | **Phase 1** — Data model | Migration `f1a2b3c4d5e6`, ORM models, managers, backfill script | **Done** |
 | **Phase 2** — System prompt compilation | `<open_files>` section, directories without page content, `refresh_open_file_cores()` | **Done** (with §7 deviation — see below) |
 | **Phase 3** — Read tools | `CharPageReader`, seven read/nav tools + `search_file_contents` rename | **Done** |
-| **Phase 4** — Headline editing | `update_file_core`, REST `/v1/file-memory/*` | **Done** |
-| **Phase 5** — Archives | `write_archive`, `search_archives`, tag normalization, provenance | **Done** |
+| **Phase 4** — Headline editing | `update_file_headline`, REST `/v1/file-memory/*` | **Done** |
+| **Phase 5** — Archives | `write_file_archive`, `search_file_archives`, tag normalization, provenance | **Done** |
 | **Phase 6** — Agent instructions | `letta_v1.py` base instructions, `FILES_TOOLS` registry | **Done** (iterated post-FR) |
 | **Phase 7** — Deprecation | Remove `open_files` / `grep_files` / `semantic_search_files`; drop `visible_content` columns | **Deferred** |
 
@@ -38,7 +38,7 @@ This report is submitted for your review. If the deviations and open items below
 | # | Criterion | Status | Notes |
 |---|-----------|--------|-------|
 | 1 | Cross-turn reading recall | **Pass** (empirical) | Lyra reads multiple pages; page 1 reachable in later turns via tool-result history |
-| 2 | Headline stability across reads | **Pass** | Headline unchanged unless `update_file_core` called |
+| 2 | Headline stability across reads | **Pass** | Headline unchanged unless `update_file_headline` called |
 | 3 | Shared headline editing | **Pass** | `file_core_blocks` is file-scoped, not agent-scoped |
 | 4 | Horizontal archive search finds file | **Pass** | Provenance includes `file_id`, `file_name` |
 | 5 | Vertical archive search scoped | **Pass** | `file_id` filter enforced in manager |
@@ -49,7 +49,7 @@ This report is submitted for your review. If the deviations and open items below
 | 10 | Provider prompt cache across reads | **Not measured** | Design supports it; no automated cache-hit benchmark yet |
 | 11 | LRU at `max_files_open` | **Pass** | `AgentOpenFilesManager.open_file` evicts LRU; returns `evicted_file_ids` |
 | 12 | Lenient tag normalization | **Pass** | Per-tag reject; archive still committed |
-| 13 | Two search tools, two surfaces | **Pass** | `search_archives` → `file_archives`; `search_file_contents` → `source_passages` |
+| 13 | Two search tools, two surfaces | **Pass** | `search_file_archives` → `file_archives`; `search_file_contents` → `source_passages` |
 
 Automated coverage: `tests/test_three_tier_memory_compile.py`, `tests/test_char_page_reader.py`, archive/core manager tests, SSE coalescing tests (client bridge).
 
@@ -89,10 +89,10 @@ Registered tools (`FILES_TOOLS` in `letta/constants.py`):
 ```
 attach_folder, detach_folder, open_file, close_file,
 file_read_page, file_read_next_page, file_read_prev_page, file_read_range, file_grep,
-update_file_core, write_archive, search_archives, search_file_contents
+update_file_headline, write_file_archive, search_file_archives, search_file_contents
 ```
 
-Legacy names (`open_files`, `grep_files`, `semantic_search_files`) are **not** in `FILES_TOOLS` but executor stubs may still exist until Phase 7.
+Legacy names (`open_files`, `grep_files`, `semantic_search_files`) are **not** in `FILES_TOOLS` but executor stubs may still exist until Phase 7. Renamed tools (`update_file_core`, `write_archive`, `search_archives`) remain as executor aliases for agents created before the rename.
 
 ### System prompt compilation
 
@@ -121,7 +121,7 @@ File tools that change what appears in system context set a pending refresh flag
 
 ```python
 FILE_STATE_SYSTEM_REFRESH_TOOLS = {
-    attach_folder, detach_folder, open_file, close_file, update_file_core
+    attach_folder, detach_folder, open_file, close_file, update_file_headline
 }
 ```
 
@@ -214,8 +214,8 @@ Issues found during live testing and resolved before this report:
 | Issue | Root cause | Fix |
 |-------|------------|-----|
 | **`file_read_next_page` skipped page 2** | `CharPageReader.next_page_cursor` treated post-read boundary as "already on next page" and jumped an extra page | Boundary-aware cursor: if cursor is already on a page boundary after `file_read_page`, do not advance again |
-| **`update_file_core` timezone error** | Naive vs aware datetime comparison on `last_updated_at` | Normalize to UTC-aware timestamps in manager |
-| **`search_archives` crash** | Invalid `noload(FileArchive.organization)` — archives have no org relationship | Removed erroneous eager-load option |
+| **`update_file_headline` timezone error** | Naive vs aware datetime comparison on `last_updated_at` | Normalize to UTC-aware timestamps in manager |
+| **`search_file_archives` crash** | Invalid `noload(FileArchive.organization)` — archives have no org relationship | Removed erroneous eager-load option |
 | **`detach_folder` missing source ID** | Directory tags lacked `source_id` for agents to pass to detach | Added `source_id` attribute on `<directory>` tags in `Memory.compile` |
 | **40K preview limit ignored** | Stale `per_file_view_window_char_limit` on in-memory agent state during tool loop | Re-fetch limit from DB before file read tools; return `page_size_chars` in tool responses |
 | **System context stale after file tools** | No recompile after open/close/attach/detach/core update | `FILE_STATE_SYSTEM_REFRESH_TOOLS` + `_pending_file_system_refresh` in v3 agent |

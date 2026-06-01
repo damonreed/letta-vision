@@ -13,6 +13,7 @@ from letta.errors import (
     LLMRateLimitError,
     LLMServerError,
 )
+from letta.llm_api.error_utils import is_openrouter_image_payload_limit_message, openrouter_image_payload_limit_user_message
 from letta.schemas.enums import ProviderType
 from letta.schemas.letta_message_content import (
     ReasoningContent,
@@ -223,6 +224,11 @@ def friendly_llm_error_message(error: LLMError) -> str:
             "The model stream timed out during a long response. "
             "Try again, or use a shorter prompt / smaller image."
         )
+    if isinstance(error, LLMBadRequestError) and isinstance(error.details, dict):
+        if error.details.get("error_kind") == "openrouter_image_payload_limit":
+            return openrouter_image_payload_limit_user_message()
+    if is_openrouter_image_payload_limit_message(haystack):
+        return openrouter_image_payload_limit_user_message()
     return message
 
 

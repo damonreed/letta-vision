@@ -83,7 +83,7 @@ async def search_file_archives(
 ):
     actor = await server.user_manager.get_actor_or_default_async(actor_id=headers.actor_id)
     agent = await server.agent_manager.get_agent_by_id_async(agent_id=body.agent_id, actor=actor)
-    results = await FileArchiveManager().search_archives(
+    results = await FileArchiveManager().search_file_archives(
         query=body.query,
         agent_id=body.agent_id,
         embedding_config=agent.embedding_config,

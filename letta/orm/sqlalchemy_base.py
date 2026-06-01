@@ -254,7 +254,8 @@ class SqlalchemyBase(CommonSqlalchemyMetaMixins, Base):
         Constructs the query for listing records.
         """
         # Security check: if the model has organization_id column, actor should be provided
-        if actor is None and hasattr(cls, "organization_id"):
+        # unless organization_id is explicitly filtered (e.g. global base providers with organization_id=None).
+        if actor is None and hasattr(cls, "organization_id") and "organization_id" not in kwargs:
             logger.warning(f"SECURITY: Listing org-scoped model {cls.__name__} without actor. This bypasses organization filtering.")
 
         query = select(cls)

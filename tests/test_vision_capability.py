@@ -1,4 +1,5 @@
 import base64
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -8,7 +9,12 @@ from letta.helpers.message_helper import validate_message_creates_for_vision
 from letta.llm_api.model_registry import model_supports_vision
 from letta.schemas.letta_message_content import Base64Image, ImageContent, TextContent
 from letta.schemas.llm_config import LLMConfig
-from letta.schemas.message import MessageCreate
+from letta.helpers.vision_context_hint import (
+    VISION_MULTI_TURN_HINT,
+    append_vision_context_hint,
+    conversation_has_user_images,
+)
+from letta.schemas.message import Message, MessageCreate
 from letta.schemas.enums import MessageRole
 
 
@@ -31,6 +37,53 @@ def test_registry_kimi_k26_openai_proxy_handle_case():
         "moonshotai/Kimi-K2.6",
         handle="openai-proxy/moonshotai/Kimi-K2.6",
     )
+
+
+def test_registry_moonshot_byok_bare_model_id():
+    """Moonshot AI BYOK lists models as kimi-k2.6 with openai-proxy/kimi-k2.6 handles."""
+    assert model_supports_vision("kimi-k2.6", handle="openai-proxy/kimi-k2.6")
+
+
+def test_registry_siliconflow_byok_handle_path():
+    assert model_supports_vision(
+        "moonshotai/Kimi-K2.6",
+        handle="openai-proxy/siliconflow/moonshotai/Kimi-K2.6",
+    )
+
+
+def test_registry_moonshot_vision_preview_models():
+    assert model_supports_vision(
+        "moonshot-v1-128k-vision-preview",
+        handle="openai-proxy/moonshot-v1-128k-vision-preview",
+    )
+
+
+def test_bridge_vision_override_can_disable_registry_match(tmp_path, monkeypatch):
+    overrides = tmp_path / "model_overrides.json"
+    overrides.write_text(
+        json.dumps({"vision": {"openai-proxy/kimi-k2.6": False}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MODEL_OVERRIDES_PATH", str(overrides))
+    import letta.llm_api.model_registry as reg
+
+    reg._BRIDGE_VISION_OVERRIDES = None
+    assert not model_supports_vision("kimi-k2.6", handle="openai-proxy/kimi-k2.6")
+    reg._BRIDGE_VISION_OVERRIDES = None
+
+
+def test_bridge_vision_override_can_enable_non_registry_model(tmp_path, monkeypatch):
+    overrides = tmp_path / "model_overrides.json"
+    overrides.write_text(
+        json.dumps({"vision": {"openai-proxy/custom-model": True}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MODEL_OVERRIDES_PATH", str(overrides))
+    import letta.llm_api.model_registry as reg
+
+    reg._BRIDGE_VISION_OVERRIDES = None
+    assert model_supports_vision("custom-model", handle="openai-proxy/custom-model")
+    reg._BRIDGE_VISION_OVERRIDES = None
 
 
 def test_registry_text_only():
@@ -86,3 +139,46 @@ def test_validate_rejects_non_vision_model():
     )
     with pytest.raises(LettaVisionCapabilityError):
         validate_message_creates_for_vision([mc], _llm_config("meta-llama/llama-3.1-8b-instruct"))
+
+
+def test_conversation_has_user_images():
+    tiny = base64.standard_b64encode(b"x").decode()
+    messages = [
+        Message(role=MessageRole.system, content=[TextContent(text="sys")]),
+        Message(role=MessageRole.user, content=[TextContent(text="hi")]),
+        Message(
+            role=MessageRole.user,
+            content=[ImageContent(source=Base64Image(media_type="image/png", data=tiny))],
+        ),
+    ]
+    assert conversation_has_user_images(messages)
+
+
+def test_append_vision_context_hint_for_vision_model_with_images():
+    tiny = base64.standard_b64encode(b"x").decode()
+    messages = [
+        Message(role=MessageRole.system, content=[TextContent(text="sys")]),
+        Message(
+            role=MessageRole.user,
+            content=[ImageContent(source=Base64Image(media_type="image/png", data=tiny))],
+        ),
+    ]
+    out = append_vision_context_hint("base", llm_config=_llm_config("moonshotai/kimi-k2.6"), messages=messages)
+    assert "base" in out
+    assert VISION_MULTI_TURN_HINT in out
+
+
+def test_append_vision_context_hint_skips_text_only_model():
+    tiny = base64.standard_b64encode(b"x").decode()
+    messages = [
+        Message(
+            role=MessageRole.user,
+            content=[ImageContent(source=Base64Image(media_type="image/png", data=tiny))],
+        ),
+    ]
+    out = append_vision_context_hint(
+        "base",
+        llm_config=_llm_config("meta-llama/llama-3.1-8b-instruct"),
+        messages=messages,
+    )
+    assert out == "base"

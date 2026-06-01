@@ -364,7 +364,7 @@ class LettaAgentV3(LettaAgentV2):
                 credit_task = None
 
             response = self._step(
-                # we append input_messages_to_persist since they aren't checkpointed as in-context until the end of the step (may be rolled back)
+                # input_messages_to_persist are checkpointed at step start (before LLM) so failed steps keep the user turn
                 messages=list(self.in_context_messages + input_messages_to_persist),
                 input_messages_to_persist=input_messages_to_persist,
                 llm_adapter=llm_adapter,
@@ -384,7 +384,6 @@ class LettaAgentV3(LettaAgentV2):
             if not self.should_continue and self.stop_reason.stop_reason == StopReasonType.cancelled.value:
                 break
 
-            # TODO: persist the input messages if successful first step completion
             # TODO: persist the new messages / step / run
 
             ## Proactive summarization if approaching context limit
@@ -605,7 +604,7 @@ class LettaAgentV3(LettaAgentV2):
                     credit_task = None
 
                 response = self._step(
-                    # we append input_messages_to_persist since they aren't checkpointed as in-context until the end of the step (may be rolled back)
+                    # input_messages_to_persist are checkpointed at step start (before LLM) so failed steps keep the user turn
                     messages=list(self.in_context_messages + input_messages_to_persist),
                     input_messages_to_persist=input_messages_to_persist,
                     llm_adapter=llm_adapter,
@@ -845,6 +844,31 @@ class LettaAgentV3(LettaAgentV2):
             self.agent_state.message_ids = [m.id for m in in_context_messages]  # update in-memory state
 
         self.in_context_messages = in_context_messages  # update in-memory state
+
+    async def _persist_input_messages_before_step(
+        self,
+        *,
+        run_id: str,
+        step_id: str,
+        messages: list[Message],
+        input_messages_to_persist: list[Message],
+        dry_run: bool = False,
+    ) -> list[Message]:
+        """Persist pending user/approval inputs before LLM or tool execution.
+
+        Ensures failed steps still retain the user's turn in conversation history
+        (instead of only a synthetic system_alert failure row).
+        """
+        if dry_run or not input_messages_to_persist:
+            return input_messages_to_persist
+
+        await self._checkpoint_messages(
+            run_id=run_id,
+            step_id=step_id,
+            new_messages=input_messages_to_persist,
+            in_context_messages=messages,
+        )
+        return []
 
     def _create_llm_failure_event_message(
         self,
@@ -1189,6 +1213,14 @@ class LettaAgentV3(LettaAgentV2):
                     )
                 else:
                     step_metrics = await self.step_manager.get_step_metrics_async(step_id=step_id, actor=self.actor)
+
+                input_messages_to_persist = await self._persist_input_messages_before_step(
+                    run_id=run_id,
+                    step_id=step_id,
+                    messages=messages,
+                    input_messages_to_persist=input_messages_to_persist,
+                    dry_run=dry_run,
+                )
             else:
                 # Check for job cancellation at the start of each step
                 if run_id and await self._check_run_cancellation(run_id):
@@ -1200,6 +1232,14 @@ class LettaAgentV3(LettaAgentV2):
                 step_id = generate_step_id()
                 step_progression, logged_step, step_metrics, agent_step_span = await self._step_checkpoint_start(
                     step_id=step_id, run_id=run_id
+                )
+
+                input_messages_to_persist = await self._persist_input_messages_before_step(
+                    run_id=run_id,
+                    step_id=step_id,
+                    messages=messages,
+                    input_messages_to_persist=input_messages_to_persist,
+                    dry_run=dry_run,
                 )
 
                 # Auto mode: resolve handle to actual model config
@@ -1258,6 +1298,7 @@ class LettaAgentV3(LettaAgentV2):
                         request_system_prompt = self.generate_request_system_prompt(
                             client_skills=self.client_skills,
                             current_system_message=messages[0],
+                            messages=messages,
                         )
                         request_data = active_llm_client.build_request_data(
                             agent_type=self.agent_state.agent_type,
@@ -1742,7 +1783,7 @@ class LettaAgentV3(LettaAgentV2):
 
         except Exception as e:
             caught_exception = e
-            # NOTE: message persistence does not happen in the case of an exception (rollback to previous state)
+            # Assistant/tool rows from a failed step are not checkpointed; user input is persisted at step start.
             # Use repr() if str() is empty (happens with Exception() with no args)
             error_detail = str(e) or repr(e)
             self.logger.warning(f"Error during step processing: {error_detail}")

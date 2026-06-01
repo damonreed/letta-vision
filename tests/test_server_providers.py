@@ -1298,6 +1298,65 @@ async def test_sync_provider_models_add_remove_models(default_user, provider_man
 
 
 @pytest.mark.asyncio
+async def test_sync_revives_soft_deleted_model_on_handle_change(default_user, provider_manager):
+    """Renaming BYOK handles must not leave models stuck soft-deleted behind unique constraints."""
+    test_id = generate_test_id()
+    provider_create = ProviderCreate(
+        name=f"siliconflow-{test_id}",
+        provider_type=ProviderType.openai,
+        api_key="sk-test-key",
+        base_url="https://api.siliconflow.com/v1",
+    )
+    provider = await provider_manager.create_provider_async(provider_create, actor=default_user, is_byok=True)
+    model_name = f"moonshotai/Kimi-{test_id}"
+    old_handle = f"openai-proxy/{model_name}"
+    new_handle = f"openai-proxy/siliconflow-{test_id}/{model_name}"
+
+    await provider_manager.sync_provider_models_async(
+        provider=provider,
+        llm_models=[
+            LLMConfig(
+                model=model_name,
+                model_endpoint_type="openai",
+                model_endpoint=provider.base_url,
+                context_window=128000,
+                handle=old_handle,
+                provider_name=provider.name,
+                provider_category=ProviderCategory.byok,
+            )
+        ],
+        embedding_models=[],
+        organization_id=default_user.organization_id,
+    )
+
+    await provider_manager.sync_provider_models_async(
+        provider=provider,
+        llm_models=[
+            LLMConfig(
+                model=model_name,
+                model_endpoint_type="openai",
+                model_endpoint=provider.base_url,
+                context_window=128000,
+                handle=new_handle,
+                provider_name=provider.name,
+                provider_category=ProviderCategory.byok,
+            )
+        ],
+        embedding_models=[],
+        organization_id=default_user.organization_id,
+    )
+
+    models = await provider_manager.list_models_async(
+        actor=default_user,
+        model_type="llm",
+        provider_id=provider.id,
+    )
+    assert len(models) == 1
+    assert models[0].handle == new_handle
+    assert models[0].name == model_name
+
+
+@pytest.mark.asyncio
 async def test_sync_provider_models_mixed_llm_and_embedding(default_user, provider_manager):
     """
     Test that sync_provider_models_async correctly handles adding/removing both LLM and embedding models,

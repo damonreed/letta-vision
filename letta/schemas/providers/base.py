@@ -1,3 +1,4 @@
+import re
 from datetime import datetime
 
 from letta.log import get_logger
@@ -157,6 +158,12 @@ class Provider(ProviderBase):
         """
         return 4096  # sensible fallback
 
+    def provider_slug(self) -> str:
+        """Stable path segment for BYOK model handles (from provider display name)."""
+        raw = (self.name or "byok").strip().lower()
+        slug = re.sub(r"[^a-z0-9]+", "-", raw).strip("-")
+        return slug or "byok"
+
     def get_handle(self, model_name: str, is_embedding: bool = False, base_name: str | None = None) -> str:
         """
         Get the handle for a model, with support for custom overrides.
@@ -173,6 +180,13 @@ class Provider(ProviderBase):
         overrides = EMBEDDING_HANDLE_OVERRIDES if is_embedding else LLM_HANDLE_OVERRIDES
         if base_name in overrides and model_name in overrides[base_name]:
             model_name = overrides[base_name][model_name]
+
+        if (
+            not is_embedding
+            and base_name == "openai-proxy"
+            and self.provider_category == ProviderCategory.byok
+        ):
+            return f"openai-proxy/{self.provider_slug()}/{model_name}"
 
         return f"{base_name}/{model_name}"
 

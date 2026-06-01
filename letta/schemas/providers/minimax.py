@@ -44,6 +44,12 @@ MODEL_LIST = [
         "max_output": 128000,
         "description": "Latest model.",
     },
+    {
+        "name": "MiniMax-M3",
+        "context_window": 1_000_000,
+        "max_output": 128000,
+        "description": "Coding & agentic frontier. 1M context, native multimodality.",
+    },
 ]
 
 

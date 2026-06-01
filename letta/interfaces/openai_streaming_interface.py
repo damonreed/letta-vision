@@ -40,6 +40,7 @@ from openai.types.responses.response_stream_event import ResponseStreamEvent
 
 from letta.constants import DEFAULT_MESSAGE_TOOL, DEFAULT_MESSAGE_TOOL_KWARG
 from letta.llm_api.error_utils import is_context_window_overflow_message
+from letta.llm_api.minimax_openai import extract_reasoning_from_message_data
 from letta.llm_api.openai_client import is_openai_reasoning_model
 from letta.local_llm.utils import num_tokens_from_functions, num_tokens_from_messages
 from letta.log import get_logger
@@ -895,8 +896,12 @@ class SimpleOpenAIStreamingInterface:
 
             if hasattr(chunk, "choices") and len(chunk.choices) > 0 and hasattr(chunk.choices[0], "delta"):
                 delta = chunk.choices[0].delta
-                # Check for reasoning_content (standard) or reasoning (OpenRouter)
-                reasoning_content = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+                delta_dump = delta.model_dump() if hasattr(delta, "model_dump") else {}
+                reasoning_content = (
+                    getattr(delta, "reasoning_content", None)
+                    or getattr(delta, "reasoning", None)
+                    or extract_reasoning_from_message_data(delta_dump)
+                )
                 if reasoning_content is not None and reasoning_content != "":
                     if prev_message_type and prev_message_type != "reasoning_message":
                         message_index += 1

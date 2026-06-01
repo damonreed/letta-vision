@@ -1,7 +1,7 @@
 import hashlib
 from typing import List, Optional, Tuple, Union
 
-from sqlalchemy import and_, select
+from sqlalchemy import and_, or_, select
 
 from letta.log import get_logger
 from letta.model_aliases import get_deprecated_google_handle_replacement
@@ -23,6 +23,38 @@ logger = get_logger(__name__)
 
 # Auto mode model handles
 AUTO_MODE_HANDLES = ["letta/auto", "letta/auto-fast", "letta/auto-chat"]
+
+
+async def _find_provider_model_row_for_sync(
+    session,
+    *,
+    organization_id: str | None,
+    provider_id: str,
+    model_type: str,
+    handle: str,
+    name: str,
+) -> ProviderModelORM | None:
+    """Match active or soft-deleted rows by handle or (name, provider_id, type)."""
+    stmt = (
+        select(ProviderModelORM)
+        .where(
+            ProviderModelORM.model_type == model_type,
+            or_(
+                ProviderModelORM.handle == handle,
+                and_(
+                    ProviderModelORM.name == name,
+                    ProviderModelORM.provider_id == provider_id,
+                ),
+            ),
+        )
+        .limit(1)
+    )
+    if organization_id is None:
+        stmt = stmt.where(ProviderModelORM.organization_id.is_(None))
+    else:
+        stmt = stmt.where(ProviderModelORM.organization_id == organization_id)
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
 
 
 class ProviderManager:
@@ -279,6 +311,7 @@ class ProviderManager:
             provider_models = await ProviderModelORM.list_async(
                 db_session=session,
                 provider_id=provider_id,
+                actor=actor,
                 check_is_deleted=True,
             )
             for model in provider_models:
@@ -609,6 +642,99 @@ class ProviderManager:
                     # Log error but don't fail startup - provider initialization is not critical
                     logger.error(f"Failed to sync provider '{provider.name}' to database: {e}", exc_info=True)
 
+    async def _upsert_synced_provider_model(
+        self,
+        session,
+        *,
+        organization_id: Optional[str],
+        provider_id: str,
+        model_type: str,
+        handle: str,
+        name: str,
+        display_name: str,
+        model_endpoint_type: str,
+        max_context_window: Optional[int] = None,
+        supports_token_streaming: Optional[bool] = None,
+        supports_tool_calling: Optional[bool] = None,
+        embedding_dim: Optional[int] = None,
+    ) -> None:
+        """Create or update a synced model row; revive soft-deleted rows on handle rename."""
+        row = await _find_provider_model_row_for_sync(
+            session,
+            organization_id=organization_id,
+            provider_id=provider_id,
+            model_type=model_type,
+            handle=handle,
+            name=name,
+        )
+
+        if row:
+            if row.is_deleted:
+                logger.info(f"    Reviving soft-deleted {model_type} model (id={row.id}, was handle={row.handle})")
+            row.is_deleted = False
+            row.handle = handle
+            row.name = name
+            row.display_name = display_name
+            row.model_endpoint_type = model_endpoint_type
+            row.enabled = True
+            if model_type == "llm":
+                row.max_context_window = max_context_window
+                row.supports_token_streaming = supports_token_streaming
+                row.supports_tool_calling = supports_tool_calling
+            else:
+                row.embedding_dim = embedding_dim
+            await row.update_async(session)
+            logger.info(f"    ✓ Upserted {model_type} model {handle}")
+            return
+
+        pydantic_model = PydanticProviderModel(
+            handle=handle,
+            display_name=display_name,
+            name=name,
+            provider_id=provider_id,
+            organization_id=organization_id,
+            model_type=model_type,
+            enabled=True,
+            model_endpoint_type=model_endpoint_type,
+            max_context_window=max_context_window,
+            supports_token_streaming=supports_token_streaming,
+            supports_tool_calling=supports_tool_calling,
+            embedding_dim=embedding_dim,
+        )
+        logger.info(f"    Creating new {model_type} model {handle}")
+        model = ProviderModelORM(**pydantic_model.model_dump(to_orm=True))
+        result = await model.create_async(session, ignore_conflicts=True)
+        if result:
+            logger.info(f"    ✓ Successfully created {model_type} model {handle}")
+            return
+
+        # Unique constraint hit (often a soft-deleted row); retry revive
+        row = await _find_provider_model_row_for_sync(
+            session,
+            organization_id=organization_id,
+            provider_id=provider_id,
+            model_type=model_type,
+            handle=handle,
+            name=name,
+        )
+        if row:
+            row.is_deleted = False
+            row.handle = handle
+            row.name = name
+            row.display_name = display_name
+            row.model_endpoint_type = model_endpoint_type
+            row.enabled = True
+            if model_type == "llm":
+                row.max_context_window = max_context_window
+                row.supports_token_streaming = supports_token_streaming
+                row.supports_tool_calling = supports_tool_calling
+            else:
+                row.embedding_dim = embedding_dim
+            await row.update_async(session)
+            logger.info(f"    ✓ Revived {model_type} model after insert conflict: {handle}")
+        else:
+            logger.warning(f"    Failed to upsert {model_type} model {handle} (insert conflict, no row found)")
+
     @enforce_types
     @trace_method
     async def sync_provider_models_async(
@@ -678,156 +804,38 @@ class ProviderManager:
             logger.info(f"Processing {len(llm_models)} LLM models for provider {provider.name}")
             for llm_config in llm_models:
                 logger.info(f"  Checking LLM model: {llm_config.handle} (name: {llm_config.model})")
-
-                # Check if model already exists by handle (excluding soft-deleted ones)
-                existing = await ProviderModelORM.list_async(
-                    db_session=session,
-                    limit=1,
-                    check_is_deleted=True,  # Filter out soft-deleted models
-                    **{
-                        "handle": llm_config.handle,
-                        "organization_id": organization_id,
-                        "model_type": "llm",  # Must check model_type since handle can be same for LLM and embedding
-                    },
+                await self._upsert_synced_provider_model(
+                    session,
+                    organization_id=organization_id,
+                    provider_id=provider.id,
+                    model_type="llm",
+                    handle=llm_config.handle,
+                    name=llm_config.model,
+                    display_name=llm_config.model,
+                    model_endpoint_type=llm_config.model_endpoint_type,
+                    max_context_window=llm_config.context_window,
+                    supports_token_streaming=llm_config.model_endpoint_type
+                    in ["openai", "anthropic", "deepseek", "openrouter"],
+                    supports_tool_calling=True,
                 )
-
-                # Also check by name+provider_id (covers unique_model_per_provider_and_type constraint)
-                if not existing:
-                    existing = await ProviderModelORM.list_async(
-                        db_session=session,
-                        limit=1,
-                        check_is_deleted=True,
-                        **{
-                            "name": llm_config.model,
-                            "provider_id": provider.id,
-                            "model_type": "llm",
-                        },
-                    )
-
-                if not existing:
-                    logger.info(f"    Creating new LLM model {llm_config.handle}")
-                    # Create new model entry
-                    pydantic_model = PydanticProviderModel(
-                        handle=llm_config.handle,
-                        display_name=llm_config.model,
-                        name=llm_config.model,
-                        provider_id=provider.id,
-                        organization_id=organization_id,
-                        model_type="llm",
-                        enabled=True,
-                        model_endpoint_type=llm_config.model_endpoint_type,
-                        max_context_window=llm_config.context_window,
-                        supports_token_streaming=llm_config.model_endpoint_type in ["openai", "anthropic", "deepseek", "openrouter"],
-                        supports_tool_calling=True,  # Assume true for LLMs for now
-                    )
-
-                    logger.info(
-                        f"    Model data: handle={pydantic_model.handle}, name={pydantic_model.name}, "
-                        f"model_type={pydantic_model.model_type}, provider_id={pydantic_model.provider_id}, "
-                        f"org_id={pydantic_model.organization_id}"
-                    )
-
-                    model = ProviderModelORM(**pydantic_model.model_dump(to_orm=True))
-                    result = await model.create_async(session, ignore_conflicts=True)
-                    if result:
-                        logger.info(f"    ✓ Successfully created LLM model {llm_config.handle}")
-                    else:
-                        logger.info(f"    LLM model {llm_config.handle} already exists (concurrent insert), skipping")
-                else:
-                    # Check if max_context_window or model_endpoint_type needs to be updated
-                    existing_model = existing[0]
-                    needs_update = False
-
-                    if existing_model.max_context_window != llm_config.context_window:
-                        logger.info(
-                            f"    Updating LLM model {llm_config.handle} max_context_window: "
-                            f"{existing_model.max_context_window} -> {llm_config.context_window}"
-                        )
-                        existing_model.max_context_window = llm_config.context_window
-                        needs_update = True
-
-                    if existing_model.model_endpoint_type != llm_config.model_endpoint_type:
-                        logger.info(
-                            f"    Updating LLM model {llm_config.handle} model_endpoint_type: "
-                            f"{existing_model.model_endpoint_type} -> {llm_config.model_endpoint_type}"
-                        )
-                        existing_model.model_endpoint_type = llm_config.model_endpoint_type
-                        needs_update = True
-
-                    if needs_update:
-                        await existing_model.update_async(session)
-                    else:
-                        logger.info(f"    LLM model {llm_config.handle} already exists (ID: {existing[0].id}), skipping")
 
             # Process embedding models - add new ones
             logger.info(f"Processing {len(embedding_models)} embedding models for provider {provider.name}")
             for embedding_config in embedding_models:
                 logger.info(f"  Checking embedding model: {embedding_config.handle} (name: {embedding_config.embedding_model})")
-
-                # Check if model already exists by handle (excluding soft-deleted ones)
-                existing = await ProviderModelORM.list_async(
-                    db_session=session,
-                    limit=1,
-                    check_is_deleted=True,  # Filter out soft-deleted models
-                    **{
-                        "handle": embedding_config.handle,
-                        "organization_id": organization_id,
-                        "model_type": "embedding",  # Must check model_type since handle can be same for LLM and embedding
-                    },
+                await self._upsert_synced_provider_model(
+                    session,
+                    organization_id=organization_id,
+                    provider_id=provider.id,
+                    model_type="embedding",
+                    handle=embedding_config.handle,
+                    name=embedding_config.embedding_model,
+                    display_name=embedding_config.embedding_model,
+                    model_endpoint_type=embedding_config.embedding_endpoint_type,
+                    embedding_dim=embedding_config.embedding_dim
+                    if hasattr(embedding_config, "embedding_dim")
+                    else None,
                 )
-
-                # Also check by name+provider_id (covers unique_model_per_provider_and_type constraint)
-                if not existing:
-                    existing = await ProviderModelORM.list_async(
-                        db_session=session,
-                        limit=1,
-                        check_is_deleted=True,
-                        **{
-                            "name": embedding_config.embedding_model,
-                            "provider_id": provider.id,
-                            "model_type": "embedding",
-                        },
-                    )
-
-                if not existing:
-                    logger.info(f"    Creating new embedding model {embedding_config.handle}")
-                    # Create new model entry
-                    pydantic_model = PydanticProviderModel(
-                        handle=embedding_config.handle,
-                        display_name=embedding_config.embedding_model,
-                        name=embedding_config.embedding_model,
-                        provider_id=provider.id,
-                        organization_id=organization_id,
-                        model_type="embedding",
-                        enabled=True,
-                        model_endpoint_type=embedding_config.embedding_endpoint_type,
-                        embedding_dim=embedding_config.embedding_dim if hasattr(embedding_config, "embedding_dim") else None,
-                    )
-
-                    logger.info(
-                        f"    Model data: handle={pydantic_model.handle}, name={pydantic_model.name}, "
-                        f"model_type={pydantic_model.model_type}, provider_id={pydantic_model.provider_id}, "
-                        f"org_id={pydantic_model.organization_id}"
-                    )
-
-                    model = ProviderModelORM(**pydantic_model.model_dump(to_orm=True))
-                    result = await model.create_async(session, ignore_conflicts=True)
-                    if result:
-                        logger.info(f"    ✓ Successfully created embedding model {embedding_config.handle}")
-                    else:
-                        logger.info(f"    Embedding model {embedding_config.handle} already exists (concurrent insert), skipping")
-                else:
-                    # Check if model_endpoint_type needs to be updated
-                    existing_model = existing[0]
-                    if existing_model.model_endpoint_type != embedding_config.embedding_endpoint_type:
-                        logger.info(
-                            f"    Updating embedding model {embedding_config.handle} model_endpoint_type: "
-                            f"{existing_model.model_endpoint_type} -> {embedding_config.embedding_endpoint_type}"
-                        )
-                        existing_model.model_endpoint_type = embedding_config.embedding_endpoint_type
-                        await existing_model.update_async(session)
-                    else:
-                        logger.info(f"    Embedding model {embedding_config.handle} already exists (ID: {existing[0].id}), skipping")
 
     @enforce_types
     @trace_method
@@ -904,6 +912,7 @@ class ProviderManager:
             org_models = await ProviderModelORM.list_async(
                 db_session=session,
                 limit=limit,
+                actor=actor,
                 check_is_deleted=True,  # Filter out soft-deleted models
                 **org_filters,
             )

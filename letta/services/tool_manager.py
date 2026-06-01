@@ -610,6 +610,20 @@ class ToolManager:
         existing_tool = result.scalar()
         return existing_tool is not None
 
+    async def _missing_base_tool_names_async(self, actor: PydanticUser, base_tool_names: set[str]) -> set[str]:
+        """Return base tool names that are not present in the org (not limited by list pagination)."""
+        if not base_tool_names:
+            return set()
+        async with db_registry.async_session() as session:
+            result = await session.execute(
+                select(ToolModel.name).where(
+                    ToolModel.organization_id == actor.organization_id,
+                    ToolModel.name.in_(base_tool_names),
+                )
+            )
+            existing_names = {row[0] for row in result.all()}
+        return base_tool_names - existing_names
+
     @enforce_types
     @trace_method
     async def list_tools_async(
@@ -648,9 +662,8 @@ class ToolManager:
         # TODO: This is a temporary hack to resolve this issue
         # TODO: This requires a deeper rethink about how we keep all our internal tools up-to-date
         if not after and upsert_base_tools:
-            existing_tool_names = {tool.name for tool in tools}
             base_tool_names = LETTA_TOOL_SET - set(LOCAL_ONLY_MULTI_AGENT_TOOLS) if settings.environment == "prod" else LETTA_TOOL_SET
-            missing_base_tools = base_tool_names - existing_tool_names
+            missing_base_tools = await self._missing_base_tool_names_async(actor, base_tool_names)
 
             # If any base tools are missing, upsert all base tools
             if missing_base_tools:

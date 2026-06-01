@@ -1,16 +1,26 @@
+import mimetypes
 import re
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
     from letta.services.agent_manager import AgentManager
 
+from letta.log import get_logger
+from letta.orm.file_core_block import DEFAULT_FILE_CORE_CHAR_LIMIT
+from letta.schemas.agent import AgentState
+from letta.schemas.enums import FileProcessingStatus
+from letta.schemas.file import FileMetadata as PydanticFileMetadata
+from letta.schemas.user import User
 from letta.services.agent_open_files_manager import AgentOpenFilesManager
 from letta.services.file_archive_manager import FileArchiveManager
 from letta.services.file_core_block_manager import FileCoreBlockManager
 from letta.services.file_manager import FileManager
 from letta.services.files.char_page_reader import CharPageReader
-from letta.schemas.agent import AgentState
-from letta.schemas.user import User
+from letta.services.source_manager import SourceManager
+from letta.utils import safe_create_task, sanitize_filename
+
+logger = get_logger(__name__)
 
 
 class ThreeTierFileTools:
@@ -25,6 +35,7 @@ class ThreeTierFileTools:
         self.core_manager = FileCoreBlockManager()
         self.archive_manager = FileArchiveManager()
         self.file_manager = FileManager()
+        self.source_manager = SourceManager()
         self.conversation_id: Optional[str] = None
 
     def _page_size(self, agent_state: AgentState) -> int:
@@ -39,6 +50,155 @@ class ThreeTierFileTools:
             file_id=file_id,
             actor=self.actor,
         )
+
+    def _agent_has_folder(self, agent_state: AgentState, folder_id: str) -> bool:
+        # AgentState exposes attached folders as `sources` (folder_ids is only on create/update schemas).
+        return any(source.id == folder_id for source in (agent_state.sources or []))
+
+    def _normalize_text_file_name(self, file_name: str) -> str:
+        name = sanitize_filename(file_name.strip())
+        if not name:
+            raise ValueError("file_name must not be empty")
+        if not Path(name).suffix:
+            name = f"{name}.txt"
+        return name
+
+    async def _schedule_text_file_ingest(
+        self,
+        *,
+        folder_id: str,
+        file_metadata: PydanticFileMetadata,
+        content: str,
+        agent_state: AgentState,
+    ) -> None:
+        from letta.helpers.pinecone_utils import should_use_pinecone
+        from letta.helpers.tpuf_client import should_use_tpuf
+        from letta.services.file_processor.embedder.openai_embedder import OpenAIEmbedder
+        from letta.services.file_processor.embedder.pinecone_embedder import PineconeEmbedder
+        from letta.services.file_processor.file_processor import FileProcessor
+        from letta.services.file_processor.parser.markitdown_parser import MarkitdownFileParser
+        from letta.services.file_processor.parser.mistral_parser import MistralFileParser
+        from letta.settings import settings
+
+        folder = await self.source_manager.get_source_by_id(source_id=folder_id, actor=self.actor)
+        agent_states = await self.source_manager.list_attached_agents(source_id=folder_id, actor=self.actor)
+        if not any(agent.id == agent_state.id for agent in agent_states):
+            agent_states = list(agent_states) + [agent_state]
+
+        content_bytes = content.encode("utf-8")
+        embedding_config = folder.embedding_config or agent_state.embedding_config
+
+        if settings.mistral_api_key:
+            file_parser = MistralFileParser()
+        else:
+            file_parser = MarkitdownFileParser()
+
+        if should_use_tpuf():
+            from letta.services.file_processor.embedder.turbopuffer_embedder import TurbopufferEmbedder
+
+            embedder = TurbopufferEmbedder(embedding_config=embedding_config)
+        elif should_use_pinecone():
+            embedder = PineconeEmbedder(embedding_config=embedding_config)
+        else:
+            embedder = OpenAIEmbedder(embedding_config=embedding_config)
+
+        file_processor = FileProcessor(file_parser=file_parser, embedder=embedder, actor=self.actor)
+
+        async def _run_ingest() -> None:
+            await file_processor.process(
+                agent_states=agent_states,
+                source_id=folder_id,
+                content=content_bytes,
+                file_metadata=file_metadata,
+            )
+
+        safe_create_task(_run_ingest(), label=f"add_text_file_ingest:{file_metadata.id}")
+
+    async def add_text_file(
+        self,
+        agent_state: AgentState,
+        folder_id: str,
+        file_name: str,
+        content: str,
+        headline: Optional[str] = None,
+    ) -> dict:
+        folder = await self.source_manager.get_source_by_id(source_id=folder_id, actor=self.actor)
+        original_filename = self._normalize_text_file_name(file_name)
+        folder_attached = self._agent_has_folder(agent_state, folder_id)
+
+        if not folder_attached:
+            await self.agent_manager.attach_source_async(
+                agent_id=agent_state.id,
+                source_id=folder_id,
+                actor=self.actor,
+            )
+            folder_attached = True
+
+        existing_file = await self.file_manager.get_file_by_original_name_and_source(
+            original_filename=original_filename,
+            source_id=folder_id,
+            actor=self.actor,
+        )
+        if existing_file:
+            await self.file_manager.delete_file(file_id=existing_file.id, actor=self.actor)
+
+        unique_filename = await self.file_manager.generate_unique_filename(
+            original_filename=original_filename,
+            source=folder,
+            organization_id=self.actor.organization_id,
+        )
+        content_bytes = content.encode("utf-8")
+        mime_type = mimetypes.guess_type(original_filename)[0] or "text/plain"
+
+        file_metadata = PydanticFileMetadata(
+            source_id=folder_id,
+            file_name=unique_filename,
+            original_file_name=original_filename,
+            file_path=None,
+            file_type=mime_type,
+            file_size=len(content_bytes),
+            processing_status=FileProcessingStatus.PARSING,
+        )
+        file_metadata = await self.file_manager.create_file(file_metadata, actor=self.actor, text=content)
+
+        summary = (headline or "").strip()
+        if not summary:
+            preview = content.strip().replace("\n", " ")[:200]
+            summary = preview or original_filename
+        summary = summary[:DEFAULT_FILE_CORE_CHAR_LIMIT]
+
+        await self.core_manager.get_or_create(
+            file_id=file_metadata.id,
+            organization_id=self.actor.organization_id,
+            actor=self.actor,
+            default_summary=summary,
+        )
+
+        await self._schedule_text_file_ingest(
+            folder_id=folder_id,
+            file_metadata=file_metadata,
+            content=content,
+            agent_state=agent_state,
+        )
+
+        logger.info(
+            "add_text_file created file_id=%s folder_id=%s name=%s bytes=%s",
+            file_metadata.id,
+            folder_id,
+            unique_filename,
+            len(content_bytes),
+        )
+
+        return {
+            "status": "success",
+            "file_id": file_metadata.id,
+            "file_name": unique_filename,
+            "original_file_name": original_filename,
+            "folder_id": folder_id,
+            "folder_attached": folder_attached,
+            "processing_status": file_metadata.processing_status.value,
+            "char_count": len(content),
+        }
 
     async def open_file(self, agent_state: AgentState, file_id: str) -> dict:
         file_id = await self._resolve_file_id(agent_state, file_id)
@@ -177,7 +337,7 @@ class ThreeTierFileTools:
             char_offset += len(line) + 1
         return {"file_id": file_id, "hits": hits}
 
-    async def update_file_core(self, agent_state: AgentState, file_id: str, new_summary: str) -> dict:
+    async def update_file_headline(self, agent_state: AgentState, file_id: str, new_summary: str) -> dict:
         file_id = await self._resolve_file_id(agent_state, file_id)
         previous = await self.core_manager.get(file_id=file_id, actor=self.actor)
         updated = await self.core_manager.update(
@@ -194,7 +354,7 @@ class ThreeTierFileTools:
             "version": updated.version,
         }
 
-    async def write_archive(
+    async def write_file_archive(
         self,
         agent_state: AgentState,
         file_id: str,
@@ -203,7 +363,7 @@ class ThreeTierFileTools:
         tags: Optional[List[str]] = None,
     ) -> dict:
         file_id = await self._resolve_file_id(agent_state, file_id)
-        archive = await self.archive_manager.write_archive(
+        archive = await self.archive_manager.write_file_archive(
             file_id=file_id,
             title=title,
             content=content,
@@ -221,7 +381,7 @@ class ThreeTierFileTools:
             "tags": archive.tags,
         }
 
-    async def search_archives(
+    async def search_file_archives(
         self,
         agent_state: AgentState,
         query: str,
@@ -229,7 +389,7 @@ class ThreeTierFileTools:
         tags: Optional[List[str]] = None,
         limit: int = 10,
     ) -> dict:
-        results = await self.archive_manager.search_archives(
+        results = await self.archive_manager.search_file_archives(
             query=query,
             agent_id=agent_state.id,
             embedding_config=agent_state.embedding_config,

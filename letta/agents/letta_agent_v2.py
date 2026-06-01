@@ -24,6 +24,7 @@ from letta.errors import ContextWindowExceededError, InsufficientCreditsError, L
 from letta.helpers import ToolRulesSolver
 from letta.helpers.datetime_helpers import get_utc_time, get_utc_timestamp_ns, ns_to_ms
 from letta.helpers.reasoning_helper import scrub_inner_thoughts_from_messages
+from letta.helpers.vision_context_hint import append_vision_context_hint
 from letta.helpers.tool_execution_helper import enable_strict_mode
 from letta.llm_api.llm_client import LLMClient
 from letta.local_llm.constants import INNER_THOUGHTS_KWARG
@@ -522,6 +523,7 @@ class LettaAgentV2(BaseAgentV2):
                         request_system_prompt = self.generate_request_system_prompt(
                             client_skills=self.client_skills,
                             current_system_message=messages[0],
+                            messages=messages,
                         )
                         request_data = self.llm_client.build_request_data(
                             agent_type=self.agent_state.agent_type,
@@ -828,6 +830,7 @@ class LettaAgentV2(BaseAgentV2):
         self,
         client_skills: list[ClientSkillSchema] | None,
         current_system_message: Message,
+        messages: list[Message] | None = None,
     ) -> str:
         """Build request-scoped system prompt text without persisting request skills."""
         if self.override_system is not None:
@@ -837,9 +840,14 @@ class LettaAgentV2(BaseAgentV2):
 
         current_system_text = current_system_message.content[0].text
         request_skills_block = get_agent_memory(self.agent_state).compile_available_skills(client_skills=client_skills)
-        if not request_skills_block:
-            return current_system_text
-        return current_system_text.rstrip("\n") + "\n\n" + request_skills_block.lstrip("\n")
+        if request_skills_block:
+            current_system_text = current_system_text.rstrip("\n") + "\n\n" + request_skills_block.lstrip("\n")
+
+        return append_vision_context_hint(
+            current_system_text,
+            llm_config=get_llm_config(self.agent_state),
+            messages=messages,
+        )
 
     @trace_method
     async def _rebuild_memory(

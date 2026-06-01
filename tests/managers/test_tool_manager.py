@@ -1243,6 +1243,36 @@ async def test_upsert_base_tools(server: SyncServer, default_user):
         assert t.json_schema
 
 
+@pytest.mark.asyncio
+async def test_list_tools_does_not_upsert_base_tools_when_paginated(server: SyncServer, default_user):
+    """Base-tool presence must not be inferred from the first page of list_tools."""
+    from unittest.mock import AsyncMock, patch
+
+    from letta.functions.functions import parse_source_code
+
+    await server.tool_manager.upsert_base_tools_async(actor=default_user)
+
+    def filler_tool() -> str:
+        """Pagination filler."""
+        return "ok"
+
+    source_code = parse_source_code(filler_tool)
+    for i in range(55):
+        await server.tool_manager.create_tool_async(
+            PydanticTool(
+                name=f"pagination_filler_{i}",
+                source_code=source_code,
+                source_type="python",
+                tool_type=ToolType.CUSTOM,
+            ),
+            actor=default_user,
+        )
+
+    with patch.object(server.tool_manager, "upsert_base_tools_async", new_callable=AsyncMock) as mock_upsert:
+        await server.tool_manager.list_tools_async(actor=default_user, limit=50)
+        mock_upsert.assert_not_called()
+
+
 @pytest.mark.parametrize(
     "tool_type,expected_names",
     [

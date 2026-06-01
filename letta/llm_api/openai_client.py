@@ -34,11 +34,20 @@ from letta.errors import (
 )
 from letta.helpers.json_helpers import sanitize_unicode_surrogates
 from letta.helpers.log_redaction import safe_log_json
-from letta.llm_api.error_utils import is_context_window_overflow_message, is_insufficient_credits_message
+from letta.llm_api.error_utils import (
+    is_context_window_overflow_message,
+    is_insufficient_credits_message,
+    is_openrouter_image_payload_limit_message,
+    openrouter_image_payload_limit_user_message,
+)
 from letta.llm_api.helpers import (
     add_inner_thoughts_to_functions,
     convert_response_format_to_responses_api,
     unpack_all_inner_thoughts_from_kwargs,
+)
+from letta.llm_api.minimax_openai import (
+    apply_minimax_openai_request_extras,
+    extract_reasoning_from_message_data,
 )
 from letta.llm_api.llm_client_base import LLMClientBase
 from letta.llm_api.openai_ws_session import AsyncStreamCompat, OpenAIWSSessionManager
@@ -770,6 +779,8 @@ class OpenAIClient(LLMClientBase):
             existing_extra = request_data.get("extra_body", {})
             request_data["extra_body"] = merge_provider_preferences(llm_config, existing_extra)
 
+        apply_minimax_openai_request_extras(request_data, llm_config)
+
         return request_data
 
     @trace_method
@@ -1019,8 +1030,7 @@ class OpenAIClient(LLMClientBase):
             if "choices" in response_data and len(response_data["choices"]) > 0:
                 choice_data = response_data["choices"][0]
                 message_data = choice_data.get("message", {})
-                # Check for reasoning_content (standard) or reasoning (OpenRouter)
-                reasoning_content = message_data.get("reasoning_content") or message_data.get("reasoning")
+                reasoning_content = extract_reasoning_from_message_data(message_data)
                 if reasoning_content:
                     chat_completion_response.choices[0].message.reasoning_content = reasoning_content
                     chat_completion_response.choices[0].message.reasoning_content_signature = None
@@ -1318,6 +1328,17 @@ class OpenAIClient(LLMClientBase):
             logger.warning(f"[OpenAI] Bad request (400): {str(e)}")
             error_str = str(e)
 
+            if is_openrouter_image_payload_limit_message(error_str):
+                return LLMBadRequestError(
+                    message=openrouter_image_payload_limit_user_message(),
+                    code=ErrorCode.INVALID_ARGUMENT,
+                    details={
+                        "error_kind": "openrouter_image_payload_limit",
+                        "upstream_message": error_str[:500],
+                        "is_byok": is_byok,
+                    },
+                )
+
             if "<html" in error_str.lower() or (e.body and isinstance(e.body, str) and "<html" in e.body.lower()):
                 logger.warning("[OpenAI] Received HTML error response from upstream endpoint (likely ALB or reverse proxy)")
                 return LLMBadRequestError(
@@ -1354,6 +1375,18 @@ class OpenAIClient(LLMClientBase):
         #   "Your input exceeds the context window of this model. Please adjust your input and try again."
         if isinstance(e, openai.APIError) and not isinstance(e, openai.APIStatusError):
             msg = str(e)
+            if is_openrouter_image_payload_limit_message(msg):
+                return LLMBadRequestError(
+                    message=openrouter_image_payload_limit_user_message(),
+                    code=ErrorCode.INVALID_ARGUMENT,
+                    details={
+                        "error_kind": "openrouter_image_payload_limit",
+                        "provider_exception_type": type(e).__name__,
+                        "body": getattr(e, "body", None),
+                        "upstream_message": msg[:500],
+                        "is_byok": is_byok,
+                    },
+                )
             if is_context_window_overflow_message(msg):
                 return ContextWindowExceededError(
                     message=f"OpenAI request exceeded the context window: {msg}",

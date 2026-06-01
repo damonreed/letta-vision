@@ -33,7 +33,7 @@ class FileArchiveManager:
 
     @enforce_types
     @trace_method
-    async def write_archive(
+    async def write_file_archive(
         self,
         *,
         file_id: str,
@@ -77,7 +77,7 @@ class FileArchiveManager:
 
     @enforce_types
     @trace_method
-    async def search_archives(
+    async def search_file_archives(
         self,
         *,
         query: str,
