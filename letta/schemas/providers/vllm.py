@@ -37,13 +37,21 @@ class VLLMProvider(Provider):
         for model in data:
             model_name = model["id"]
 
+            context_window = model.get("max_model_len")
+            if context_window is None:
+                meta = model.get("meta")
+                if isinstance(meta, dict):
+                    context_window = meta.get("n_ctx") or meta.get("n_ctx_train")
+            if context_window is None:
+                context_window = 32768
+
             configs.append(
                 LLMConfig(
                     model=model_name,
                     model_endpoint_type="openai",  # TODO (cliandy): this was previous vllm for the completions provider, why?
                     model_endpoint=base_url,
                     model_wrapper=self.default_prompt_formatter,
-                    context_window=model["max_model_len"],
+                    context_window=int(context_window),
                     handle=self.get_handle(model_name, base_name=self.handle_base) if self.handle_base else self.get_handle(model_name),
                     max_tokens=self.get_default_max_output_tokens(model_name),
                     provider_name=self.name,

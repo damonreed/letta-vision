@@ -202,6 +202,39 @@ def supports_content_none(llm_config: LLMConfig) -> bool:
     return True
 
 
+def _is_openrouter_endpoint(
+    endpoint: str | None,
+    *,
+    handle: str | None = None,
+    endpoint_type: str | None = None,
+    provider_name: str | None = None,
+) -> bool:
+    if endpoint_type == "openrouter" or provider_name == "openrouter":
+        return True
+    if handle and handle.startswith("openrouter/"):
+        return True
+    return bool(endpoint and "openrouter.ai" in endpoint)
+
+
+def _openrouter_client_headers() -> dict[str, str]:
+    headers: dict[str, str] = {}
+    if model_settings.openrouter_referer:
+        headers["HTTP-Referer"] = model_settings.openrouter_referer
+    if model_settings.openrouter_title:
+        headers["X-Title"] = model_settings.openrouter_title
+    return headers
+
+
+def _apply_openrouter_auth_to_client_kwargs(kwargs: dict, *, use_openrouter_key: bool = True) -> None:
+    if use_openrouter_key:
+        or_key = model_settings.openrouter_api_key or os.environ.get("OPENROUTER_API_KEY")
+        if or_key:
+            kwargs["api_key"] = or_key
+    headers = _openrouter_client_headers()
+    if headers:
+        kwargs["default_headers"] = headers
+
+
 class OpenAIClient(LLMClientBase):
     def _prepare_client_kwargs(self, llm_config: LLMConfig) -> dict:
         api_key, _, _ = self.get_byok_overrides(llm_config)
@@ -240,10 +273,19 @@ class OpenAIClient(LLMClientBase):
         return kwargs
 
     def _prepare_client_kwargs_embedding(self, embedding_config: EmbeddingConfig) -> dict:
+        endpoint = embedding_config.embedding_endpoint
         api_key = model_settings.openai_api_key or os.environ.get("OPENAI_API_KEY")
-        # supposedly the openai python client requires a dummy API key
-        api_key = api_key or "DUMMY_API_KEY"
-        kwargs = {"api_key": api_key, "base_url": embedding_config.embedding_endpoint}
+        kwargs: dict = {"api_key": api_key, "base_url": endpoint}
+
+        if _is_openrouter_endpoint(
+            endpoint,
+            handle=embedding_config.handle,
+            endpoint_type=embedding_config.embedding_endpoint_type,
+        ):
+            _apply_openrouter_auth_to_client_kwargs(kwargs)
+
+        # OpenAI-compatible local gateways (Ollama, llama.cpp) accept a dummy key.
+        kwargs["api_key"] = kwargs.get("api_key") or "DUMMY_API_KEY"
         kwargs["timeout"] = _openai_client_timeout(streaming=False)
         return kwargs
 

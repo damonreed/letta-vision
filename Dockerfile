@@ -79,10 +79,7 @@ COPY otel/otel-collector-config-signoz.yaml /etc/otel/config-signoz.yaml
 ARG LETTA_ENVIRONMENT=DEV
 ENV LETTA_ENVIRONMENT=${LETTA_ENVIRONMENT} \
     VIRTUAL_ENV="/app/.venv" \
-    PATH="/app/.venv/bin:$PATH" \
-    POSTGRES_USER=letta \
-    POSTGRES_PASSWORD=letta \
-    POSTGRES_DB=letta
+    PATH="/app/.venv/bin:$PATH"
 
 ARG LETTA_VERSION
 ENV LETTA_VERSION=${LETTA_VERSION}

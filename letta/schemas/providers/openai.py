@@ -16,6 +16,24 @@ logger = get_logger(__name__)
 ALLOWED_PREFIXES = {"gpt-4", "gpt-5", "o1", "o3", "o4"}
 DISALLOWED_KEYWORDS = {"transcribe", "search", "realtime", "tts", "audio", "computer", "o1-mini", "o1-preview", "o1-pro"}
 DEFAULT_EMBEDDING_BATCH_SIZE = 1024
+OFFICIAL_OPENAI_BASE_URL = "https://api.openai.com/v1"
+EMBEDDING_MODEL_NAME_HINTS = (
+    "bge",
+    "embed",
+    "e5-",
+    "/e5",
+    "sentence",
+    "retrieval",
+    "nomic-embed",
+    "text-embedding",
+    "mxbai-embed",
+)
+SELF_HOSTED_BASE_URL_HINTS = (
+    "localhost",
+    "127.0.0.1",
+    "host.docker.internal",
+    "0.0.0.0",
+)
 
 # Keys some OpenAI-compatible gateways include on /v1/models entries (OpenRouter, Nebius verbose, etc.)
 MODEL_CONTEXT_WINDOW_KEYS = (
@@ -130,14 +148,48 @@ class OpenAIProvider(Provider):
         data = await self._get_models_async()
         return await self._list_llm_models(data)
 
-    async def list_embedding_models_async(self) -> list[EmbeddingConfig]:
-        """Return known OpenAI embedding models.
+    def _is_official_openai_base_url(self) -> bool:
+        return (self.base_url or "").rstrip("/") == OFFICIAL_OPENAI_BASE_URL
 
-        Note: we intentionally do not attempt to fetch embedding models from the remote endpoint here.
-        The OpenAI "models" list does not reliably expose embedding metadata needed for filtering,
-        and in tests we frequently point OPENAI_BASE_URL at a local mock server.
-        """
+    def _is_self_hosted_base_url(self) -> bool:
+        url = (self.base_url or "").lower()
+        return any(hint in url for hint in SELF_HOSTED_BASE_URL_HINTS)
 
+    def _uses_openrouter_gateway(self) -> bool:
+        return "openrouter.ai" in (self.base_url or "").lower()
+
+    @staticmethod
+    def _model_capabilities(model: dict) -> list[str]:
+        caps = model.get("capabilities")
+        if isinstance(caps, list):
+            return [str(c).lower() for c in caps]
+        return []
+
+    @classmethod
+    def _looks_like_embedding_model(cls, model_name: str, model: dict) -> bool:
+        name_lower = model_name.lower()
+        caps = cls._model_capabilities(model)
+        if "embedding" in caps:
+            return True
+        if "multimodal" in caps or "vision" in caps:
+            return False
+        return any(hint in name_lower for hint in EMBEDDING_MODEL_NAME_HINTS)
+
+    @staticmethod
+    def _embedding_dim_from_model_record(model: dict, model_name: str) -> int:
+        meta = model.get("meta")
+        if isinstance(meta, dict) and meta.get("n_embd") is not None:
+            try:
+                return int(meta["n_embd"])
+            except (TypeError, ValueError):
+                pass
+        if "3-large" in model_name:
+            return 3072
+        if "ada-002" in model_name or "3-small" in model_name:
+            return 1536
+        return 1536
+
+    def _default_openai_embedding_models(self) -> list[EmbeddingConfig]:
         return [
             EmbeddingConfig(
                 embedding_model="text-embedding-ada-002",
@@ -168,6 +220,57 @@ class OpenAIProvider(Provider):
             ),
         ]
 
+    async def _discover_embedding_models_from_api(self) -> list[EmbeddingConfig]:
+        try:
+            data = await self._get_models_async()
+        except Exception as e:
+            logger.info(f"Could not list embedding models from {self.base_url}: {e}")
+            return []
+
+        configs: list[EmbeddingConfig] = []
+        for model in data:
+            if "id" not in model:
+                continue
+            model_name = model["id"]
+            if not self._looks_like_embedding_model(model_name, model):
+                continue
+            configs.append(
+                EmbeddingConfig(
+                    embedding_model=model_name,
+                    embedding_endpoint_type="openai",
+                    embedding_endpoint=self.base_url,
+                    embedding_dim=self._embedding_dim_from_model_record(model, model_name),
+                    embedding_chunk_size=DEFAULT_EMBEDDING_CHUNK_SIZE,
+                    handle=self.get_handle(model_name, is_embedding=True),
+                    batch_size=DEFAULT_EMBEDDING_BATCH_SIZE,
+                )
+            )
+        return configs
+
+    async def list_embedding_models_async(self) -> list[EmbeddingConfig]:
+        """Return embedding models for this provider.
+
+        Official OpenAI and cloud gateways keep the static OpenAI catalog. Self-hosted
+        OpenAI-compatible servers (llama.cpp, etc.) discover models from /v1/models.
+        """
+        if self._is_official_openai_base_url():
+            return self._default_openai_embedding_models()
+
+        discovered = await self._discover_embedding_models_from_api()
+        if discovered:
+            return discovered
+
+        # OpenRouter lists chat models with supported_parameters=tools; embedding discovery
+        # is handled by OpenRouterProvider.list_embedding_models_async.
+        if self._uses_openrouter_gateway():
+            return []
+
+        # Cloud gateways (SiliconFlow, etc.) may not expose embeddings on /v1/models.
+        if not self._is_self_hosted_base_url():
+            return self._default_openai_embedding_models()
+
+        return []
+
     async def _list_llm_models(self, data: list[dict]) -> list[LLMConfig]:
         """
         This handles filtering out LLM Models by provider that meet Letta's requirements.
@@ -178,6 +281,9 @@ class OpenAIProvider(Provider):
             if check is None:
                 continue
             model_name, context_window_size = check
+
+            if not self._is_official_openai_base_url() and self._looks_like_embedding_model(model_name, model):
+                continue
 
             # ===== Provider filtering =====
             # TogetherAI: includes the type, which we can use to filter out embedding models
@@ -267,6 +373,20 @@ class OpenAIProvider(Provider):
                 continue
             if value > 0:
                 return value
+
+        # llama.cpp /v1/models nests slot context under meta.n_ctx (not top-level max_model_len)
+        meta = model.get("meta")
+        if isinstance(meta, dict):
+            for key in ("n_ctx", "n_ctx_train"):
+                if key not in meta or meta[key] is None:
+                    continue
+                try:
+                    value = int(meta[key])
+                except (TypeError, ValueError):
+                    continue
+                if value > 0:
+                    return value
+
         return None
 
     def _do_model_checks_for_name_and_context_size(self, model: dict, length_key: str = "context_length") -> tuple[str, int] | None:

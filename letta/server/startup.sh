@@ -40,6 +40,9 @@ if [ -n "$LETTA_PG_URI" ]; then
     echo "External Postgres configuration detected, using env var LETTA_PG_URI"
 else
     echo "No external Postgres configuration detected, starting internal PostgreSQL..."
+    export POSTGRES_USER="${POSTGRES_USER:-letta}"
+    export POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-letta}"
+    export POSTGRES_DB="${POSTGRES_DB:-letta}"
     # Start PostgreSQL using the base image's entrypoint script
     /usr/local/bin/docker-entrypoint.sh postgres &
 

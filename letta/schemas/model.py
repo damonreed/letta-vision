@@ -183,6 +183,7 @@ class EmbeddingModel(EmbeddingConfig, ModelBase):
         "mistral",
         "together",
         "pinecone",
+        "openrouter",
     ] = Field(..., description="Deprecated: Use 'provider_type' field instead. The endpoint type for the embedding model.", deprecated=True)
 
     # Additional deprecated EmbeddingConfig fields - kept for backward compatibility
