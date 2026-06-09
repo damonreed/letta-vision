@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -15,6 +16,9 @@ from letta.orm.passage import ArchivalPassage, SourcePassage
 from letta.schemas.user import User as PydanticUser
 from letta.server.db import db_registry
 from letta.settings import DatabaseChoice, settings
+from letta.services.message_manager import MessageManager
+
+_message_manager = MessageManager()
 
 
 @dataclass
@@ -24,6 +28,34 @@ class RecallHit:
     handle: str
     score: float
     reasons: List[str]
+
+
+def _snippet_for_display(text: str) -> str:
+    """Flatten MessageManager JSON extracts into human-readable recall snippets."""
+    if not text:
+        return ""
+    stripped = text.strip()
+    if not stripped.startswith("{"):
+        return stripped
+    try:
+        parsed = json.loads(stripped)
+    except json.JSONDecodeError:
+        return stripped
+    if isinstance(parsed, dict):
+        for key in ("content", "text", "thinking"):
+            value = parsed.get(key)
+            if value:
+                return str(value)
+    return stripped
+
+
+def _recall_snippet(layer: str, row) -> str:
+    if layer == "message":
+        extracted = _message_manager._extract_message_text(row.to_pydantic())
+        return _snippet_for_display(extracted)
+
+    snippet = getattr(row, "description", None) or getattr(row, "text", None) or getattr(row, "caption", "") or ""
+    return str(snippet)
 
 
 async def recall(
@@ -56,11 +88,11 @@ async def recall(
             q = q.order_by(model.embedding.cosine_distance(query_vec).asc()).limit(limit)
             rows = (await session.execute(q)).scalars().all()
             for idx, row in enumerate(rows):
-                snippet = getattr(row, "description", None) or getattr(row, "text", None) or getattr(row, "caption", "") or ""
+                snippet = _recall_snippet(layer, row)
                 vector_hits.append(
                     RecallHit(
                         layer=layer,
-                        snippet=str(snippet)[:500],
+                        snippet=snippet[:500],
                         handle=row.id,
                         score=1.0 / (idx + 1),
                         reasons=["vector"],
