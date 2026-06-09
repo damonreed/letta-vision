@@ -519,30 +519,28 @@ class MessageManager:
                     result = await session.execute(query)
                     return [msg.to_pydantic() for msg in result.scalars()]
 
+        import base64
+
+        from letta.services.image_ingest import ingest_image_sync
+
         for message in messages_to_create:
             if isinstance(message.content, list):
                 for content in message.content:
                     if content.type == MessageContentType.image and content.source.type == ImageSourceType.base64:
-                        # TODO: actually persist image files in db
-                        # file = await self.file_manager.create_file( # TODO: use batch create to prevent multiple db round trips
-                        #     db_session=session,
-                        #     image_create=FileMetadata(
-                        #         user_id=actor.id, # TODO: add field
-                        #         source_id= '' # TODO: make optional
-                        #         organization_id=actor.organization_id,
-                        #         file_type=content.source.media_type,
-                        #         processing_status=FileProcessingStatus.COMPLETED,
-                        #         content= '' # TODO: should content be added here or in top level text field?
-                        #     ),
-                        #     actor=actor,
-                        #     text=content.source.data,
-                        # )
-                        file_id_placeholder = "file-" + str(uuid.uuid4())
+                        media_type = content.source.media_type or "image/png"
+                        detail = content.source.detail
+                        raw = base64.standard_b64decode(content.source.data)
+                        image_id = await ingest_image_sync(
+                            raw,
+                            media_type,
+                            actor,
+                            provenance="uploaded",
+                        )
                         content.source = LettaImage(
-                            file_id=file_id_placeholder,
-                            data=content.source.data,
-                            media_type=content.source.media_type,
-                            detail=content.source.detail,
+                            file_id=image_id,
+                            data=None,
+                            media_type=media_type,
+                            detail=detail,
                         )
 
         # Validate run_ids exist before inserting to prevent ForeignKeyViolationError
@@ -575,9 +573,7 @@ class MessageManager:
             # context manager now handles commits
             # await session.commit()
 
-        from letta.helpers.tpuf_client import should_use_tpuf_for_messages
-
-        if should_use_tpuf_for_messages() and result:
+        if settings.embed_all_messages and result:
             agent_id = result[0].agent_id
             if agent_id:
                 # Filter out system messages before embedding to avoid unnecessary processing
@@ -609,57 +605,49 @@ class MessageManager:
         agent_id: str,
         project_id: Optional[str] = None,
         template_id: Optional[str] = None,
+        embedding_version: int = 1,
     ) -> None:
-        """Background task to embed and store messages in Turbopuffer.
-
-        Args:
-            messages: List of messages to embed
-            actor: User performing the action
-            agent_id: Agent ID for the messages
-            project_id: Optional project ID for the messages
-            template_id: Optional template ID for the messages
-        """
+        """Background task to embed and store messages in Postgres."""
         try:
-            from letta.helpers.tpuf_client import TurbopufferClient
+            from letta.embeddings.resolver import resolve_embedding_config_async
+            from letta.embeddings.util import prepare_vector_for_write
+            from letta.embeddings.write import write_message_embedding_atomic
+            from letta.llm_api.llm_client import LLMClient
 
-            # extract text content from each message
+            embedding_config = await resolve_embedding_config_async(actor=actor)
+            embedding_client = LLMClient.create(
+                provider_type=embedding_config.embedding_endpoint_type,
+                actor=actor,
+            )
+
+            combined_messages = self._combine_assistant_tool_messages(messages)
             message_texts = []
             message_ids = []
-            roles = []
-            created_ats = []
-            conversation_ids = []
-
-            # combine assistant+tool messages before embedding
-            combined_messages = self._combine_assistant_tool_messages(messages)
 
             for msg in combined_messages:
                 text = self._extract_message_text(msg).strip()
-                if text:  # only embed messages with text content (role filtering is handled in _extract_message_text)
+                if text:
                     message_texts.append(text)
                     message_ids.append(msg.id)
-                    roles.append(msg.role)
-                    created_ats.append(msg.created_at)
-                    conversation_ids.append(msg.conversation_id)
 
-            if message_texts:
-                # insert to turbopuffer - TurbopufferClient will generate embeddings internally
-                tpuf_client = TurbopufferClient()
-                await tpuf_client.insert_messages(
-                    agent_id=agent_id,
-                    message_texts=message_texts,
-                    message_ids=message_ids,
+            if not message_texts:
+                return
+
+            embeddings = await embedding_client.request_embeddings(message_texts, embedding_config)
+            for msg_id, vec in zip(message_ids, embeddings):
+                if vec is None:
+                    continue
+                prepared = prepare_vector_for_write(vec, embedding_config)
+                await write_message_embedding_atomic(
+                    message_id=msg_id,
                     organization_id=actor.organization_id,
-                    actor=actor,
-                    roles=roles,
-                    created_ats=created_ats,
-                    project_id=project_id,
-                    template_id=template_id,
-                    conversation_ids=conversation_ids,
+                    embedding=prepared,
+                    embedding_config=embedding_config,
+                    embedding_version=embedding_version,
                 )
-                logger.info(f"Successfully embedded {len(message_texts)} messages for agent {agent_id}")
+            logger.info(f"Successfully embedded {len(message_texts)} messages for agent {agent_id}")
         except Exception as e:
-            logger.error(f"Failed to embed messages in Turbopuffer for agent {agent_id}: {e}")
-            # don't re-raise the exception in background mode - just log it
+            logger.error(f"Failed to embed messages for agent {agent_id}: {e}")
 
     @enforce_types
     @trace_method
@@ -737,9 +725,7 @@ class MessageManager:
             # context manager now handles commits
             # await session.commit()
 
-        from letta.helpers.tpuf_client import should_use_tpuf_for_messages
-
-        if should_use_tpuf_for_messages() and pydantic_message.agent_id:
+        if settings.embed_all_messages and pydantic_message.agent_id:
             text = self._extract_message_text(pydantic_message)
 
             if text:
@@ -756,40 +742,23 @@ class MessageManager:
     async def _update_message_embedding_background(
         self, message: PydanticMessage, text: str, actor: PydanticUser, project_id: Optional[str] = None, template_id: Optional[str] = None
     ) -> None:
-        """Background task to update a message's embedding in Turbopuffer.
-
-        Args:
-            message: The updated message
-            text: Extracted text content from the message
-            actor: User performing the action
-            project_id: Optional project ID for the message
-            template_id: Optional template ID for the message
-        """
+        """Background task to re-embed an edited message at a higher monotonic version."""
         try:
-            from letta.helpers.tpuf_client import TurbopufferClient
-
-            tpuf_client = TurbopufferClient()
-
-            # delete old message from turbopuffer
-            await tpuf_client.delete_messages(agent_id=message.agent_id, organization_id=actor.organization_id, message_ids=[message.id])
-
-            # re-insert with updated content - TurbopufferClient will generate embeddings internally
-            await tpuf_client.insert_messages(
-                agent_id=message.agent_id,
-                message_texts=[text],
-                message_ids=[message.id],
-                organization_id=actor.organization_id,
-                actor=actor,
-                roles=[message.role],
-                created_ats=[message.created_at],
-                project_id=project_id,
-                template_id=template_id,
-                conversation_ids=[message.conversation_id],
+            current_version = 0
+            async with db_registry.async_session() as session:
+                row = await MessageModel.read_async(db_session=session, identifier=message.id, actor=actor)
+                current_version = row.embedding_version or 0
+            await self._embed_messages_background(
+                [message],
+                actor,
+                message.agent_id,
+                project_id,
+                template_id,
+                embedding_version=current_version + 1,
             )
-            logger.info(f"Successfully updated message {message.id} in Turbopuffer")
+            logger.info(f"Successfully re-embedded message {message.id} at version {current_version + 1}")
         except Exception as e:
-            logger.error(f"Failed to update message {message.id} in Turbopuffer: {e}")
-            # don't re-raise the exception in background mode - just log it
+            logger.error(f"Failed to re-embed message {message.id}: {e}")
 
     def _update_message_by_id_impl(
         self, message_id: str, message_update: MessageUpdate, actor: PydanticUser, message: MessageModel
@@ -834,18 +803,6 @@ class MessageManager:
                 await msg.hard_delete_async(session, actor=actor)
             except NoResultFound:
                 raise ValueError(f"Message with id {message_id} not found.")
-
-        from letta.helpers.tpuf_client import TurbopufferClient, should_use_tpuf_for_messages
-
-        if should_use_tpuf_for_messages() and agent_id:
-            try:
-                tpuf_client = TurbopufferClient()
-                await tpuf_client.delete_messages(agent_id=agent_id, organization_id=actor.organization_id, message_ids=[message_id])
-                logger.info(f"Successfully deleted message {message_id} from Turbopuffer")
-            except Exception as e:
-                logger.error(f"Failed to delete message from Turbopuffer: {e}")
-                if strict_mode:
-                    raise
 
         return True
 
@@ -1071,22 +1028,7 @@ class MessageManager:
             # context manager now handles commits
             # await session.commit()
 
-        # 5) delete from turbopuffer if enabled (outside of DB session)
-        from letta.helpers.tpuf_client import TurbopufferClient, should_use_tpuf_for_messages
-
-        if should_use_tpuf_for_messages():
-            try:
-                tpuf_client = TurbopufferClient()
-                if exclude_ids:
-                    logger.warning(f"Turbopuffer deletion with exclude_ids not fully supported, using delete_all for agent {agent_id}")
-                await tpuf_client.delete_all_messages(agent_id, actor.organization_id)
-                logger.info(f"Successfully deleted all messages for agent {agent_id} from Turbopuffer")
-            except Exception as e:
-                logger.error(f"Failed to delete messages from Turbopuffer: {e}")
-                if strict_mode:
-                    raise
-
-        # 6) return the number of rows deleted
+        # 5) return the number of rows deleted
         return rowcount
 
     @enforce_types
@@ -1099,22 +1041,9 @@ class MessageManager:
         if not message_ids:
             return 0
 
-        agent_ids = []
         rowcount = 0
 
-        from letta.helpers.tpuf_client import TurbopufferClient, should_use_tpuf_for_messages
-
         async with db_registry.async_session() as session:
-            if should_use_tpuf_for_messages():
-                agent_query = (
-                    select(MessageModel.agent_id)
-                    .where(MessageModel.id.in_(message_ids))
-                    .where(MessageModel.organization_id == actor.organization_id)
-                    .distinct()
-                )
-                agent_result = await session.execute(agent_query)
-                agent_ids = [row[0] for row in agent_result.fetchall() if row[0]]
-
             # issue a CORE DELETE against the mapped class for specific message IDs
             stmt = delete(MessageModel).where(MessageModel.id.in_(message_ids)).where(MessageModel.organization_id == actor.organization_id)
             result = await session.execute(stmt)
@@ -1124,18 +1053,56 @@ class MessageManager:
             # context manager now handles commits
             # await session.commit()
 
-        if should_use_tpuf_for_messages() and agent_ids:
-            try:
-                tpuf_client = TurbopufferClient()
-                for agent_id in agent_ids:
-                    await tpuf_client.delete_messages(agent_id=agent_id, organization_id=actor.organization_id, message_ids=message_ids)
-                logger.info(f"Successfully deleted {len(message_ids)} messages from Turbopuffer")
-            except Exception as e:
-                logger.error(f"Failed to delete messages from Turbopuffer: {e}")
-                if strict_mode:
-                    raise
-
         return rowcount
+
+    async def _search_messages_pg_vector(
+        self,
+        actor: PydanticUser,
+        query_text: str,
+        limit: int,
+        *,
+        agent_id: Optional[str] = None,
+        roles: Optional[List[MessageRole]] = None,
+        conversation_id: Optional[str] = None,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+    ) -> List[Tuple[PydanticMessage, dict]]:
+        """Vector search over Postgres message embeddings."""
+        from letta.embeddings.query import apply_embedding_space_guard, embed_search_query
+        from letta.embeddings.resolver import resolve_embedding_config_async
+
+        if settings.database_engine != DatabaseChoice.POSTGRES:
+            return []
+
+        embedding_config = await resolve_embedding_config_async(actor=actor)
+        embedded_text, query_space_id = await embed_search_query(query_text, embedding_config, actor=actor)
+
+        async with db_registry.async_session() as session:
+            query = select(MessageModel).where(MessageModel.organization_id == actor.organization_id)
+            if agent_id:
+                query = query.where(MessageModel.agent_id == agent_id)
+            if roles:
+                query = query.where(MessageModel.role.in_([r.value for r in roles]))
+            if conversation_id:
+                query = query.where(MessageModel.conversation_id == conversation_id)
+            if start_date:
+                query = query.where(MessageModel.created_at >= start_date)
+            if end_date:
+                query = query.where(MessageModel.created_at <= end_date)
+
+            query = apply_embedding_space_guard(query, MessageModel, query_space_id)
+            query = query.order_by(MessageModel.embedding.cosine_distance(embedded_text).asc())
+            query = query.limit(limit)
+
+            result = await session.execute(query)
+            rows = result.scalars().all()
+            return [
+                (
+                    row.to_pydantic(),
+                    {"search_mode": "pg_vector", "vector_rank": idx + 1, "combined_score": 1.0 / (idx + 1)},
+                )
+                for idx, row in enumerate(rows)
+            ]
 
     @enforce_types
     @trace_method
@@ -1170,94 +1137,29 @@ class MessageManager:
         Returns:
             List of tuples (message, metadata) where metadata contains relevance scores
         """
-        from letta.helpers.tpuf_client import TurbopufferClient, should_use_tpuf_for_messages
-
-        # check if we should use turbopuffer
-        if should_use_tpuf_for_messages():
-            try:
-                # use turbopuffer for search - TurbopufferClient will generate embeddings internally
-                tpuf_client = TurbopufferClient()
-                results = await tpuf_client.query_messages_by_agent_id(
-                    agent_id=agent_id,
-                    organization_id=actor.organization_id,
-                    actor=actor,
-                    query_text=query_text,
-                    search_mode=search_mode,
-                    top_k=limit,
-                    roles=roles,
-                    project_id=project_id,
-                    template_id=template_id,
-                    start_date=start_date,
-                    end_date=end_date,
-                )
-
-                # create message-like objects using turbopuffer data (which already has properly extracted text)
-                if results:
-                    # create simplified message objects from turbopuffer data
-                    from letta.schemas.letta_message_content import TextContent
-                    from letta.schemas.message import Message as PydanticMessage
-
-                    message_tuples = []
-                    for msg_dict, score, metadata in results:
-                        # create a message object with the properly extracted text from turbopuffer
-                        message = PydanticMessage(
-                            id=msg_dict["id"],
-                            agent_id=agent_id,
-                            role=MessageRole(msg_dict["role"]),
-                            content=[TextContent(text=msg_dict["text"])],
-                            created_at=msg_dict["created_at"],
-                            updated_at=msg_dict["created_at"],  # use created_at as fallback
-                            created_by_id=actor.id,
-                            last_updated_by_id=actor.id,
-                        )
-                        # Return tuple of (message, metadata)
-                        message_tuples.append((message, metadata))
-
-                    return message_tuples
-                else:
-                    return []
-
-            except Exception as e:
-                logger.error(f"Failed to search messages with Turbopuffer, falling back to SQL: {e}")
-                # fall back to SQL search
-                messages = await self.list_messages(
-                    agent_id=agent_id,
-                    actor=actor,
-                    query_text=query_text,
-                    roles=roles,
-                    limit=limit,
-                    ascending=False,
-                )
-                combined_messages = self._combine_assistant_tool_messages(messages)
-                # Add basic metadata for SQL fallback
-                message_tuples = []
-                for message in combined_messages:
-                    metadata = {
-                        "search_mode": "sql_fallback",
-                        "combined_score": None,  # SQL doesn't provide scores
-                    }
-                    message_tuples.append((message, metadata))
-                return message_tuples
-        else:
-            # use sql-based search
-            messages = await self.list_messages(
-                agent_id=agent_id,
+        if settings.embed_all_messages and query_text and search_mode in ("vector", "hybrid"):
+            pg_results = await self._search_messages_pg_vector(
                 actor=actor,
                 query_text=query_text,
-                roles=roles,
                 limit=limit,
-                ascending=False,
+                agent_id=agent_id,
+                roles=roles,
+                start_date=start_date,
+                end_date=end_date,
             )
-            combined_messages = self._combine_assistant_tool_messages(messages)
-            # Add basic metadata for SQL search
-            message_tuples = []
-            for message in combined_messages:
-                metadata = {
-                    "search_mode": "sql",
-                    "combined_score": None,  # SQL doesn't provide scores
-                }
-                message_tuples.append((message, metadata))
-            return message_tuples
+            if pg_results:
+                return pg_results
+
+        messages = await self.list_messages(
+            agent_id=agent_id,
+            actor=actor,
+            query_text=query_text,
+            roles=roles,
+            limit=limit,
+            ascending=False,
+        )
+        combined_messages = self._combine_assistant_tool_messages(messages)
+        return [(message, {"search_mode": "sql", "combined_score": None}) for message in combined_messages]
 
     async def search_messages_org_async(
         self,
@@ -1295,52 +1197,29 @@ class MessageManager:
         Raises:
             ValueError: If message embedding or Turbopuffer is not enabled
         """
-        from letta.helpers.tpuf_client import TurbopufferClient, should_use_tpuf_for_messages
+        if not settings.embed_all_messages:
+            raise ValueError("Message search requires settings.embed_all_messages to be enabled.")
 
-        # check if turbopuffer is enabled
-        # TODO: extend to non-Turbopuffer in the future.
-        if not should_use_tpuf_for_messages():
-            raise ValueError("Message search requires message embedding, OpenAI, and Turbopuffer to be enabled.")
+        if not query_text:
+            return []
 
-        # use turbopuffer for search - TurbopufferClient will generate embeddings internally
-        tpuf_client = TurbopufferClient()
-        results = await tpuf_client.query_messages_by_org_id(
-            organization_id=actor.organization_id,
+        pg_results = await self._search_messages_pg_vector(
             actor=actor,
             query_text=query_text,
-            search_mode=search_mode,
-            top_k=limit,
-            roles=roles,
+            limit=limit,
             agent_id=agent_id,
-            project_id=project_id,
-            template_id=template_id,
+            roles=roles,
             conversation_id=conversation_id,
             start_date=start_date,
             end_date=end_date,
         )
-
-        # convert results to MessageSearchResult objects
-        if not results:
-            return []
-
-        # create message mapping
-        message_ids = []
-        embedded_text = {}
-        for msg_dict, _, _ in results:
-            message_ids.append(msg_dict["id"])
-            embedded_text[msg_dict["id"]] = msg_dict["text"]
-        messages = await self.get_messages_by_ids_async(message_ids=message_ids, actor=actor)
-        message_mapping = {message.id: message for message in messages}
-
-        # create search results using list comprehension
         return [
             MessageSearchResult(
-                embedded_text=embedded_text[msg_id],
-                message=message_mapping[msg_id],
-                fts_rank=metadata.get("fts_rank"),
+                embedded_text=self._extract_message_text(message),
+                message=message,
+                fts_rank=None,
                 vector_rank=metadata.get("vector_rank"),
-                rrf_score=rrf_score,
+                rrf_score=metadata.get("combined_score"),
             )
-            for msg_dict, rrf_score, metadata in results
-            if (msg_id := msg_dict.get("id")) in message_mapping
+            for message, metadata in pg_results
         ]

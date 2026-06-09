@@ -882,9 +882,9 @@ async def build_passage_query(
             provider_type=embedding_config.embedding_endpoint_type,
             actor=actor,
         )
-        embeddings = await embedding_client.request_embeddings([query_text], embedding_config)
-        embedded_text = np.array(embeddings[0])
-        embedded_text = np.pad(embedded_text, (0, MAX_EMBEDDING_DIM - embedded_text.shape[0]), mode="constant").tolist()
+        from letta.embeddings.query import embed_search_query
+
+        embedded_text, query_space_id = await embed_search_query(query_text, embedding_config, actor=actor)
 
     # Start with base query for source passages
     source_passages = None
@@ -1098,9 +1098,9 @@ async def build_source_passage_query(
             provider_type=embedding_config.embedding_endpoint_type,
             actor=actor,
         )
-        embeddings = await embedding_client.request_embeddings([query_text], embedding_config)
-        embedded_text = np.array(embeddings[0])
-        embedded_text = np.pad(embedded_text, (0, MAX_EMBEDDING_DIM - embedded_text.shape[0]), mode="constant").tolist()
+        from letta.embeddings.query import apply_embedding_space_guard, embed_search_query
+
+        embedded_text, query_space_id = await embed_search_query(query_text, embedding_config, actor=actor)
 
     # Base query for source passages - use noload to prevent lazy loading which can block the event loop
     query = select(SourcePassage).options(noload(SourcePassage.organization)).where(SourcePassage.organization_id == actor.organization_id)
@@ -1122,6 +1122,7 @@ async def build_source_passage_query(
 
     # Handle text search or vector search
     if embedded_text:
+        query = apply_embedding_space_guard(query, SourcePassage, query_space_id)
         if settings.database_engine is DatabaseChoice.POSTGRES:
             # PostgreSQL with pgvector
             query = query.order_by(SourcePassage.embedding.cosine_distance(embedded_text).asc())
@@ -1207,9 +1208,9 @@ async def build_agent_passage_query(
             provider_type=embedding_config.embedding_endpoint_type,
             actor=actor,
         )
-        embeddings = await embedding_client.request_embeddings([query_text], embedding_config)
-        embedded_text = np.array(embeddings[0])
-        embedded_text = np.pad(embedded_text, (0, MAX_EMBEDDING_DIM - embedded_text.shape[0]), mode="constant").tolist()
+        from letta.embeddings.query import apply_embedding_space_guard, embed_search_query
+
+        embedded_text, query_space_id = await embed_search_query(query_text, embedding_config, actor=actor)
 
     # Base query for passages - use noload to prevent lazy loading which can block the event loop
     if agent_id:
@@ -1240,6 +1241,7 @@ async def build_agent_passage_query(
 
     # Handle text search or vector search
     if embedded_text:
+        query = apply_embedding_space_guard(query, ArchivalPassage, query_space_id)
         if settings.database_engine is DatabaseChoice.POSTGRES:
             # PostgreSQL with pgvector
             query = query.order_by(ArchivalPassage.embedding.cosine_distance(embedded_text).asc())

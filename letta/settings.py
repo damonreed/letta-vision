@@ -475,6 +475,17 @@ class Settings(BaseSettings):
     embed_all_messages: bool = False
     embed_tools: bool = False
 
+    # v0.6.0 multimodal memory
+    vision_context_byte_cap: int = Field(
+        default=20 * 1024 * 1024,
+        description="Provider request wire-byte ceiling for image blocks in chat history (base64-encoded sizes).",
+    )
+    image_caption_model_handle: Optional[str] = Field(
+        default=None,
+        description="Vision chat model handle for three-tier image captioning (distinct from embedding model).",
+    )
+    image_enrichment_max_attempts: int = Field(default=3, description="Max background enrichment retries per image.")
+
     # For encryption
     encryption_key: Optional[str] = None
 

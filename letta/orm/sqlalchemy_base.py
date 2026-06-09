@@ -138,6 +138,7 @@ class SqlalchemyBase(CommonSqlalchemyMetaMixins, Base):
         limit: Optional[int] = 50,
         query_text: Optional[str] = None,
         query_embedding: Optional[List[float]] = None,
+        query_embedding_space_id: Optional[str] = None,
         ascending: bool = True,
         actor: Optional["User"] = None,
         access: Optional[List[Literal["read", "write", "admin"]]] = ["read"],
@@ -199,6 +200,7 @@ class SqlalchemyBase(CommonSqlalchemyMetaMixins, Base):
             limit=limit,
             query_text=query_text,
             query_embedding=query_embedding,
+            query_embedding_space_id=query_embedding_space_id,
             ascending=ascending,
             actor=actor,
             access=access,
@@ -238,6 +240,7 @@ class SqlalchemyBase(CommonSqlalchemyMetaMixins, Base):
         limit: Optional[int] = 50,
         query_text: Optional[str] = None,
         query_embedding: Optional[List[float]] = None,
+        query_embedding_space_id: Optional[str] = None,
         ascending: bool = True,
         actor: Optional["User"] = None,
         access: Optional[List[Literal["read", "write", "admin"]]] = ["read"],
@@ -373,6 +376,10 @@ class SqlalchemyBase(CommonSqlalchemyMetaMixins, Base):
         if query_embedding:
             if not hasattr(cls, "embedding"):
                 raise ValueError(f"Class {cls.__name__} does not have an embedding column")
+
+            query = query.where(cls.embedding.isnot(None))
+            if query_embedding_space_id and hasattr(cls, "embedding_space_id"):
+                query = query.where(cls.embedding_space_id == query_embedding_space_id)
 
             from letta.settings import settings
 

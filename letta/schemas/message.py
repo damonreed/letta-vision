@@ -154,7 +154,10 @@ def tool_return_to_openai_chat_content(
     return parts if parts else ""
 
 
-def user_content_to_openai_chat_content(content: Optional[List]) -> Union[str, List[dict]]:
+def user_content_to_openai_chat_content(
+    content: Optional[List],
+    image_render_decisions: Optional[dict] = None,
+) -> Union[str, List[dict]]:
     """Build OpenAI Chat Completions user message content (string or vision multimodal parts)."""
     if not content:
         return ""
@@ -181,10 +184,18 @@ def user_content_to_openai_chat_content(content: Optional[List]) -> Union[str, L
             if part.text:
                 parts.append({"type": "text", "text": part.text})
         elif isinstance(part, ImageContent):
-            image_url = Message._image_source_to_data_url(part)
+            image_url = Message._image_source_to_data_url(part, image_render_decisions=image_render_decisions)
             if image_url:
                 detail = getattr(part.source, "detail", None) or "auto"
                 parts.append({"type": "image_url", "image_url": {"url": image_url, "detail": detail}})
+            elif getattr(part.source, "type", None) == ImageSourceType.letta:
+                handle = getattr(part.source, "file_id", "image")
+                parts.append(
+                    {
+                        "type": "text",
+                        "text": f"[Image reference {handle} — use fetch_image to view pixels]",
+                    }
+                )
         elif isinstance(part, dict):
             if part.get("type") == "text":
                 text = part.get("text", "")
@@ -1439,6 +1450,7 @@ class Message(BaseMessage):
         native_content: bool = False,
         strip_request_heartbeat: bool = False,
         tool_return_truncation_chars: Optional[int] = None,
+        image_render_decisions: Optional[dict] = None,
     ) -> dict | None:
         """Go from Message class to ChatCompletion message object"""
         assert not (native_content and put_inner_thoughts_in_kwargs), "native_content and put_inner_thoughts_in_kwargs cannot both be true"
@@ -1488,7 +1500,9 @@ class Message(BaseMessage):
                 )
             )
             if has_image_blocks:
-                user_content = user_content_to_openai_chat_content(self.content)
+                user_content = user_content_to_openai_chat_content(
+                    self.content, image_render_decisions=image_render_decisions
+                )
             else:
                 assert text_content is not None, vars(self)
                 user_content = text_content
@@ -1609,6 +1623,7 @@ class Message(BaseMessage):
         put_inner_thoughts_in_kwargs: bool = False,
         use_developer_message: bool = False,
         tool_return_truncation_chars: Optional[int] = None,
+        image_render_decisions: Optional[dict] = None,
     ) -> List[dict]:
         messages = Message.filter_messages_for_llm_api(messages)
         result: List[dict] = []
@@ -1637,6 +1652,7 @@ class Message(BaseMessage):
                 put_inner_thoughts_in_kwargs=put_inner_thoughts_in_kwargs,
                 use_developer_message=use_developer_message,
                 tool_return_truncation_chars=tool_return_truncation_chars,
+                image_render_decisions=image_render_decisions,
             )
             if d is not None:
                 result.append(d)
@@ -1796,7 +1812,10 @@ class Message(BaseMessage):
         return {"type": "input_image", "image_url": image_url, "detail": detail}
 
     @staticmethod
-    def _image_source_to_data_url(image_content: ImageContent) -> Optional[str]:
+    def _image_source_to_data_url(
+        image_content: ImageContent,
+        image_render_decisions: Optional[dict] = None,
+    ) -> Optional[str]:
         source = image_content.source
 
         if source.type == ImageSourceType.base64:
@@ -1810,6 +1829,13 @@ class Message(BaseMessage):
             return getattr(source, "url", None)
 
         if source.type == ImageSourceType.letta:
+            file_id = getattr(source, "file_id", None)
+            if image_render_decisions and file_id:
+                from letta.services.vision.render_policy import RenderTier
+
+                tier = image_render_decisions.get(file_id)
+                if tier == RenderTier.TEXT:
+                    return None
             data = getattr(source, "data", None)
             if not data:
                 return None

@@ -17,6 +17,7 @@ from openai.types.responses import ResponseTextConfigParam
 from openai.types.responses.response_stream_event import ResponseStreamEvent
 
 from letta.constants import LETTA_MODEL_ENDPOINT, REQUEST_HEARTBEAT_PARAM
+from letta.embeddings.util import l2_normalize, prepare_vector_for_write
 from letta.errors import (
     ContextWindowExceededError,
     ErrorCode,
@@ -628,6 +629,10 @@ class OpenAIClient(LLMClientBase):
 
         request_messages = self._apply_system_override(messages, system)
 
+        from letta.services.vision.render_policy import compute_image_render_decisions
+
+        image_render_decisions = compute_image_render_decisions(request_messages, llm_config)
+
         openai_message_list = [
             cast_message_to_subtype(m)
             for m in PydanticMessage.to_openai_dicts_from_list(
@@ -635,6 +640,7 @@ class OpenAIClient(LLMClientBase):
                 put_inner_thoughts_in_kwargs=llm_config.put_inner_thoughts_in_kwargs,
                 use_developer_message=use_developer_message,
                 tool_return_truncation_chars=tool_return_truncation_chars,
+                image_render_decisions=image_render_decisions,
             )
         ]
 
@@ -1167,7 +1173,60 @@ class OpenAIClient(LLMClientBase):
         return response_stream
 
     @trace_method
-    async def request_embeddings(self, inputs: List[str], embedding_config: EmbeddingConfig) -> List[List[float]]:
+    def _embedding_create_kwargs(
+        self,
+        embedding_config: EmbeddingConfig,
+        *,
+        input_type_override: Optional[str] = None,
+    ) -> dict:
+        """Build kwargs for embeddings.create beyond model/input."""
+        create_kwargs: dict = {}
+        if embedding_config.output_dimensionality is not None:
+            create_kwargs["dimensions"] = embedding_config.output_dimensionality
+        input_type = input_type_override or embedding_config.input_type
+        if input_type:
+            create_kwargs["extra_body"] = {"input_type": input_type}
+        return create_kwargs
+
+    def _finalize_embedding_vectors(
+        self,
+        embeddings: List[List[float]],
+        embedding_config: EmbeddingConfig,
+    ) -> List[List[float]]:
+        if not embedding_config.normalize:
+            return embeddings
+        return [prepare_vector_for_write(vec, embedding_config) for vec in embeddings]
+
+    async def request_image_embeddings(
+        self,
+        image_inputs: List[dict],
+        embedding_config: EmbeddingConfig,
+        *,
+        input_type_override: Optional[str] = None,
+    ) -> List[List[float]]:
+        """Request multimodal image embeddings (OpenRouter-compatible input dicts)."""
+        if not image_inputs:
+            return []
+
+        kwargs = self._prepare_client_kwargs_embedding(embedding_config)
+        client = AsyncOpenAI(**kwargs)
+        create_kwargs = self._embedding_create_kwargs(embedding_config, input_type_override=input_type_override)
+
+        response = await client.embeddings.create(
+            model=embedding_config.embedding_model,
+            input=image_inputs,
+            **create_kwargs,
+        )
+        embeddings = [r.embedding for r in response.data]
+        return self._finalize_embedding_vectors(embeddings, embedding_config)
+
+    async def request_embeddings(
+        self,
+        inputs: List[str],
+        embedding_config: EmbeddingConfig,
+        *,
+        input_type_override: Optional[str] = None,
+    ) -> List[List[float]]:
         """Request embeddings given texts and embedding config with chunking and retry logic
 
         Retry strategy prioritizes reducing batch size before chunk size to maintain retrieval quality:
@@ -1208,6 +1267,7 @@ class OpenAIClient(LLMClientBase):
 
         kwargs = self._prepare_client_kwargs_embedding(embedding_config)
         client = AsyncOpenAI(**kwargs)
+        create_kwargs = self._embedding_create_kwargs(embedding_config, input_type_override=input_type_override)
 
         # track results by original index to maintain order
         results = [None] * len(inputs)
@@ -1229,7 +1289,11 @@ class OpenAIClient(LLMClientBase):
                     f"first_input_len={len(chunk_inputs[0]) if chunk_inputs else 0}, "
                     f"model={embedding_config.embedding_model}"
                 )
-                task = client.embeddings.create(model=embedding_config.embedding_model, input=chunk_inputs)
+                task = client.embeddings.create(
+                    model=embedding_config.embedding_model,
+                    input=chunk_inputs,
+                    **create_kwargs,
+                )
                 tasks.append(task)
                 task_metadata.append((start_idx, chunk_inputs, current_batch_size))
 
@@ -1296,7 +1360,13 @@ class OpenAIClient(LLMClientBase):
         else:
             logger.info(f"DIAGNOSTIC: request_embeddings completed in {total_duration:.2f}s")
 
-        return results
+        finalized = []
+        for vec in results:
+            if vec is None:
+                finalized.append(vec)
+            else:
+                finalized.append(prepare_vector_for_write(vec, embedding_config) if embedding_config.normalize else vec)
+        return finalized
 
     @trace_method
     def handle_llm_error(self, e: Exception, llm_config: Optional[LLMConfig] = None) -> Exception:

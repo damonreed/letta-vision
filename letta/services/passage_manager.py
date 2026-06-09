@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import noload
 
 from letta.constants import MAX_EMBEDDING_DIM
+from letta.embeddings.util import prepare_vector_for_write
+from letta.schemas.embedding_config import EmbeddingConfig
 from letta.helpers.decorators import async_redis_cache
 from letta.llm_api.llm_client import LLMClient
 from letta.log import get_logger
@@ -29,6 +31,20 @@ from letta.services.archive_manager import ArchiveManager
 from letta.utils import enforce_types
 
 logger = get_logger(__name__)
+
+
+def _prepare_passage_embedding_fields(data: dict) -> dict:
+    """Write 768-dim vectors to embedding column with space id stamp."""
+    embedding = data.get("embedding")
+    raw_config = data.get("embedding_config")
+    if not embedding or not raw_config:
+        return data
+    config = raw_config if isinstance(raw_config, EmbeddingConfig) else EmbeddingConfig(**raw_config)
+    config = config.ensure_space_id()
+    data["embedding"] = prepare_vector_for_write(embedding, config)
+    data["embedding_config"] = config
+    data["embedding_space_id"] = config.embedding_space_id
+    return data
 
 
 @async_redis_cache(key_func=lambda text, model, endpoint: f"{model}:{endpoint}:{text}")
@@ -145,18 +161,8 @@ class PassageManager:
         if tags:
             tags = list(set(tags))
 
-        # Pad embeddings to MAX_EMBEDDING_DIM for pgvector (only when using Postgres as vector DB)
-        embedding = data["embedding"]
-        if embedding:
-            import numpy as np
-
-            from letta.helpers.tpuf_client import should_use_tpuf
-
-            # Always pad when writing to Postgres vector DB (don't pad for Turbopuffer/Pinecone)
-            if not should_use_tpuf():
-                np_embedding = np.array(embedding)
-                if np_embedding.shape[0] != MAX_EMBEDDING_DIM:
-                    embedding = np.pad(np_embedding, (0, MAX_EMBEDDING_DIM - np_embedding.shape[0]), mode="constant").tolist()
+        data = _prepare_passage_embedding_fields(data)
+        embedding = data.get("embedding")
 
         # Sanitize text to remove null bytes which PostgreSQL rejects
         text = data["text"]
@@ -209,11 +215,6 @@ class PassageManager:
         if not pydantic_passages:
             return []
 
-        import numpy as np
-
-        from letta.helpers.tpuf_client import should_use_tpuf
-
-        use_tpuf = should_use_tpuf()
         passage_objects: List[ArchivalPassage] = []
         all_tags_data: List[tuple] = []  # (passage_index, tags) for creating tags after passages are created
 
@@ -231,12 +232,8 @@ class PassageManager:
                 tags = list(set(tags))
                 all_tags_data.append((idx, tags))
 
-            # Pad embeddings to MAX_EMBEDDING_DIM for pgvector (only when using Postgres as vector DB)
-            embedding = data["embedding"]
-            if embedding and not use_tpuf:
-                np_embedding = np.array(embedding)
-                if np_embedding.shape[0] != MAX_EMBEDDING_DIM:
-                    embedding = np.pad(np_embedding, (0, MAX_EMBEDDING_DIM - np_embedding.shape[0]), mode="constant").tolist()
+            data = _prepare_passage_embedding_fields(data)
+            embedding = data.get("embedding")
 
             # Sanitize text to remove null bytes which PostgreSQL rejects
             text = data["text"]
@@ -299,18 +296,8 @@ class PassageManager:
         if tags:
             tags = list(set(tags))
 
-        # Pad embeddings to MAX_EMBEDDING_DIM for pgvector (only when using Postgres as vector DB)
-        embedding = data["embedding"]
-        if embedding:
-            import numpy as np
-
-            from letta.helpers.tpuf_client import should_use_tpuf
-
-            # Always pad when writing to Postgres vector DB (don't pad for Turbopuffer/Pinecone)
-            if not should_use_tpuf():
-                np_embedding = np.array(embedding)
-                if np_embedding.shape[0] != MAX_EMBEDDING_DIM:
-                    embedding = np.pad(np_embedding, (0, MAX_EMBEDDING_DIM - np_embedding.shape[0]), mode="constant").tolist()
+        data = _prepare_passage_embedding_fields(data)
+        embedding = data.get("embedding")
 
         # Sanitize text to remove null bytes which PostgreSQL rejects
         text = data["text"]
@@ -404,24 +391,15 @@ class PassageManager:
 
             data = p.model_dump(to_orm=True)
 
-            # Pad embeddings to MAX_EMBEDDING_DIM for pgvector (only when using Postgres as vector DB)
-            embedding = data["embedding"]
-            if embedding:
-                import numpy as np
-
-                from letta.helpers.tpuf_client import should_use_tpuf
-
-                # Always pad when writing to Postgres vector DB (don't pad for Turbopuffer/Pinecone)
-                if not should_use_tpuf():
-                    np_embedding = np.array(embedding)
-                    if np_embedding.shape[0] != MAX_EMBEDDING_DIM:
-                        embedding = np.pad(np_embedding, (0, MAX_EMBEDDING_DIM - np_embedding.shape[0]), mode="constant").tolist()
+            data = _prepare_passage_embedding_fields(data)
+            embedding = data.get("embedding")
 
             common_fields = {
                 "id": data.get("id"),
                 "text": data["text"],
                 "embedding": embedding,
-                "embedding_config": data["embedding_config"],
+                "embedding_config": data.get("embedding_config"),
+                "embedding_space_id": data.get("embedding_space_id"),
                 "organization_id": data["organization_id"],
                 "metadata_": data.get("metadata_", {}),
                 "tags": data.get("tags"),
@@ -458,24 +436,15 @@ class PassageManager:
 
             data = p.model_dump(to_orm=True)
 
-            # Pad embeddings to MAX_EMBEDDING_DIM for pgvector (always pad when writing to Postgres)
-            embedding = data["embedding"]
-            if embedding:
-                import numpy as np
-
-                from letta.helpers.tpuf_client import should_use_tpuf
-
-                # Always pad when writing to Postgres vector DB (don't pad for Turbopuffer/Pinecone)
-                if not should_use_tpuf():
-                    np_embedding = np.array(embedding)
-                    if np_embedding.shape[0] != MAX_EMBEDDING_DIM:
-                        embedding = np.pad(np_embedding, (0, MAX_EMBEDDING_DIM - np_embedding.shape[0]), mode="constant").tolist()
+            data = _prepare_passage_embedding_fields(data)
+            embedding = data.get("embedding")
 
             common_fields = {
                 "id": data.get("id"),
                 "text": data["text"],
                 "embedding": embedding,
-                "embedding_config": data["embedding_config"],
+                "embedding_config": data.get("embedding_config"),
+                "embedding_space_id": data.get("embedding_space_id"),
                 "organization_id": data["organization_id"],
                 "metadata_": data.get("metadata_", {}),
                 "tags": data.get("tags"),
@@ -695,20 +664,8 @@ class PassageManager:
                 # Update the tags on the passage object
                 setattr(curr_passage, "tags", new_tags)
 
-            # Pad embeddings if needed (only when using Postgres as vector DB)
             if update_data.get("embedding"):
-                import numpy as np
-
-                from letta.helpers.tpuf_client import should_use_tpuf
-
-                # Always pad when writing to Postgres vector DB (don't pad for Turbopuffer/Pinecone)
-                if not should_use_tpuf():
-                    embedding = update_data["embedding"]
-                    np_embedding = np.array(embedding)
-                    if np_embedding.shape[0] != MAX_EMBEDDING_DIM:
-                        update_data["embedding"] = np.pad(
-                            np_embedding, (0, MAX_EMBEDDING_DIM - np_embedding.shape[0]), mode="constant"
-                        ).tolist()
+                update_data = _prepare_passage_embedding_fields(update_data)
 
             # Update other fields
             for key, value in update_data.items():
@@ -740,20 +697,8 @@ class PassageManager:
             # Update the database record with values from the provided record
             update_data = passage.model_dump(to_orm=True, exclude_unset=True, exclude_none=True)
 
-            # Pad embeddings if needed (only when using Postgres as vector DB)
             if update_data.get("embedding"):
-                import numpy as np
-
-                from letta.helpers.tpuf_client import should_use_tpuf
-
-                # Always pad when writing to Postgres vector DB (don't pad for Turbopuffer/Pinecone)
-                if not should_use_tpuf():
-                    embedding = update_data["embedding"]
-                    np_embedding = np.array(embedding)
-                    if np_embedding.shape[0] != MAX_EMBEDDING_DIM:
-                        update_data["embedding"] = np.pad(
-                            np_embedding, (0, MAX_EMBEDDING_DIM - np_embedding.shape[0]), mode="constant"
-                        ).tolist()
+                update_data = _prepare_passage_embedding_fields(update_data)
 
             for key, value in update_data.items():
                 setattr(curr_passage, key, value)

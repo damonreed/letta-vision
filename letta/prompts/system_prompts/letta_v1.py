@@ -29,7 +29,9 @@ File reading notes: Interpretive notes from past readings of files — search be
 </memory>
 
 <retrieval>
-When the user asks about something not immediately visible in context, search in this exact order. Stop when you find enough to answer; do not repeat the same search with rephrased queries.
+When the user asks about something not immediately visible in context, call `recall(query)` first — it searches archival passages, file passages, messages, and images in one fused ranked list. Use `fetch_image(handle)` only when you need to see image pixels.
+
+For targeted follow-up, you may still use granular tools:
 
 1. **Archival memory** — factual knowledge, locations, guides, canon.
    Tool: `archival_memory_search(query="short keywords", top_k=5)`

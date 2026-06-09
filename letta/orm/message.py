@@ -7,10 +7,11 @@ if TYPE_CHECKING:
     from letta.orm.step import Step
 
 from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMessageToolCall as OpenAIToolCall
-from sqlalchemy import BigInteger, FetchedValue, ForeignKey, Index, event, text
+from sqlalchemy import BigInteger, Column, FetchedValue, ForeignKey, Index, event, text
 from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 
-from letta.orm.custom_columns import ApprovalsColumn, MessageContentColumn, ToolCallColumn, ToolReturnColumn
+from letta.constants import DEPLOYMENT_EMBEDDING_DIM
+from letta.orm.custom_columns import ApprovalsColumn, CommonVector, EmbeddingConfigColumn, MessageContentColumn, ToolCallColumn, ToolReturnColumn
 from letta.orm.mixins import AgentMixin, OrganizationMixin
 from letta.orm.sqlalchemy_base import SqlalchemyBase
 from letta.schemas.enums import MessageRole
@@ -81,6 +82,16 @@ class Message(SqlalchemyBase, OrganizationMixin, AgentMixin):
     approvals: Mapped[Optional[List[ApprovalReturn | ToolReturn]]] = mapped_column(
         ApprovalsColumn, nullable=True, doc="Approval responses for tool call requests"
     )
+
+    if settings.database_engine is DatabaseChoice.POSTGRES:
+        from pgvector.sqlalchemy import Vector
+
+        embedding: Mapped[Optional[list]] = mapped_column(Vector(DEPLOYMENT_EMBEDDING_DIM), nullable=True)
+    else:
+        embedding = Column(CommonVector, nullable=True)
+    embedding_config: Mapped[Optional[dict]] = mapped_column(EmbeddingConfigColumn, nullable=True)
+    embedding_space_id: Mapped[Optional[str]] = mapped_column(nullable=True, index=True)
+    embedding_version: Mapped[Optional[int]] = mapped_column(nullable=True)
 
     # Monotonically increasing sequence for efficient/correct listing
     sequence_id: Mapped[int] = mapped_column(

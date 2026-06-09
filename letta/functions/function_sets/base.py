@@ -161,6 +161,33 @@ def conversation_search(
     return results_str
 
 
+async def recall(self: "Agent", query: str, limit: int = 10) -> str:
+    """
+    Unified hybrid recall over archival passages, file passages, messages, and images.
+
+    Args:
+        query: Natural-language search query.
+        limit: Maximum fused results to return.
+
+    Returns:
+        Ranked hits with layer, handle, score, and snippet for reference-then-fetch.
+    """
+    raise NotImplementedError("This should never be invoked directly. Contact Letta if you see this error message.")
+
+
+async def fetch_image(self: "Agent", handle: str) -> str:
+    """
+    Fetch full image pixels for an image handle returned by recall.
+
+    Args:
+        handle: Image record id (image-<uuid>).
+
+    Returns:
+        Data URL with base64-encoded image bytes.
+    """
+    raise NotImplementedError("This should never be invoked directly. Contact Letta if you see this error message.")
+
+
 async def archival_memory_insert(self: "Agent", content: str, tags: Optional[list[str]] = None) -> Optional[str]:
     """
     Add information to long-term archival memory for later retrieval.

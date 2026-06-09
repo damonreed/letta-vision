@@ -41,6 +41,8 @@ class LettaCoreToolExecutor(ToolExecutor):
         function_map = {
             "send_message": self.send_message,
             "conversation_search": self.conversation_search,
+            "recall": self.recall,
+            "fetch_image": self.fetch_image,
             "archival_memory_search": self.archival_memory_search,
             "archival_memory_insert": self.archival_memory_insert,
             "core_memory_append": self.core_memory_append,
@@ -77,6 +79,29 @@ class LettaCoreToolExecutor(ToolExecutor):
 
     async def send_message(self, agent_state: AgentState, actor: User, message: str) -> Optional[str]:
         return "Sent message successfully."
+
+    async def recall(self, agent_state: AgentState, actor: User, query: str, limit: int = 10) -> str:
+        from letta.services.recall.recall_service import recall as recall_service
+
+        hits = await recall_service(query, actor, limit=limit, agent_id=agent_state.id)
+        if not hits:
+            return "No results."
+        return "\n\n".join(f"[{h.layer}] handle={h.handle} score={h.score:.4f}\n{h.snippet}" for h in hits)
+
+    async def fetch_image(self, agent_state: AgentState, actor: User, handle: str) -> str:
+        import base64
+
+        from letta.services.image_manager import ImageManager
+        from letta.services.object_store.client import get_object_store_client
+
+        mgr = ImageManager()
+        image = await mgr.get_by_id_async(handle, actor)
+        if not image:
+            return f"Image {handle} not found."
+        store = get_object_store_client()
+        raw = await store.get_bytes(image.object_url_full)
+        b64 = base64.standard_b64encode(raw).decode("ascii")
+        return f"data:{image.media_type};base64,{b64}"
 
     async def conversation_search(
         self,

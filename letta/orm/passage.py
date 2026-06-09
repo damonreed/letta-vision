@@ -4,7 +4,7 @@ from sqlalchemy import JSON, Column, Index
 from sqlalchemy.orm import Mapped, declared_attr, mapped_column, relationship
 
 from letta.config import LettaConfig
-from letta.constants import MAX_EMBEDDING_DIM
+from letta.constants import DEPLOYMENT_EMBEDDING_DIM, MAX_EMBEDDING_DIM
 from letta.orm.custom_columns import CommonVector, EmbeddingConfigColumn
 from letta.orm.mixins import ArchiveMixin, FileMixin, OrganizationMixin, SourceMixin
 from letta.orm.sqlalchemy_base import SqlalchemyBase
@@ -27,16 +27,23 @@ class BasePassage(SqlalchemyBase, OrganizationMixin):
     id: Mapped[str] = mapped_column(primary_key=True, doc="Unique passage identifier")
     text: Mapped[str] = mapped_column(doc="Passage text content")
     embedding_config: Mapped[Optional[dict]] = mapped_column(EmbeddingConfigColumn, nullable=True, doc="Embedding configuration")
+    embedding_space_id: Mapped[Optional[str]] = mapped_column(nullable=True, index=True, doc="Embedding space identifier")
     metadata_: Mapped[dict] = mapped_column(JSON, doc="Additional metadata")
     # dual storage: json column for fast retrieval, junction table for efficient queries
     tags: Mapped[Optional[List[str]]] = mapped_column(JSON, nullable=True, doc="Tags associated with this passage")
 
-    # Vector embedding field based on database type - nullable for text-only search
+    # v0.6.0: 768-dim embedding for new writes; legacy 4096 column retained for historic rows
     if settings.database_engine is DatabaseChoice.POSTGRES:
         from pgvector.sqlalchemy import Vector
 
-        embedding = mapped_column(Vector(MAX_EMBEDDING_DIM), nullable=True)
+        embedding_legacy_4096: Mapped[Optional[list]] = mapped_column(
+            Vector(MAX_EMBEDDING_DIM), nullable=True, doc="Historic padded vectors (migration FR)"
+        )
+        embedding: Mapped[Optional[list]] = mapped_column(
+            Vector(DEPLOYMENT_EMBEDDING_DIM), nullable=True, doc="Native-dim embedding for vector search"
+        )
     else:
+        embedding_legacy_4096 = Column(CommonVector, nullable=True)
         embedding = Column(CommonVector, nullable=True)
 
     @declared_attr

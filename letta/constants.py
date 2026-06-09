@@ -43,7 +43,6 @@ LETTA_MULTI_AGENT_TOOL_MODULE_NAME = "letta.functions.function_sets.multi_agent"
 LETTA_VOICE_TOOL_MODULE_NAME = "letta.functions.function_sets.voice"
 LETTA_BUILTIN_TOOL_MODULE_NAME = "letta.functions.function_sets.builtin"
 LETTA_FILES_TOOL_MODULE_NAME = "letta.functions.function_sets.files"
-
 LETTA_TOOL_MODULE_NAMES = [
     LETTA_CORE_TOOL_MODULE_NAME,
     LETTA_MULTI_AGENT_TOOL_MODULE_NAME,
@@ -91,6 +90,7 @@ DEFAULT_MIN_MESSAGE_BUFFER_LENGTH = 15
 
 # embeddings
 MAX_EMBEDDING_DIM = 4096  # maximum supported embeding size - do NOT change or else DBs will need to be reset
+DEPLOYMENT_EMBEDDING_DIM = 768  # native storage width for v0.6.0+ vectors (HNSW-indexable)
 DEFAULT_EMBEDDING_CHUNK_SIZE = 300
 DEFAULT_EMBEDDING_DIM = 1024
 
@@ -112,7 +112,14 @@ DEFAULT_HUMAN_BLOCK_DESCRIPTION = "The human block: Stores key details about the
 SEND_MESSAGE_TOOL_NAME = "send_message"
 # Base tools that cannot be edited, as they access agent state directly
 # Note that we don't include "conversation_search_date" for now
-BASE_TOOLS = [SEND_MESSAGE_TOOL_NAME, "conversation_search", "archival_memory_insert", "archival_memory_search"]
+BASE_TOOLS = [
+    SEND_MESSAGE_TOOL_NAME,
+    "recall",
+    "fetch_image",
+    "conversation_search",
+    "archival_memory_insert",
+    "archival_memory_search",
+]
 # Archival memory (passages) remains supported; distinct from file reading notes (write_file_archive / search_file_archives).
 DEPRECATED_LETTA_TOOLS: list[str] = []
 # Base memory tools CAN be edited, and are added by default by the server

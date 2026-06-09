@@ -16,6 +16,7 @@ class PrimitiveType(str, Enum):
     GROUP = "group"
     BLOCK = "block"
     FILE = "file"
+    IMAGE = "image"
     FOLDER = "source"  # Note: folder IDs use "source" prefix for historical reasons
     SOURCE = "source"
     TOOL = "tool"

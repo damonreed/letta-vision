@@ -10,6 +10,7 @@ from letta.server.rest_api.routers.v1.folders import router as folders_router
 from letta.server.rest_api.routers.v1.git_http import router as git_http_router
 from letta.server.rest_api.routers.v1.groups import router as groups_router
 from letta.server.rest_api.routers.v1.health import router as health_router
+from letta.server.rest_api.routers.v1.images import router as images_router
 from letta.server.rest_api.routers.v1.identities import router as identities_router
 from letta.server.rest_api.routers.v1.internal_agents import router as internal_agents_router
 from letta.server.rest_api.routers.v1.internal_blocks import router as internal_blocks_router
@@ -57,6 +58,7 @@ ROUTERS = [
     blocks_router,
     jobs_router,
     health_router,
+    images_router,
     sandbox_configs_router,
     prompts_router,
     providers_router,
