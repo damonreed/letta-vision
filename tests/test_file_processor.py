@@ -58,9 +58,8 @@ class TestOpenAIEmbedder:
         assert len(passages) == 2
         assert passages[0].text == "chunk 1"
         assert passages[1].text == "chunk 2"
-        # embeddings are padded to MAX_EMBEDDING_DIM, so check first 3 values
-        assert passages[0].embedding[:3] == [0.1, 0.2, 0.3]
-        assert passages[1].embedding[:3] == [0.4, 0.5, 0.6]
+        assert passages[0].embedding == [0.1, 0.2, 0.3]
+        assert passages[1].embedding == [0.4, 0.5, 0.6]
         assert passages[0].file_id == file_id
         assert passages[0].source_id == source_id
 
@@ -94,7 +93,7 @@ class TestOpenAIEmbedder:
 
         # should still get all 4 passages despite the retry
         assert len(passages) == 4
-        assert all(len(p.embedding) == 4096 for p in passages)  # padded to MAX_EMBEDDING_DIM
+        assert all(len(p.embedding) == 2 for p in passages)
         # verify multiple calls were made (original + retries)
         assert call_count >= 2
 
