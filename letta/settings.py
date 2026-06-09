@@ -482,7 +482,7 @@ class Settings(BaseSettings):
     )
     image_caption_model_handle: Optional[str] = Field(
         default=None,
-        description="Vision chat model handle for three-tier image captioning (distinct from embedding model).",
+        description="Vision chat model for three-tier captioning: caption 20-50 words, description 100-200 words, details 1000 words.",
     )
     image_enrichment_max_attempts: int = Field(default=3, description="Max background enrichment retries per image.")
 

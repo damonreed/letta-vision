@@ -66,6 +66,50 @@ def _collect_letta_images(messages: List[Message]) -> List[tuple[str, bool]]:
     return found
 
 
+def find_image_needing_1mp_now(
+    messages: List[Message],
+    llm_config: LLMConfig,
+    *,
+    image_metadata: Optional[Dict[str, dict]] = None,
+) -> Optional[str]:
+    """Return the first current-turn image that needs an on-demand 1MP bake."""
+    if not conversation_has_user_images(messages):
+        return None
+    if not supports_image_blocks_in_history(llm_config):
+        return None
+
+    cap = settings.vision_context_byte_cap
+    remaining = cap
+    demoted = False
+    meta = image_metadata or {}
+
+    for img_id, is_current in _collect_letta_images(messages):
+        if demoted:
+            return None
+
+        info = meta.get(img_id, {})
+        full_size = info.get("file_size_full") or 0
+        onemp_size = info.get("file_size_1mp")
+
+        if is_current:
+            if full_size <= remaining:
+                remaining -= full_size
+                continue
+            if onemp_size is None and not info.get("object_url_1mp"):
+                return img_id
+            if onemp_size and onemp_size <= remaining:
+                remaining -= onemp_size
+            else:
+                demoted = True
+        else:
+            if onemp_size and onemp_size <= remaining:
+                remaining -= onemp_size
+            else:
+                demoted = True
+
+    return None
+
+
 def compute_image_render_decisions(
     messages: List[Message],
     llm_config: LLMConfig,
@@ -100,12 +144,9 @@ def compute_image_render_decisions(
                 remaining -= full_size
             else:
                 if onemp_size is None:
-                    from letta.services.vision.image_derivative import generate_1mp_derivative
-                    from letta.services.object_store.client import get_object_store_client
-                    from letta.services.image_manager import ImageManager
-
-                    # on-demand 1MP — caller should persist via enrich path; size estimate only here
-                    onemp_size = full_size
+                    decisions[img_id] = RenderTier.TEXT
+                    demoted = True
+                    continue
                 if onemp_size <= remaining:
                     decisions[img_id] = RenderTier.ONE_MP
                     remaining -= onemp_size

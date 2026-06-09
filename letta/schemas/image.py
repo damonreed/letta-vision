@@ -25,9 +25,9 @@ class PydanticImage(OrmMetadataBase):
     file_size_1mp: Optional[int] = None
     provenance: Literal["uploaded", "generated"]
     generation_prompt: Optional[str] = None
-    caption: Optional[str] = None
-    description: Optional[str] = None
-    details: Optional[str] = None
+    caption: Optional[str] = Field(default=None, description="Short label, 20-50 words.")
+    description: Optional[str] = Field(default=None, description="Search-oriented summary, 100-200 words.")
+    details: Optional[str] = Field(default=None, description="Thorough literal description, 1000 words.")
     embedding: Optional[list[float]] = None
     embedding_config: Optional[EmbeddingConfig] = None
     embedding_space_id: Optional[str] = None
@@ -37,6 +37,14 @@ class PydanticImage(OrmMetadataBase):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     is_deleted: bool = False
+
+
+class ImageMetadataUpdate(BaseModel):
+    """User-editable image text tiers: caption (20-50 words), description (100-200 words), details (1000 words)."""
+
+    caption: Optional[str] = Field(default=None, description="Short label, 20-50 words.")
+    description: Optional[str] = Field(default=None, description="Search-oriented summary, 100-200 words.")
+    details: Optional[str] = Field(default=None, description="Thorough literal description, 1000 words.")
 
 
 class ImageCreate(BaseModel):

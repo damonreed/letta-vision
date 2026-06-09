@@ -110,9 +110,9 @@ images
   file_size_1mp       Optional[int]      # bytes of 1MP derivative
   provenance          str                # "uploaded" | "generated"
   generation_prompt   Optional[str]      # ZapImage/tool prompt, metadata only (NOT the description)
-  caption             Optional[str]      # 20–50 tok  — inline placeholder gist; seeds message embed
-  description         Optional[str]      # 100–200 tok — search-result payload, tuned for the index
-  details             Optional[str]      # ~1000 tok  — deep-review text
+  caption             Optional[str]      # 20–50 words — inline placeholder gist; seeds message embed
+  description         Optional[str]      # 100–200 words — search-result payload, tuned for the index
+  details             Optional[str]      # 1000 words — deep-review text
   embedding           Vector(768)/CommonVector, nullable   # native image (pixel) embedding
   embedding_config    EmbeddingConfigColumn, nullable
   embedding_space_id  Optional[str], index
@@ -197,14 +197,14 @@ The turn closes immediately; the message persists with the reference.
 
 **Background phase (fire-and-forget, idempotent, retryable):**
 1. Generate the ~1MP derivative, store it, set `object_url_1mp` + `file_size_1mp`. (Needed for *older* turns, so it is normally ready well before the middle render tier reaches it. The one exception — an oversize image on the **current** turn whose 1MP isn't baked yet — is handled by on-demand generation in §10.) `file_size_1mp` (and `file_size_full`) are stored as the **base64-encoded wire size**, not raw disk bytes, because that is what the render-policy byte budget (§10) must count.
-2. **One structured VLM call** returns all three text tiers (`caption`, `description`, `details`) — consistent and cheaper than three calls. The captioning model is a vision chat model configured by its own setting (`settings.image_caption_model_handle`), distinct from both the embedding model and the agent's runtime chat model. **Description is generated from pixels** (captures hallucinations / emergent detail / deviations), NOT from the generation prompt; the prompt is stored separately as provenance. Description is written for the index first (dense, literal content nouns), display second.
+2. **One structured VLM call** returns all three text tiers (`caption`, `description`, `details`) — consistent and cheaper than three calls. Target lengths: **caption 20–50 words**, **description 100–200 words**, **details 1000 words**. The captioning model is a vision chat model configured by its own setting (`settings.image_caption_model_handle`), distinct from both the embedding model and the agent's runtime chat model. **Description is generated from pixels** (captures hallucinations / emergent detail / deviations), NOT from the generation prompt; the prompt is stored separately as provenance. Description is written for the index first (dense, literal content nouns), display second.
 3. Pixel-embed the image via gemini-2 image input → 768, normalized, stamped `embedding_space_id`. Store on the record.
 4. Set `enrichment_status=complete`.
 5. **Push** the owning message's re-embed (§ below) — do not poll.
 
 **Message embedding & the two-embed dance (uses idempotency from §8):**
 - At turn end, the message embeds normally (same path as a no-image turn) with the `image_ref`'s empty caption — `embedding_version` = e.g. 1. The turn is immediately findable by its words.
-- When enrichment completes, it pushes a message re-embed whose text now includes the image **caption gist** (short — a sentence, not the 150-tok description, so the conversational signal isn't diluted), at a higher `embedding_version`. Replace-not-append + monotonic means this supersedes the empty-caption vector regardless of ordering races.
+- When enrichment completes, it pushes a message re-embed whose text now includes the image **caption gist** (short — a sentence, not the 100–200 word description, so the conversational signal isn't diluted), at a higher `embedding_version`. Replace-not-append + monotonic means this supersedes the empty-caption vector regardless of ordering races.
 
 **Failure handling:**
 - Background enrichment retries to a bound (`settings.image_enrichment_max_attempts`, default e.g. 3), incrementing `enrichment_attempts`.

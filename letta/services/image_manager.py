@@ -69,6 +69,25 @@ class ImageManager:
 
     @enforce_types
     @trace_method
+    async def update_metadata_async(
+        self,
+        image_id: str,
+        actor: PydanticUser,
+        *,
+        caption: Optional[str] = None,
+        description: Optional[str] = None,
+        details: Optional[str] = None,
+    ) -> Optional[PydanticImage]:
+        async with db_registry.async_session() as session:
+            row = await ImageRecord.read_async(db_session=session, identifier=image_id, actor=actor)
+            row.caption = caption
+            row.description = description
+            row.details = details
+            updated = await row.update_async(session, actor=actor)
+            return updated.to_pydantic()
+
+    @enforce_types
+    @trace_method
     async def delete_async(self, image_id: str, actor: PydanticUser) -> bool:
         async with db_registry.async_session() as session:
             row = await ImageRecord.read_async(db_session=session, identifier=image_id, actor=actor)

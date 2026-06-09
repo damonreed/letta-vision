@@ -13,8 +13,12 @@ from letta.schemas.message import Message
 from letta.schemas.user import User as PydanticUser
 from letta.services.image_manager import ImageManager
 from letta.services.object_store.client import get_object_store_client
-from letta.services.vision.image_derivative import generate_1mp_derivative
-from letta.services.vision.render_policy import RenderTier, compute_image_render_decisions
+from letta.services.vision.image_derivative import generate_1mp_now
+from letta.services.vision.render_policy import (
+    RenderTier,
+    compute_image_render_decisions,
+    find_image_needing_1mp_now,
+)
 
 logger = get_logger(__name__)
 
@@ -26,14 +30,7 @@ async def _load_image_metadata(image_ids: set[str], actor: PydanticUser) -> Dict
         record = await manager.get_by_id_async(image_id, actor)
         if not record:
             continue
-        meta[image_id] = {
-            "file_size_full": record.file_size_full or 0,
-            "file_size_1mp": record.file_size_1mp,
-            "object_url_full": record.object_url_full,
-            "object_url_1mp": record.object_url_1mp,
-            "media_type": record.media_type,
-            "description": record.description or record.caption,
-        }
+        meta[image_id] = _metadata_entry_from_record(record)
     return meta
 
 
@@ -48,6 +45,40 @@ def _collect_letta_image_ids(messages: List[Message]) -> set[str]:
     return ids
 
 
+def _metadata_entry_from_record(record) -> dict:
+    return {
+        "file_size_full": record.file_size_full or 0,
+        "file_size_1mp": record.file_size_1mp,
+        "object_url_full": record.object_url_full,
+        "object_url_1mp": record.object_url_1mp,
+        "media_type": record.media_type,
+        "description": record.description or record.caption,
+    }
+
+
+async def _ensure_1mp_derivatives_for_render(
+    messages: List[Message],
+    metadata: Dict[str, dict],
+    llm_config: LLMConfig,
+    actor: PydanticUser,
+) -> Dict[str, dict]:
+    """Bake and persist any 1MP derivatives required by the render-policy walk."""
+    updated = dict(metadata)
+    manager = ImageManager()
+    max_passes = len(_collect_letta_image_ids(messages)) + 1
+
+    for _ in range(max_passes):
+        image_id = find_image_needing_1mp_now(messages, llm_config, image_metadata=updated)
+        if not image_id:
+            break
+        await generate_1mp_now(image_id, actor)
+        record = await manager.get_by_id_async(image_id, actor)
+        if record:
+            updated[image_id] = _metadata_entry_from_record(record)
+
+    return updated
+
+
 async def prepare_messages_for_vision_llm(
     messages: List[Message],
     llm_config: LLMConfig,
@@ -60,6 +91,7 @@ async def prepare_messages_for_vision_llm(
 
     hydrated = copy.deepcopy(messages)
     metadata = await _load_image_metadata(image_ids, actor)
+    metadata = await _ensure_1mp_derivatives_for_render(hydrated, metadata, llm_config, actor)
     decisions = compute_image_render_decisions(hydrated, llm_config, image_metadata=metadata)
     store = get_object_store_client()
 
@@ -83,13 +115,10 @@ async def prepare_messages_for_vision_llm(
                     block.source.media_type = media_type
                 elif tier == RenderTier.ONE_MP:
                     key = info.get("object_url_1mp")
-                    if key:
-                        raw = await store.get_bytes(key)
-                    elif info.get("object_url_full"):
-                        raw = await store.get_bytes(info["object_url_full"])
-                        raw, media_type, _ = generate_1mp_derivative(raw, media_type)
-                    else:
+                    if not key:
+                        logger.warning("ONE_MP tier for %s but object_url_1mp missing; skipping hydration", file_id)
                         continue
+                    raw = await store.get_bytes(key)
                     block.source.data = base64.standard_b64encode(raw).decode("ascii")
                     block.source.media_type = media_type
             except Exception as exc:

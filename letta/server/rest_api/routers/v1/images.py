@@ -3,11 +3,11 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 
-from letta.schemas.image import PydanticImage
+from letta.schemas.image import ImageMetadataUpdate, PydanticImage
 from letta.schemas.user import User as PydanticUser
 from letta.server.rest_api.dependencies import HeaderParams, get_headers, get_letta_server
 from letta.server.server import SyncServer
-from letta.services.image_ingest import enrich_image_background
+from letta.services.image_ingest import schedule_image_re_enrichment
 from letta.services.image_manager import ImageManager
 from letta.services.object_store.client import get_object_store_client
 
@@ -40,6 +40,34 @@ async def get_image(
     return image
 
 
+@router.patch("/{image_id}", response_model=PydanticImage)
+async def update_image_metadata(
+    image_id: str,
+    body: ImageMetadataUpdate,
+    server: SyncServer = Depends(get_letta_server),
+    headers: HeaderParams = Depends(get_headers),
+):
+    actor = await server.user_manager.get_actor_or_default_async(actor_id=headers.actor_id)
+    mgr = ImageManager()
+
+    def _norm(value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
+    updated = await mgr.update_metadata_async(
+        image_id,
+        actor,
+        caption=_norm(body.caption),
+        description=_norm(body.description),
+        details=_norm(body.details),
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Image not found")
+    return updated
+
+
 @router.delete("/{image_id}")
 async def delete_image(
     image_id: str,
@@ -59,8 +87,12 @@ async def re_enrich_image(
     headers: HeaderParams = Depends(get_headers),
 ):
     actor = await server.user_manager.get_actor_or_default_async(actor_id=headers.actor_id)
-    await enrich_image_background(image_id, actor)
-    return {"ok": True}
+    mgr = ImageManager()
+    image = await mgr.get_by_id_async(image_id, actor)
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+    await schedule_image_re_enrichment(image_id, actor)
+    return {"ok": True, "enrichment_status": "pending"}
 
 
 @router.get("/{image_id}/content")

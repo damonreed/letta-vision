@@ -5,7 +5,11 @@ import pytest
 from letta.schemas.enums import MessageRole
 from letta.schemas.letta_message_content import Base64Image, ImageContent, TextContent
 from letta.schemas.message import Message, ToolReturn
-from letta.services.image_ingest import ingest_images_in_message
+from letta.services.image_ingest import (
+    _extract_assistant_text,
+    _parse_caption_json,
+    ingest_images_in_message,
+)
 
 
 @pytest.mark.asyncio
@@ -58,3 +62,25 @@ async def test_ingest_images_in_tool_return_uses_generated_provenance(monkeypatc
     func_response = msg.tool_returns[0].func_response
     assert func_response[1].source.type == "letta"
     assert func_response[1].source.file_id == "image-test-2"
+
+
+def test_parse_caption_json_plain_object():
+    parsed = _parse_caption_json(
+        '{"caption": "Red apple", "description": "A red apple on wood", "details": "Close-up fruit"}'
+    )
+    assert parsed["caption"] == "Red apple"
+    assert parsed["description"] == "A red apple on wood"
+    assert parsed["details"] == "Close-up fruit"
+
+
+def test_parse_caption_json_markdown_fence():
+    parsed = _parse_caption_json(
+        '```json\n{"caption": "Cat", "description": "Orange tabby cat", "details": "Sitting on sofa"}\n```'
+    )
+    assert parsed["caption"] == "Cat"
+    assert parsed["description"] == "Orange tabby cat"
+
+
+def test_extract_assistant_text_openai_shape():
+    text = _extract_assistant_text({"choices": [{"message": {"content": "OK"}}]})
+    assert text == "OK"

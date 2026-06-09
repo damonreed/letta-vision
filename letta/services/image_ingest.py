@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import base64
+import json
+import re
 from datetime import datetime, timezone
 from typing import List, Literal, Optional, Union
 
@@ -11,14 +13,16 @@ from letta.embeddings.util import prepare_vector_for_write
 from letta.llm_api.llm_client import LLMClient
 from letta.log import get_logger
 from letta.orm.image import ImageRecord
-from letta.schemas.enums import MessageRole
+from letta.schemas.enums import AgentType, MessageRole
 from letta.schemas.letta_message_content import (
     Base64Image,
     ImageContent,
     ImageSourceType,
     LettaImage,
     MessageContentType,
+    TextContent,
 )
+from letta.schemas.llm_config import LLMConfig
 from letta.schemas.message import Message as PydanticMessage
 from letta.schemas.user import User as PydanticUser
 from letta.services.image_manager import ImageManager
@@ -30,6 +34,68 @@ from letta.utils import fire_and_forget
 logger = get_logger(__name__)
 
 ImageProvenance = Literal["uploaded", "generated"]
+
+_CAPTION_FALLBACK = {
+    "caption": "Image attached to conversation.",
+    "description": "An image was shared in this conversation.",
+    "details": "Image content available via fetch_image.",
+}
+
+_CAPTION_PROMPT = (
+    "Describe this image. Respond with a single JSON object only (no markdown fences) "
+    "with exactly these keys:\n"
+    '- "caption": 20-50 words, concise label\n'
+    '- "description": 100-200 words, literal content nouns for search indexing\n'
+    '- "details": 1000 words, thorough literal description\n'
+    "Base every field on pixels only, not assumptions."
+)
+
+
+def _fallback_captions() -> dict:
+    return dict(_CAPTION_FALLBACK)
+
+
+def _extract_assistant_text(response: dict) -> str:
+    choices = response.get("choices") or []
+    if not choices:
+        return ""
+    msg = choices[0].get("message") or {}
+    content = msg.get("content")
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        return "".join(
+            part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") == "text"
+        ).strip()
+    from letta.llm_api.minimax_openai import extract_reasoning_from_message_data
+
+    reasoning = extract_reasoning_from_message_data(msg)
+    return reasoning.strip() if reasoning else ""
+
+
+def _parse_caption_json(text: str) -> dict:
+    if not text:
+        raise ValueError("empty caption response")
+
+    stripped = text.strip()
+    fence = re.search(r"```(?:json)?\s*([\s\S]*?)```", stripped)
+    if fence:
+        stripped = fence.group(1).strip()
+
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start >= 0 and end > start:
+        stripped = stripped[start : end + 1]
+
+    parsed = json.loads(stripped)
+    if not isinstance(parsed, dict):
+        raise ValueError("caption JSON is not an object")
+
+    return {
+        "caption": (parsed.get("caption") or "").strip() or None,
+        "description": (parsed.get("description") or "").strip() or None,
+        "details": (parsed.get("details") or "").strip() or None,
+    }
 
 
 async def ingest_image_sync(
@@ -269,18 +335,51 @@ def schedule_image_enrichment_for_message(
         )
 
 
-async def enrich_image_background(image_id: str, actor: PydanticUser, *, message_id: Optional[str] = None) -> None:
+async def schedule_image_re_enrichment(image_id: str, actor: PydanticUser) -> None:
+    """Mark pending and queue a forced background re-enrichment run."""
+    await _set_enrichment_pending(image_id, actor)
+    fire_and_forget(
+        enrich_image_background(image_id, actor, force=True),
+        task_name=f"re_enrich_image_{image_id}",
+    )
+
+
+async def _set_enrichment_pending(image_id: str, actor: PydanticUser) -> None:
+    from letta.server.db import db_registry
+
+    async with db_registry.async_session() as session:
+        row = await ImageRecord.read_async(db_session=session, identifier=image_id, actor=actor)
+        row.enrichment_status = "pending"
+        row.error_message = None
+        await row.update_async(session, actor=actor)
+
+
+async def enrich_image_background(
+    image_id: str,
+    actor: PydanticUser,
+    *,
+    message_id: Optional[str] = None,
+    force: bool = False,
+) -> None:
     """Background: 1MP derivative, captions, pixel embed, message re-embed push."""
     manager = ImageManager()
     store = get_object_store_client()
     try:
         image = await manager.get_by_id_async(image_id, actor)
-        if not image or image.enrichment_status == "complete":
+        if not image:
             return
+        if image.enrichment_status == "complete" and not force:
+            return
+        if force:
+            await _set_enrichment_pending(image_id, actor)
 
         raw = await store.get_bytes(image.object_url_full)
-        onemp_bytes, onemp_type, onemp_wire = generate_1mp_derivative(raw, image.media_type)
-        onemp_key = await store.put_bytes(image.content_hash, onemp_bytes, suffix="_1mp")
+        if image.object_url_1mp and image.file_size_1mp:
+            onemp_key = image.object_url_1mp
+            onemp_wire = image.file_size_1mp
+        else:
+            onemp_bytes, onemp_type, onemp_wire = generate_1mp_derivative(raw, image.media_type)
+            onemp_key = await store.put_bytes(image.content_hash, onemp_bytes, suffix="_1mp")
 
         captions = await _generate_three_tier_captions(raw, image.media_type, actor)
         embedding_config = await resolve_embedding_config_async(actor=actor)
@@ -341,53 +440,48 @@ async def _mark_enrichment_failed(image_id: str, actor: PydanticUser, error: str
 
 
 async def _generate_three_tier_captions(raw: bytes, media_type: str, actor: PydanticUser) -> dict:
-    """Single structured VLM call for caption/description/details."""
+    """Single structured VLM call for caption (20-50 words), description (100-200 words), details (1000 words)."""
     handle = settings.image_caption_model_handle or settings.default_llm_handle
     if not handle:
-        return {
-            "caption": "Image attached to conversation.",
-            "description": "An image was shared in this conversation.",
-            "details": "Image content available via fetch_image.",
-        }
+        return _fallback_captions()
 
     from letta.services.provider_manager import ProviderManager
 
     pm = ProviderManager()
     llm_config = await pm.get_llm_config_from_handle(handle, actor)
-    client = LLMClient.create(llm_config.model_endpoint_type, actor=actor)
+    caption_config = LLMConfig(**llm_config.model_dump())
+    caption_config.put_inner_thoughts_in_kwargs = False
+    caption_config.enable_reasoner = False
+
+    client = LLMClient.create(caption_config.model_endpoint_type, actor=actor)
     b64 = base64.standard_b64encode(raw).decode("ascii")
-    prompt = (
-        "Describe this image in JSON with keys caption (20-50 tokens), "
-        "description (100-200 tokens, literal content nouns), details (~1000 tokens)."
+    message = PydanticMessage(
+        role=MessageRole.user,
+        content=[
+            TextContent(text=_CAPTION_PROMPT),
+            ImageContent(
+                source=Base64Image(
+                    media_type=media_type or "image/png",
+                    data=b64,
+                    detail="high",
+                )
+            ),
+        ],
     )
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{b64}"}},
-            ],
-        }
-    ]
-    try:
-        request_data = client.build_request_data(
-            agent_type=__import__("letta.schemas.enums", fromlist=["AgentType"]).AgentType.letta_v1_agent,
-            messages=[],
-            llm_config=llm_config,
-            tools=[],
-            system=None,
-        )
-        # Minimal path: use chat completion via client internals
-        del request_data
-        # Fallback captions when VLM path not fully wired
-        return {
-            "caption": "Image attached to conversation.",
-            "description": "An image was shared in this conversation.",
-            "details": "Image content available via fetch_image.",
-        }
-    except Exception:
-        return {
-            "caption": "Image attached to conversation.",
-            "description": "An image was shared in this conversation.",
-            "details": "Image content available via fetch_image.",
-        }
+
+    request_data = client.build_request_data(
+        agent_type=AgentType.letta_v1_agent,
+        messages=[message],
+        llm_config=caption_config,
+        tools=[],
+        system=None,
+    )
+    # Details tier targets ~1000 words; allow ample completion budget.
+    request_data["max_tokens"] = 8192
+
+    response = await client.request_async(request_data, caption_config)
+    text = _extract_assistant_text(response)
+    captions = _parse_caption_json(text)
+    if not (captions.get("caption") or captions.get("description")):
+        raise ValueError(f"caption JSON missing required fields: {text[:500]}")
+    return captions
