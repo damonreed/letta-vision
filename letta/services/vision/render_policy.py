@@ -6,7 +6,7 @@ import base64
 from enum import Enum
 from typing import Dict, List, Optional, Set
 
-from letta.helpers.message_helper import conversation_has_user_images
+from letta.helpers.vision_context_hint import conversation_has_user_images
 from letta.log import get_logger
 from letta.schemas.letta_message_content import ImageContent, ImageSourceType, LettaImage, MessageContentType
 from letta.schemas.message import Message
