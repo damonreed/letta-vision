@@ -71,7 +71,7 @@ Add a `gemini-embedding-2` default to `default_config()` (openrouter / `google/g
   - Rename the existing column to `embedding_legacy_4096` (kept, untouched, **excluded from all vector ranking by the §8 guard** since its rows carry their old/`legacy-unknown` space id).
   - Add a new `embedding Vector(768)` column that new writes and the HNSW index target. Historic rows are `NULL` here, so the vector leg never returns them until the migration FR backfills them.
   - The migration FR (separate) backfills the 768 column for all historic rows and drops `embedding_legacy_4096`. After migration, all four tables are uniform on a 768 `embedding` column.
-  - Net for phase one: passages, messages, and images all expose a 768 `embedding` column the recall tool queries uniformly; only newly-written passage rows populate it.
+  - Net for phase one: passages, messages, images, and **file reading notes (`file_archives`)** all expose a 768 `embedding` column the recall tool queries uniformly; only newly-written rows populate it.
 - Remove every `np.pad(..., MAX_EMBEDDING_DIM ...)` from `passage_manager.py` (≈7 sites) and the query side of `agent_manager_helper.py` (3 sites). Factor a single `_prepare_vector_for_write(vec, config)` helper rather than editing each block. New passage writes target the 768 `embedding` column.
 
 ### 4.3 `embedding_space_id` on every vector row
@@ -125,19 +125,29 @@ Indexes: HNSW on `embedding` (Postgres); GIN trigram on `caption`, `description`
 
 Schemas: `letta/schemas/image.py` — `PydanticImage`, plus `ImageCreate`. Manager: `letta/services/image_manager.py` — create/get/get-by-hash/list/delete/update-enrichment, mirroring `file_manager.py`/`passage_manager.py` conventions (async, `@enforce_types`, `@trace_method`).
 
+### 4.5b `file_archives` embedding parity — `letta/orm/file_archive.py`
+
+File reading notes (v0.5 three-tier memory) get the same dual-column treatment as passages:
+
+- Rename existing `embedding` → `embedding_legacy_4096` (4096 padded historic vectors, untouched).
+- Add `embedding Vector(768)` for new writes + HNSW index target (NULL for historic rows).
+- Add `embedding_space_id` (btree-indexed).
+- `write_file_archive` embeds via deployment resolver (`search_document` side) at 768; `search_file_archives` and `recall` query the 768 column under the space guard.
+- Lexical leg: `pg_trgm` GIN indexes on `title` and `content`.
+
 ### 4.6 Persisted chat image form — reuse `LettaImage`
 
 `ImageContent` already supports `LettaImage` source (`type: "letta"`, `file_id`, optional `data`, `detail`). Repurpose: `file_id` carries the **image record id** (`image-…`); `data` is **never persisted** (always `None` at rest) and is hydrated at serialize time per the render policy (§10). The existing `to_openai_dict()` letta-source branch (message.py ~1812/1891) is changed to resolve `file_id` against the `images` table and to apply the render policy rather than relying on inline `data`.
 
 ### 4.7 Indexes
 
-- HNSW (`vector_cosine_ops`) on the **768** `embedding` column of `archival_passages`, `source_passages`, `messages`, `images` (Postgres only). The passage `embedding_legacy_4096` column is **not** indexed (and cannot be — it exceeds pgvector's HNSW dim ceiling).
-- `pg_trgm` extension + GIN trigram indexes on the text columns the recall tool searches: passage `text`, message `text`, image `caption`/`description`/`details`, file/source content text.
+- HNSW (`vector_cosine_ops`) on the **768** `embedding` column of `archival_passages`, `source_passages`, `messages`, `images`, and **`file_archives`** (Postgres only). The passage `embedding_legacy_4096` column is **not** indexed (and cannot be — it exceeds pgvector's HNSW dim ceiling).
+- `pg_trgm` extension + GIN trigram indexes on the text columns the recall tool searches: passage `text`, message `text`, image `caption`/`description`/`details`, **`file_archives` `title`/`content`**, file/source content text.
 - (For phase-one new-data testing the corpus is tiny; flat scan is fine. Indexes are created forward-looking and stress-validated in the migration FR.)
 
 ### 4.8 Alembic migrations
 
-One ordered set: EmbeddingConfig has no schema (pydantic) → no migration; add `embedding_space_id` (+ backfill) to the three existing tables; **on `archival_passages` and `source_passages`, rename `embedding` → `embedding_legacy_4096` and add a new `embedding Vector(768)` (NULL for historic rows)**; add `messages` vector/config/version columns; create `images` table; create `pg_trgm` extension + all GIN trigram indexes; create HNSW indexes on the 768 columns only. Historic 4096 passage vectors are left in place under `embedding_legacy_4096`, untouched until the migration FR.
+One ordered set: EmbeddingConfig has no schema (pydantic) → no migration; add `embedding_space_id` (+ backfill) to the three existing tables; **on `archival_passages`, `source_passages`, and `file_archives`, rename `embedding` → `embedding_legacy_4096` and add a new `embedding Vector(768)` (NULL for historic rows)**; add `messages` vector/config/version columns; create `images` table; create `pg_trgm` extension + all GIN trigram indexes; create HNSW indexes on the 768 columns only. Historic 4096 passage/archive vectors are left in place under `embedding_legacy_4096`, untouched until the migration FR.
 
 ## 5. The Resolver — `letta/embeddings/resolver.py` (new)
 
@@ -265,9 +275,9 @@ One agent-facing tool over the whole corpus, replacing the need to choose betwee
 
 Signature (Letta tool): `recall(query: str, *, layers: Optional[list[str]] = None, time_range: Optional[...] = None, source: Optional[str] = None, limit: int = 10)`.
 
-**Vector leg.** Embed the query once as `search_query` (via `input_type_override`). Run it against the four vector columns (`archival_passages`, `source_passages`, `messages`, `images`) under the space guard (§8). Same space ⇒ directly comparable cosine scores ⇒ collapse into one vector-ranked list by raw score. No per-table calibration.
+**Vector leg.** Embed the query once as `search_query` (via `input_type_override`). Run it against the five vector columns (`archival_passages`, `source_passages`, **`file_archives`**, `messages`, `images`) under the space guard (§8). File reading notes are scoped to the agent's attached folders (same join as `search_file_archives`). Same space ⇒ directly comparable cosine scores ⇒ collapse into one vector-ranked list by raw score. No per-table calibration.
 
-**Lexical leg.** `pg_trgm` `similarity()` over the trigram-indexed text columns (passage/message text, image caption/description/details, file content). Trigram chosen over full-text search because it indexes substrings and graded similarity and does not mangle hyphenated identifiers (`scenecraft-mvp-connector`), UUIDs, error strings, filenames — exactly the literal tokens the vector leg buries.
+**Lexical leg.** `pg_trgm` `similarity()` over the trigram-indexed text columns (passage/message text, image caption/description/details, **`file_archives` title/content**, file content). Trigram chosen over full-text search because it indexes substrings and graded similarity and does not mangle hyphenated identifiers (`scenecraft-mvp-connector`), UUIDs, error strings, filenames — exactly the literal tokens the vector leg buries.
 
 **Fusion.** Reciprocal Rank Fusion (RRF) over the two ranked lists — rank-based, no cross-method score normalization; an item surfacing in both legs gets both contributions summed.
 
@@ -276,7 +286,7 @@ Signature (Letta tool): `recall(query: str, *, layers: Optional[list[str]] = Non
 - Dedup: collapse an image record and the message that references it into one result with two reasons (don't show the image twice).
 - Top-K with bounded snippets so the return can't blow the context window.
 
-**Return shape (reference-then-fetch).** Each hit: a context-bearing snippet (passage; file chunk + neighbors via v0.5.0 char offsets; message + a surrounding turn or two; image `description`), the layer/type, the fused rank/score, and an opaque handle. Handles drive existing access paths: open file at offset, read conversation around message id, and a new `fetch_image(handle)` tool that pulls full pixels into context on demand.
+**Return shape (reference-then-fetch).** Each hit: a context-bearing snippet (passage; file chunk + neighbors via v0.5.0 char offsets; **file reading note title+content**; message + a surrounding turn or two; image `description`), the layer/type, the fused rank/score, and an opaque handle. Handles drive existing access paths: open file at offset, read conversation around message id, **`search_file_archives` for a specific note**, and `fetch_image(handle)` that pulls full pixels into context on demand as a **multimodal tool return** (inline base64 for the model and client UI).
 
 **Image findability backstop.** Image `description`/`details` are trigram-searched, so an image is findable by described content even if the pixel vector under-ranks it for a text query (the modality gap). This is why image-only embedding is sufficient for v0.6.0 and the optional summary-text embedding is deferred — measure the modality gap empirically before adding it.
 
@@ -298,27 +308,27 @@ Stack: Svelte 5 + Vite frontend, FastAPI backend proxying the Letta SDK.
 4. **Image records + object store:** `images` table/schema/manager; object-store client (content-addressed; MinIO + GCS); image pixel-embed path in the provider client.
 5. **Ingest pipeline:** sync store + background enrich (1MP + structured VLM 3-tier + pixel embed); two-embed dance; bounded retries + failure fallback; dedup by hash.
 6. **Chat render policy:** `LettaImage` as persisted form; rewrite `to_openai_dict` letta-source branch to resolve the images table + apply the render walk; supersede v0.4.0.
-7. **Recall tool:** vector leg (4 columns, guarded) + pg_trgm lexical leg + RRF + diversity/dedup/top-K + return shape; `fetch_image`; register `recall`, demote the three granular tools to internal/filtered.
+7. **Recall tool:** vector leg (5 columns, guarded) + pg_trgm lexical leg + RRF + diversity/dedup/top-K + return shape; `fetch_image` (multimodal tool return); register `recall`, demote the three granular tools to internal/filtered.
 8. **Client:** server image REST surface; client backend proxy; `Images.svelte` + nav wiring.
 9. **Base instructions:** point the agent at `recall` and `fetch_image` with concrete per-tool directives.
 
 ## 15. Acceptance Criteria
 
-- Fresh agent on the deployment default embeds archival passages, source passages, messages, and images with `google/gemini-embedding-2-preview` at stored dim 768, all sharing one `embedding_space_id`.
+- Fresh agent on the deployment default embeds archival passages, source passages, **file reading notes**, messages, and images with `google/gemini-embedding-2-preview` at stored dim 768, all sharing one `embedding_space_id`.
 - No hardcoded embedding model remains (grep for `text-embedding-3-small` hits only tests/migrations). Turbopuffer not required to boot, embed, or search.
 - Stored vectors are length-768, unit-length (‖v‖ ≈ 1.0 ± 1e-3); no `np.pad(..., MAX_EMBEDDING_DIM ...)` in write/query paths.
 - A query in space A returns zero vector hits against rows stamped space B (and logs the exclusion) — no mis-ranked results.
 - An ingested image (upload or ZapImage) creates one `images` row, stores full + 1MP, produces caption/description/details from pixels, and a 768 pixel embedding in the shared space; a re-shared identical image creates no new record (hash dedup).
-- A text query matches a relevant image via the vector leg AND/OR via trigram on its description; the result returns description + handle; `fetch_image` returns the full pixels.
+- A text query matches a relevant image via the vector leg AND/OR via trigram on its description; the result returns description + handle; `fetch_image` returns inline base64 image blocks visible to the model and the client.
 - In a long image-heavy chat: the current image renders full (or 1MP if full would breach the cap, or text if 1MP would); older images render 1MP newest-first until the budget is exhausted, then demote to description+handle; total image **wire bytes** (base64-encoded) sent ≤ the cap on every turn; a demoted image still resolves prior references and is fetchable.
-- `recall(query)` returns a single fused, deduped, source-capped ranked list across passages + messages + images with reference-then-fetch handles; the three granular searches are no longer the agent's default surface.
+- `recall(query)` returns a single fused, deduped, source-capped ranked list across passages + **file reading notes** + messages + images with reference-then-fetch handles; the three granular searches are no longer the agent's default surface.
 - Background enrichment failure leaves a renderable, flagged image and a text-only-embedded (still recall-able) message; nothing blocks forever.
 - Client shows an Images tab listing records with metadata and enrichment status; view-full, edit, re-enrich, delete work.
-- HNSW + pg_trgm indexes exist on the relevant columns (Postgres). Passages expose a 768 `embedding` column (new writes populated, historic rows NULL until migration) alongside the retained `embedding_legacy_4096`; the recall tool queries the 768 column uniformly across all four tables.
+- HNSW + pg_trgm indexes exist on the relevant columns (Postgres). Passages and **file_archives** expose a 768 `embedding` column (new writes populated, historic rows NULL until migration) alongside the retained `embedding_legacy_4096`; the recall tool queries the 768 column uniformly across all five tables.
 
 ## 16. Non-Goals (Explicit Deferrals)
 
-- **Historic embedding uplift & validation** — re-embedding existing passage rows into the 768 space (backfilling the new `embedding` column from `embedding_legacy_4096`'s source text and then **dropping `embedding_legacy_4096`**), re-embedding pre-v0.6.0 messages/images, building HNSW over the migrated corpus, dual-space transition strategy (cutover vs shadow), cost/time estimation. **This is the one remaining FR and the gate to cutting v0.6.0.** This FR ships and is validated against *new* data only; the guard makes un-migrated history simply not appear in vector results yet.
+- **Historic embedding uplift & validation** — re-embedding existing passage and **file_archive** rows into the 768 space (backfilling the new `embedding` column from `embedding_legacy_4096`'s source text and then **dropping `embedding_legacy_4096`**), re-embedding pre-v0.6.0 messages/images, building HNSW over the migrated corpus, dual-space transition strategy (cutover vs shadow), cost/time estimation. **This is the one remaining FR and the gate to cutting v0.6.0.** This FR ships and is validated against *new* data only; the guard makes un-migrated history simply not appear in vector results yet.
 - **Tool semantic search** — tool embedding stays on its current (tpuf) path or degrades to lexical matching; migrating tool vectors to a PG column is deferred (§7). Tool relevance is not part of the unified recall corpus in v0.6.0.
 - Audio/video embedding (OpenRouter embeddings is text+image only; native google_ai/Vertex client deferred).
 - Optional summary-text embedding for images (modality-gap backstop) — add only if empirical recall shows the gap hurting.

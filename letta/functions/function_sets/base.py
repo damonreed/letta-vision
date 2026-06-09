@@ -163,7 +163,7 @@ def conversation_search(
 
 async def recall(self: "Agent", query: str, limit: int = 10) -> str:
     """
-    Unified hybrid recall over archival passages, file passages, messages, and images.
+    Unified hybrid recall over archival passages, file passages, file reading notes, messages, and images.
 
     Args:
         query: Natural-language search query.
@@ -183,7 +183,7 @@ async def fetch_image(self: "Agent", handle: str) -> str:
         handle: Image record id (image-<uuid>).
 
     Returns:
-        Data URL with base64-encoded image bytes.
+        Multimodal tool return: text summary plus inline base64 image for vision models and the client UI.
     """
     raise NotImplementedError("This should never be invoked directly. Contact Letta if you see this error message.")
 

@@ -64,6 +64,10 @@ class LettaCoreToolExecutor(ToolExecutor):
         function_args_copy = function_args.copy()  # Make a copy to avoid modifying the original
         try:
             function_response = await function_map[function_name](agent_state, actor, **function_args_copy)
+            if isinstance(function_response, list):
+                from letta.helpers.message_helper import resolve_tool_return_images
+
+                function_response = await resolve_tool_return_images(function_response)
             return ToolExecutionResult(
                 status="success",
                 func_return=function_response,
@@ -88,7 +92,7 @@ class LettaCoreToolExecutor(ToolExecutor):
             return "No results."
         return "\n\n".join(f"[{h.layer}] handle={h.handle} score={h.score:.4f}\n{h.snippet}" for h in hits)
 
-    async def fetch_image(self, agent_state: AgentState, actor: User, handle: str) -> str:
+    async def fetch_image(self, agent_state: AgentState, actor: User, handle: str):
         from letta.services.image_fetch import build_fetch_image_tool_return
 
         return await build_fetch_image_tool_return(handle, actor)

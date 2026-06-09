@@ -9,7 +9,7 @@ if TYPE_CHECKING:
 
 
 async def recall(agent_state: "AgentState", query: str, limit: int = 10) -> str:
-    """Search the full memory corpus (passages, messages, images) with hybrid recall."""
+    """Search the full memory corpus (passages, file reading notes, messages, images) with hybrid recall."""
     from letta.services.recall.recall_service import recall as recall_service
 
     actor = agent_state.created_by  # fallback; tools pass actor via context in production

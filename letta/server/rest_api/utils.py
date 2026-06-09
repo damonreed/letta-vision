@@ -484,7 +484,20 @@ def create_letta_messages_from_llm_response(
     # TODO: Use ToolReturnContent instead of TextContent
     # TODO: This helps preserve ordering
     if tool_execution_result is not None:
-        packaged_function_response = package_function_response(tool_execution_result.success_flag, function_response, timezone)
+        from letta.schemas.message import tool_return_has_images, tool_return_to_text
+
+        if isinstance(function_response, list) and tool_return_has_images(function_response):
+            func_response_value = function_response
+            legacy_text = tool_return_to_text(function_response) or "Empty tool return"
+            packaged_function_response = package_function_response(
+                tool_execution_result.success_flag, legacy_text, timezone
+            )
+        else:
+            packaged_function_response = package_function_response(
+                tool_execution_result.success_flag, function_response, timezone
+            )
+            func_response_value = packaged_function_response
+
         tool_message = Message(
             role=MessageRole.tool,
             content=[TextContent(text=packaged_function_response)],
@@ -501,7 +514,7 @@ def create_letta_messages_from_llm_response(
                     status=tool_execution_result.status,
                     stderr=tool_execution_result.stderr,
                     stdout=tool_execution_result.stdout,
-                    func_response=packaged_function_response,
+                    func_response=func_response_value,
                 )
             ],
             run_id=run_id,

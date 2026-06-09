@@ -1,10 +1,9 @@
-from datetime import datetime, timezone
 from typing import List, Optional
 
-import numpy as np
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import func, or_, select
 
-from letta.constants import MAX_EMBEDDING_DIM
+from letta.embeddings.query import apply_embedding_space_guard, embed_search_query
+from letta.embeddings.resolver import resolve_embedding_config_async
 from letta.llm_api.llm_client import LLMClient
 from letta.orm.file import FileMetadata as FileMetadataModel
 from letta.orm.file_archive import FileArchive as FileArchiveModel
@@ -14,6 +13,7 @@ from letta.schemas.embedding_config import EmbeddingConfig
 from letta.schemas.file_archive import FileArchive as PydanticFileArchive
 from letta.schemas.user import User as PydanticUser
 from letta.server.db import db_registry
+from letta.services.file_archive_embedding import prepare_file_archive_embedding_fields
 from letta.services.files.archive_tags import normalize_archive_tags
 from letta.settings import DatabaseChoice, settings
 from letta.utils import enforce_types
@@ -22,14 +22,11 @@ from letta.utils import enforce_types
 class FileArchiveManager:
     @enforce_types
     @trace_method
-    async def _embed_text(self, text: str, embedding_config: EmbeddingConfig, actor: PydanticUser) -> list[float]:
-        client = LLMClient.create(provider_type=embedding_config.embedding_endpoint_type, actor=actor)
-        embeddings = await client.request_embeddings([text], embedding_config)
-        embedded = np.array(embeddings[0])
-        if settings.database_engine is DatabaseChoice.POSTGRES:
-            if embedded.shape[0] != MAX_EMBEDDING_DIM:
-                embedded = np.pad(embedded, (0, MAX_EMBEDDING_DIM - embedded.shape[0]), mode="constant")
-        return embedded.tolist()
+    async def _embed_document_text(self, text: str, actor: PydanticUser) -> tuple[list[float], EmbeddingConfig]:
+        config = (await resolve_embedding_config_async(actor=actor)).ensure_space_id()
+        client = LLMClient.create(config.embedding_endpoint_type, actor=actor)
+        embeddings = await client.request_embeddings([text], config)
+        return embeddings[0], config
 
     @enforce_types
     @trace_method
@@ -42,7 +39,7 @@ class FileArchiveManager:
         tags: Optional[List[str]],
         author_agent_id: str,
         source_conversation_id: Optional[str],
-        embedding_config: EmbeddingConfig,
+        embedding_config: Optional[EmbeddingConfig] = None,
         actor: PydanticUser,
     ) -> PydanticFileArchive:
         if not (1 <= len(title) <= 200):
@@ -51,24 +48,28 @@ class FileArchiveManager:
             raise ValueError("content must be 1-8000 characters")
 
         stored_tags = normalize_archive_tags(tags)
-        embedding = await self._embed_text(content, embedding_config, actor)
+        embed_text = f"{title}\n\n{content}".strip()
+        embedding, config = await self._embed_document_text(embed_text, actor)
 
         async with db_registry.async_session() as session:
             file_meta = await session.get(FileMetadataModel, file_id)
             if file_meta is None or file_meta.is_deleted or file_meta.organization_id != actor.organization_id:
                 raise ValueError(f"File not found: {file_id}")
 
-            row = FileArchiveModel(
-                file_id=file_id,
-                title=title,
-                content=content,
-                tags=stored_tags,
-                author_agent_id=author_agent_id,
-                source_conversation_id=source_conversation_id,
+            row_data = prepare_file_archive_embedding_fields(
+                {
+                    "file_id": file_id,
+                    "title": title,
+                    "content": content,
+                    "tags": stored_tags,
+                    "author_agent_id": author_agent_id,
+                    "source_conversation_id": source_conversation_id,
+                    "organization_id": actor.organization_id,
+                },
                 embedding=embedding,
-                embedding_config=embedding_config.model_dump(),
-                organization_id=actor.organization_id,
+                config=config,
             )
+            row = FileArchiveModel(**row_data)
             await row.create_async(session, actor=actor)
             result = row.to_pydantic()
             result.file_name = file_meta.file_name
@@ -82,13 +83,14 @@ class FileArchiveManager:
         *,
         query: str,
         agent_id: str,
-        embedding_config: EmbeddingConfig,
+        embedding_config: Optional[EmbeddingConfig] = None,
         actor: PydanticUser,
         file_id: Optional[str] = None,
         tags: Optional[List[str]] = None,
         limit: int = 10,
     ) -> List[PydanticFileArchive]:
-        embedded_text = await self._embed_text(query, embedding_config, actor)
+        config = await resolve_embedding_config_async(actor=actor)
+        query_vec, space_id = await embed_search_query(query, config, actor=actor)
 
         async with db_registry.async_session() as session:
             base = (
@@ -110,12 +112,13 @@ class FileArchiveManager:
                     base = base.where(or_(*tag_filters))
 
             if settings.database_engine is DatabaseChoice.POSTGRES:
-                base = base.order_by(FileArchiveModel.embedding.cosine_distance(embedded_text).asc())
+                base = apply_embedding_space_guard(base, FileArchiveModel, space_id)
+                base = base.order_by(FileArchiveModel.embedding.cosine_distance(query_vec).asc())
             else:
                 from letta.orm.sqlite_functions import adapt_array
 
                 base = base.order_by(
-                    func.cosine_distance(FileArchiveModel.embedding, adapt_array(embedded_text)).asc(),
+                    func.cosine_distance(FileArchiveModel.embedding, adapt_array(query_vec)).asc(),
                 )
 
             rows = (await session.execute(base.limit(limit))).all()

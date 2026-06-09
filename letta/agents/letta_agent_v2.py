@@ -1255,6 +1255,13 @@ class LettaAgentV2(BaseAgentV2):
             )
 
             # 3.  Prepare the function-response payload
+            func_return = tool_execution_result.func_return
+            if isinstance(func_return, list):
+                from letta.helpers.message_helper import resolve_tool_return_images
+
+                func_return = await resolve_tool_return_images(func_return)
+                tool_execution_result.func_return = func_return
+
             truncate = tool_call_name not in {
                 "conversation_search",
                 "conversation_search_date",
@@ -1265,14 +1272,19 @@ class LettaAgentV2(BaseAgentV2):
                 (t.return_char_limit for t in agent_state.tools if t.name == tool_call_name),
                 None,
             )
-            function_response_string = validate_function_response(
+            function_response = validate_function_response(
                 tool_execution_result.func_return,
                 return_char_limit=return_char_limit,
                 truncate=truncate,
             )
+            from letta.schemas.message import tool_return_to_text
+
+            response_for_rules = (
+                tool_return_to_text(function_response) if isinstance(function_response, list) else function_response
+            )
             self.last_function_response = package_function_response(
                 was_success=tool_execution_result.success_flag,
-                response_string=function_response_string,
+                response_string=response_for_rules,
                 timezone=agent_state.timezone,
             )
 
@@ -1294,7 +1306,7 @@ class LettaAgentV2(BaseAgentV2):
                 function_arguments=tool_args,
                 tool_execution_result=tool_execution_result,
                 tool_call_id=tool_call_id,
-                function_response=function_response_string,
+                function_response=function_response,
                 timezone=agent_state.timezone,
                 continue_stepping=continue_stepping,
                 heartbeat_reason=heartbeat_reason,

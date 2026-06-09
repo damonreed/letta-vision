@@ -1,10 +1,10 @@
 import uuid
 from typing import TYPE_CHECKING, List, Optional
 
-from sqlalchemy import JSON, ForeignKey, Index, String, Text
+from sqlalchemy import JSON, Column, ForeignKey, Index, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from letta.constants import MAX_EMBEDDING_DIM
+from letta.constants import DEPLOYMENT_EMBEDDING_DIM, MAX_EMBEDDING_DIM
 from letta.orm.custom_columns import CommonVector, EmbeddingConfigColumn
 from letta.orm.mixins import OrganizationMixin
 from letta.orm.sqlalchemy_base import SqlalchemyBase
@@ -34,11 +34,14 @@ class FileArchive(SqlalchemyBase, OrganizationMixin):
         String, ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True
     )
     embedding_config: Mapped[Optional[dict]] = mapped_column(EmbeddingConfigColumn, nullable=True)
+    embedding_space_id: Mapped[Optional[str]] = mapped_column(nullable=True, index=True)
 
     if settings.database_engine is DatabaseChoice.POSTGRES:
-        embedding: Mapped[Optional[list]] = mapped_column(Vector(MAX_EMBEDDING_DIM), nullable=True)
+        embedding_legacy_4096: Mapped[Optional[list]] = mapped_column(Vector(MAX_EMBEDDING_DIM), nullable=True)
+        embedding: Mapped[Optional[list]] = mapped_column(Vector(DEPLOYMENT_EMBEDDING_DIM), nullable=True)
     else:
-        embedding: Mapped[Optional[list]] = mapped_column(CommonVector, nullable=True)
+        embedding_legacy_4096 = Column(CommonVector, nullable=True)
+        embedding = Column(CommonVector, nullable=True)
 
     file: Mapped["FileMetadata"] = relationship("FileMetadata", lazy="selectin")
 
