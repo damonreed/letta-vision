@@ -13,7 +13,6 @@ from letta.orm.message import Message as MessageModel
 from letta.otel.tracing import trace_method
 from letta.schemas.enums import MessageRole, PrimitiveType
 from letta.schemas.letta_message import LettaMessageUpdateUnion
-from letta.schemas.letta_message_content import ImageSourceType, LettaImage, MessageContentType
 from letta.schemas.message import Message as PydanticMessage, MessageSearchResult, MessageUpdate
 from letta.schemas.user import User as PydanticUser
 from letta.server.db import db_registry
@@ -519,29 +518,11 @@ class MessageManager:
                     result = await session.execute(query)
                     return [msg.to_pydantic() for msg in result.scalars()]
 
-        import base64
+        from letta.services.image_ingest import ingest_images_in_message, schedule_image_enrichment_for_message
 
-        from letta.services.image_ingest import ingest_image_sync
-
+        image_ids_by_message: list[list[str]] = []
         for message in messages_to_create:
-            if isinstance(message.content, list):
-                for content in message.content:
-                    if content.type == MessageContentType.image and content.source.type == ImageSourceType.base64:
-                        media_type = content.source.media_type or "image/png"
-                        detail = content.source.detail
-                        raw = base64.standard_b64decode(content.source.data)
-                        image_id = await ingest_image_sync(
-                            raw,
-                            media_type,
-                            actor,
-                            provenance="uploaded",
-                        )
-                        content.source = LettaImage(
-                            file_id=image_id,
-                            data=None,
-                            media_type=media_type,
-                            detail=detail,
-                        )
+            image_ids_by_message.append(await ingest_images_in_message(message, actor))
 
         # Validate run_ids exist before inserting to prevent ForeignKeyViolationError
         # This handles the case where a run is deleted while messages are being created
@@ -572,6 +553,10 @@ class MessageManager:
             result = [msg.to_pydantic() for msg in created_messages]
             # context manager now handles commits
             # await session.commit()
+
+        for msg, image_ids in zip(result[: len(messages_to_create)], image_ids_by_message):
+            if image_ids:
+                schedule_image_enrichment_for_message(msg, actor, image_ids)
 
         if settings.embed_all_messages and result:
             agent_id = result[0].agent_id
