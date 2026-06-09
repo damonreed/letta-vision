@@ -1180,7 +1180,7 @@ class OpenAIClient(LLMClientBase):
         input_type_override: Optional[str] = None,
     ) -> dict:
         """Build kwargs for embeddings.create beyond model/input."""
-        create_kwargs: dict = {}
+        create_kwargs: dict = {"encoding_format": "float"}
         if embedding_config.output_dimensionality is not None:
             create_kwargs["dimensions"] = embedding_config.output_dimensionality
         input_type = input_type_override or embedding_config.input_type
@@ -1197,6 +1197,21 @@ class OpenAIClient(LLMClientBase):
             return embeddings
         return [prepare_vector_for_write(vec, embedding_config) for vec in embeddings]
 
+    @staticmethod
+    def _openrouter_multimodal_embedding_input(parts: List[dict]) -> List[dict]:
+        """Wrap chat-style content parts for OpenRouter /embeddings multimodal format.
+
+        OpenRouter expects ``[{"content": [{"type": "image_url", ...}]}]``, not bare
+        chat message parts at the top level of ``input``.
+        """
+        if not parts:
+            return []
+        if len(parts) == 1 and isinstance(parts[0], dict) and "content" in parts[0]:
+            return parts
+        if all(isinstance(p, dict) and "content" in p for p in parts):
+            return parts
+        return [{"content": parts}]
+
     async def request_image_embeddings(
         self,
         image_inputs: List[dict],
@@ -1211,10 +1226,11 @@ class OpenAIClient(LLMClientBase):
         kwargs = self._prepare_client_kwargs_embedding(embedding_config)
         client = AsyncOpenAI(**kwargs)
         create_kwargs = self._embedding_create_kwargs(embedding_config, input_type_override=input_type_override)
+        api_input = self._openrouter_multimodal_embedding_input(image_inputs)
 
         response = await client.embeddings.create(
             model=embedding_config.embedding_model,
-            input=image_inputs,
+            input=api_input,
             **create_kwargs,
         )
         embeddings = [r.embedding for r in response.data]

@@ -36,7 +36,6 @@ class ObjectStoreClient:
 
     def _client_kwargs(self) -> dict:
         kwargs = {
-            "service_name": "s3",
             "endpoint_url": self.endpoint_url,
             "aws_access_key_id": os.environ.get("MINIO_ROOT_USER") or os.environ.get("AWS_ACCESS_KEY_ID"),
             "aws_secret_access_key": os.environ.get("MINIO_ROOT_PASSWORD") or os.environ.get("AWS_SECRET_ACCESS_KEY"),
