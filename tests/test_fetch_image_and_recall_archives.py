@@ -58,7 +58,8 @@ async def test_build_fetch_image_tool_return_multimodal(monkeypatch):
     assert isinstance(result, list)
     assert result[0]["type"] == "text"
     assert result[1]["type"] == "image"
-    assert result[1]["source"]["type"] == "base64"
+    assert result[1]["source"]["type"] == "letta"
+    assert result[1]["source"]["file_id"] == "image-abc"
     assert result[1]["source"]["detail"] == "high"
     assert result[1]["source"]["data"] == base64.standard_b64encode(b"pngbytes").decode("ascii")
 

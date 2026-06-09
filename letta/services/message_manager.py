@@ -372,7 +372,11 @@ class MessageManager:
                 actor=actor,
                 check_is_deleted=True,
             )
-            return self._get_messages_by_id_postprocess(results, message_ids)
+            messages = self._get_messages_by_id_postprocess(results, message_ids)
+            from letta.services.vision.image_hydration import hydrate_tool_return_images_in_messages
+
+            await hydrate_tool_return_images_in_messages(messages, actor)
+            return messages
 
     def _get_messages_by_id_postprocess(
         self,
@@ -980,7 +984,11 @@ class MessageManager:
             messages = [msg.to_pydantic() for msg in results]
 
             # backfill missing tool_call_ids from historical bug (oct 1-6, 2025)
-            return backfill_missing_tool_call_ids(messages, agent_id=agent_id, actor=actor)
+            messages = backfill_missing_tool_call_ids(messages, agent_id=agent_id, actor=actor)
+            from letta.services.vision.image_hydration import hydrate_tool_return_images_in_messages
+
+            await hydrate_tool_return_images_in_messages(messages, actor)
+            return messages
 
     @enforce_types
     @trace_method

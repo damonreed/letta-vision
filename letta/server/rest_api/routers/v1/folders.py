@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
 from starlette import status
 from starlette.responses import Response
 
-import letta.constants as constants
+from letta.embeddings.resolver import resolve_deployment_embedding_config_async
 from letta.errors import LettaInvalidArgumentError, LettaUnsupportedFileUploadError
 from letta.helpers.pinecone_utils import (
     delete_file_records_from_pinecone_index,
@@ -20,7 +20,6 @@ from letta.helpers.tpuf_client import should_use_tpuf
 from letta.log import get_logger
 from letta.otel.tracing import trace_method
 from letta.schemas.agent import AgentState
-from letta.schemas.embedding_config import EmbeddingConfig
 from letta.schemas.enums import DuplicateFileHandling, FileProcessingStatus
 from letta.schemas.file import FileMetadata
 from letta.schemas.folder import Folder
@@ -152,23 +151,19 @@ async def create_folder(
     """
     actor = await server.user_manager.get_actor_or_default_async(actor_id=headers.actor_id)
 
-    # TODO: need to asyncify this
-    if not folder_create.embedding_config:
-        if not folder_create.embedding:
-            if settings.default_embedding_handle is None:
-                raise LettaInvalidArgumentError(
-                    "Must specify either embedding or embedding_config in request", argument_name="default_embedding_handle"
-                )
-            else:
-                folder_create.embedding = settings.default_embedding_handle
-        folder_create.embedding_config = await server.get_embedding_config_from_handle_async(
-            handle=folder_create.embedding,
-            embedding_chunk_size=folder_create.embedding_chunk_size or constants.DEFAULT_EMBEDDING_CHUNK_SIZE,
-            actor=actor,
+    if folder_create.embedding or folder_create.embedding_config:
+        logger.info(
+            "Ignoring per-folder embedding on create; using deployment default (%s)",
+            settings.default_embedding_handle,
         )
+    try:
+        embedding_config = await resolve_deployment_embedding_config_async(actor)
+    except ValueError as exc:
+        raise LettaInvalidArgumentError(str(exc), argument_name="default_embedding_handle") from exc
+
     folder = Source(
         name=folder_create.name,
-        embedding_config=folder_create.embedding_config,
+        embedding_config=embedding_config,
         description=folder_create.description,
         instructions=folder_create.instructions,
         metadata=folder_create.metadata,
@@ -359,7 +354,7 @@ async def upload_file_to_folder(
     # Use cloud processing for all files (simple files always, complex files with Mistral key)
     logger.info("Running experimental cloud based file processing...")
     safe_create_file_processing_task(
-        load_file_to_source_cloud(server, agent_states, content, folder_id, actor, folder.embedding_config, file_metadata),
+        load_file_to_source_cloud(server, agent_states, content, folder_id, actor, file_metadata),
         file_metadata=file_metadata,
         server=server,
         actor=actor,
@@ -608,9 +603,10 @@ async def load_file_to_source_cloud(
     content: bytes,
     source_id: str,
     actor: User,
-    embedding_config: EmbeddingConfig,
     file_metadata: FileMetadata,
 ):
+    embedding_config = await resolve_deployment_embedding_config_async(actor)
+
     # Choose parser based on mistral API key availability
     if settings.mistral_api_key:
         file_parser = MistralFileParser()

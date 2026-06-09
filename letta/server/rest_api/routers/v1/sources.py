@@ -131,23 +131,21 @@ async def create_source(
     """
     actor = await server.user_manager.get_actor_or_default_async(actor_id=headers.actor_id)
 
-    # TODO: need to asyncify this
-    if not source_create.embedding_config:
-        if not source_create.embedding:
-            if settings.default_embedding_handle is None:
-                raise LettaInvalidArgumentError(
-                    "Must specify either embedding or embedding_config in request", argument_name="default_embedding_handle"
-                )
-            else:
-                source_create.embedding = settings.default_embedding_handle
-        source_create.embedding_config = await server.get_embedding_config_from_handle_async(
-            handle=source_create.embedding,
-            embedding_chunk_size=source_create.embedding_chunk_size or constants.DEFAULT_EMBEDDING_CHUNK_SIZE,
-            actor=actor,
+    if source_create.embedding or source_create.embedding_config:
+        logger.info(
+            "Ignoring per-source embedding on create; using deployment default (%s)",
+            settings.default_embedding_handle,
         )
+    from letta.embeddings.resolver import resolve_deployment_embedding_config_async
+
+    try:
+        embedding_config = await resolve_deployment_embedding_config_async(actor)
+    except ValueError as exc:
+        raise LettaInvalidArgumentError(str(exc), argument_name="default_embedding_handle") from exc
+
     source = Source(
         name=source_create.name,
-        embedding_config=source_create.embedding_config,
+        embedding_config=embedding_config,
         description=source_create.description,
         instructions=source_create.instructions,
         metadata=source_create.metadata,
@@ -337,7 +335,7 @@ async def upload_file_to_source(
     # Use cloud processing for all files (simple files always, complex files with Mistral key)
     logger.info("Running experimental cloud based file processing...")
     safe_create_file_processing_task(
-        load_file_to_source_cloud(server, agent_states, content, source_id, actor, source.embedding_config, file_metadata),
+        load_file_to_source_cloud(server, agent_states, content, source_id, actor, file_metadata),
         file_metadata=file_metadata,
         server=server,
         actor=actor,
@@ -498,9 +496,12 @@ async def load_file_to_source_cloud(
     content: bytes,
     source_id: str,
     actor: User,
-    embedding_config: EmbeddingConfig,
     file_metadata: FileMetadata,
 ):
+    from letta.embeddings.resolver import resolve_deployment_embedding_config_async
+
+    embedding_config = await resolve_deployment_embedding_config_async(actor)
+
     # Choose parser based on mistral API key availability
     if settings.mistral_api_key:
         file_parser = MistralFileParser()

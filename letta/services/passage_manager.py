@@ -538,17 +538,16 @@ class PassageManager:
         if not text_chunks:
             return []
 
+        from letta.embeddings.resolver import resolve_deployment_embedding_config_async
+
+        embedding_config = await resolve_deployment_embedding_config_async(actor)
+
         try:
-            # Generate embeddings if embedding config is available
-            if agent_state.embedding_config is not None:
-                embedding_client = LLMClient.create(
-                    provider_type=agent_state.embedding_config.embedding_endpoint_type,
-                    actor=actor,
-                )
-                embeddings = await embedding_client.request_embeddings(text_chunks, agent_state.embedding_config)
-            else:
-                # No embedding config - store passages without embeddings (text search only)
-                embeddings = [None] * len(text_chunks)
+            embedding_client = LLMClient.create(
+                provider_type=embedding_config.embedding_endpoint_type,
+                actor=actor,
+            )
+            embeddings = await embedding_client.request_embeddings(text_chunks, embedding_config)
 
             passages = []
 
@@ -559,7 +558,7 @@ class PassageManager:
                     "archive_id": archive.id,
                     "text": chunk_text,
                     "embedding": embedding,
-                    "embedding_config": agent_state.embedding_config,
+                    "embedding_config": embedding_config,
                     "tags": tags,
                 }
                 # only include created_at if provided

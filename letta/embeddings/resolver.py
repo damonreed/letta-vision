@@ -58,16 +58,13 @@ def _coerce_embedding_config(
 def resolve_embedding_config(
     agent_state: Optional["AgentState"] = None,
 ) -> EmbeddingConfig:
-    """Resolve embedding config synchronously (agent override or deployment default)."""
-    if agent_state is not None and agent_state.embedding_config is not None:
-        config = _coerce_embedding_config(agent_state.embedding_config)
-        if config is not None:
-            return config
+    """Resolve the deployment-wide embedding config (ignores per-agent overrides)."""
+    _ = agent_state  # legacy callers may still pass agent_state; embedding is deployment-global
 
     handle = settings.default_embedding_handle
     if not handle:
         raise ValueError(
-            "No embedding configuration resolved: set agent embedding_config or settings.default_embedding_handle"
+            "No embedding configuration resolved: set settings.default_embedding_handle (LETTA_DEFAULT_EMBEDDING_HANDLE)"
         )
 
     config = _config_from_deployment_handle(handle)
@@ -84,16 +81,13 @@ async def resolve_embedding_config_async(
     agent_state: Optional["AgentState"] = None,
     actor: Optional["PydanticUser"] = None,
 ) -> EmbeddingConfig:
-    """Resolve embedding config with optional provider-manager lookup."""
-    if agent_state is not None and agent_state.embedding_config is not None:
-        config = _coerce_embedding_config(agent_state.embedding_config)
-        if config is not None:
-            return config
+    """Resolve the deployment-wide embedding config (ignores per-agent overrides)."""
+    _ = agent_state  # legacy callers may still pass agent_state; embedding is deployment-global
 
     handle = settings.default_embedding_handle
     if not handle:
         raise ValueError(
-            "No embedding configuration resolved: set agent embedding_config or settings.default_embedding_handle"
+            "No embedding configuration resolved: set settings.default_embedding_handle (LETTA_DEFAULT_EMBEDDING_HANDLE)"
         )
 
     config = _config_from_deployment_handle(handle)
@@ -111,3 +105,29 @@ async def resolve_embedding_config_async(
         f"No embedding configuration resolved for handle '{handle}': provide actor for provider lookup "
         "or use a known deployment handle."
     )
+
+
+def validate_native_pg_embedding_config(config: EmbeddingConfig) -> None:
+    """Ensure deployment default matches native pgvector storage width."""
+    from letta.helpers.pinecone_utils import should_use_pinecone
+    from letta.helpers.tpuf_client import should_use_tpuf
+
+    if should_use_tpuf() or should_use_pinecone():
+        return
+    if config.embedding_dim != DEPLOYMENT_EMBEDDING_DIM:
+        handle = config.handle or config.embedding_model
+        raise ValueError(
+            f"Deployment embedding '{handle}' produces {config.embedding_dim}-dim vectors; "
+            f"native passage storage requires {DEPLOYMENT_EMBEDDING_DIM}-dim. "
+            "Set LETTA_DEFAULT_EMBEDDING_HANDLE to the deployment unified model "
+            "(e.g. openrouter/google/gemini-embedding-2-preview)."
+        )
+
+
+async def resolve_deployment_embedding_config_async(
+    actor: "PydanticUser",
+) -> EmbeddingConfig:
+    """Global deployment embedding for folders, file ingest, recall, and agents (not per-resource)."""
+    config = await resolve_embedding_config_async(actor=actor)
+    validate_native_pg_embedding_config(config)
+    return config

@@ -64,6 +64,42 @@ async def test_ingest_images_in_tool_return_uses_generated_provenance(monkeypatc
     assert func_response[1].source.file_id == "image-test-2"
 
 
+@pytest.mark.asyncio
+async def test_ingest_images_skips_fetch_image_tool_returns(monkeypatch):
+    ingest_called = False
+
+    async def fake_ingest(data, media_type, actor, **kwargs):
+        nonlocal ingest_called
+        ingest_called = True
+        return "image-should-not-create"
+
+    monkeypatch.setattr("letta.services.image_ingest.ingest_image_sync", fake_ingest)
+
+    msg = Message(
+        role=MessageRole.tool,
+        name="fetch_image",
+        content=[TextContent(text="fetch_image result")],
+        tool_returns=[
+            ToolReturn(
+                status="success",
+                func_response=[
+                    TextContent(text="summary"),
+                    ImageContent(
+                        source=Base64Image(media_type="image/png", data=base64.b64encode(b"png").decode(), detail="high")
+                    ),
+                ],
+            )
+        ],
+    )
+    image_ids = await ingest_images_in_message(msg, actor=None)
+
+    assert image_ids == []
+    assert ingest_called is False
+    func_response = msg.tool_returns[0].func_response
+    assert func_response[1].source.type == "base64"
+    assert func_response[1].source.data is not None
+
+
 def test_parse_caption_json_plain_object():
     parsed = _parse_caption_json(
         '{"caption": "Red apple", "description": "A red apple on wood", "details": "Close-up fruit"}'

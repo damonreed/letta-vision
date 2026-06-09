@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 from typing import List, Union
 
-from letta.schemas.letta_message_content import Base64Image, ImageContent, TextContent
+from letta.schemas.letta_message_content import ImageContent, LettaImage, TextContent
 from letta.schemas.user import User as PydanticUser
 from letta.services.image_manager import ImageManager
 from letta.services.object_store.client import get_object_store_client
@@ -46,10 +46,16 @@ async def build_fetch_image_tool_return(handle: str, actor: PydanticUser) -> Too
     media_type = image.media_type or "image/jpeg"
 
     summary = image.description or image.caption or f"Image {image_id}"
+    # LettaImage (not base64) so message ingest keeps file_id + inline bytes for vision/UI.
     blocks = [
         TextContent(text=f"{summary} ({media_type}, {len(raw)} bytes)"),
         ImageContent(
-            source=Base64Image(media_type=media_type, data=b64, detail="high"),
+            source=LettaImage(
+                file_id=image_id,
+                media_type=media_type,
+                data=b64,
+                detail="high",
+            ),
         ),
     ]
     return multimodal_tool_return(blocks)

@@ -807,13 +807,16 @@ class LettaFileToolExecutor(ToolExecutor):
 
     async def _search_files_native(self, agent_state: AgentState, query: str, limit: int) -> str:
         """Traditional search using existing passage manager."""
+        from letta.embeddings.resolver import resolve_deployment_embedding_config_async
+
+        embedding_config = await resolve_deployment_embedding_config_async(self.actor)
         # Get semantic search results
         passages = await self.agent_manager.query_source_passages_async(
             actor=self.actor,
             agent_id=agent_state.id,
             query_text=query,
             embed_query=True,
-            embedding_config=agent_state.embedding_config,
+            embedding_config=embedding_config,
         )
 
         if not passages:

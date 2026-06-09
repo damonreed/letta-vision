@@ -20,40 +20,13 @@ async def _get_embedding_config_for_search(
     agent_id: Optional[str],
     archive_id: Optional[str],
 ) -> Optional[EmbeddingConfig]:
-    """Determine which embedding config to use for a passage search.
+    """Deployment embedding config for passage vector search."""
+    _ = server
+    _ = agent_id
+    _ = archive_id
+    from letta.embeddings.resolver import resolve_deployment_embedding_config_async
 
-    Args:
-        server: The SyncServer instance
-        actor: The user making the request
-        agent_id: Optional agent ID to get embedding config from
-        archive_id: Optional archive ID to get embedding config from
-
-    Returns:
-        The embedding config to use, or None if not found
-
-    Priority:
-        1. If agent_id is provided, use that agent's embedding config
-        2. If archive_id is provided, use that archive's embedding config
-        3. Otherwise, try to get embedding config from any existing agent
-        4. Fall back to server default if no agents exist
-    """
-    if agent_id:
-        agent_state = await server.agent_manager.get_agent_by_id_async(agent_id=agent_id, actor=actor)
-        return agent_state.embedding_config
-
-    if archive_id:
-        archive = await server.archive_manager.get_archive_by_id_async(archive_id=archive_id, actor=actor)
-        return archive.embedding_config
-
-    # Search across all passages - try to get embedding config from any agent
-    agent_count = await server.agent_manager.size_async(actor=actor)
-    if agent_count > 0:
-        agents = await server.agent_manager.list_agents_async(actor=actor, limit=1)
-        if agents:
-            return agents[0].embedding_config
-
-    # Fall back to server default
-    return server.default_embedding_config
+    return await resolve_deployment_embedding_config_async(actor)
 
 
 class PassageSearchRequest(BaseModel):

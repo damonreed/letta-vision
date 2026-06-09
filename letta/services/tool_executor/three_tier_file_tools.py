@@ -86,7 +86,9 @@ class ThreeTierFileTools:
             agent_states = list(agent_states) + [agent_state]
 
         content_bytes = content.encode("utf-8")
-        embedding_config = folder.embedding_config or agent_state.embedding_config
+        from letta.embeddings.resolver import resolve_deployment_embedding_config_async
+
+        embedding_config = await resolve_deployment_embedding_config_async(self.actor)
 
         if settings.mistral_api_key:
             file_parser = MistralFileParser()
@@ -370,7 +372,6 @@ class ThreeTierFileTools:
             tags=tags,
             author_agent_id=agent_state.id,
             source_conversation_id=self.conversation_id,
-            embedding_config=agent_state.embedding_config,
             actor=self.actor,
         )
         return {
@@ -392,7 +393,6 @@ class ThreeTierFileTools:
         results = await self.archive_manager.search_file_archives(
             query=query,
             agent_id=agent_state.id,
-            embedding_config=agent_state.embedding_config,
             actor=self.actor,
             file_id=file_id,
             tags=tags,

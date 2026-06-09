@@ -2637,17 +2637,19 @@ class AgentManager:
         # Convert string to TagMatchMode enum
         tag_mode = TagMatchMode.ANY if tag_match_mode == "any" else TagMatchMode.ALL
 
+        from letta.embeddings.resolver import resolve_deployment_embedding_config_async
+
+        embedding_config = await resolve_deployment_embedding_config_async(actor)
+
         # Get results using existing passage query method
         limit = top_k if top_k is not None else RETRIEVAL_QUERY_DEFAULT_PAGE_SIZE
-        # Only use embedding-based search if embedding config is available
-        use_embedding_search = agent_state.embedding_config is not None
         passages_with_metadata = await self.query_agent_passages_async(
             actor=actor,
             agent_id=agent_id,
             query_text=query,
             limit=limit,
-            embedding_config=agent_state.embedding_config,
-            embed_query=use_embedding_search,
+            embedding_config=embedding_config,
+            embed_query=True,
             tags=tags,
             tag_match_mode=tag_mode,
             start_date=start_date,

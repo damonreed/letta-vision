@@ -492,12 +492,16 @@ class VoiceAgent(BaseAgent):
         if start_date and end_date and start_date > end_date:
             start_date, end_date = end_date, start_date
 
+        from letta.embeddings.resolver import resolve_deployment_embedding_config_async
+
+        embedding_config = await resolve_deployment_embedding_config_async(self.actor)
+
         archival_results = await self.agent_manager.query_agent_passages_async(
             actor=self.actor,
             agent_id=self.agent_id,
             query_text=archival_query,
             limit=5,
-            embedding_config=agent_state.embedding_config,
+            embedding_config=embedding_config,
             embed_query=True,
             start_date=start_date,
             end_date=end_date,

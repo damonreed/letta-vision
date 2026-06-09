@@ -528,11 +528,14 @@ class ArchiveManager:
             )
             return archive
 
-        # Create a default archive for this agent (embedding_config is optional)
+        # Create a default archive for this agent
+        from letta.embeddings.resolver import resolve_deployment_embedding_config_async
+
+        embedding_config = await resolve_deployment_embedding_config_async(actor)
         archive_name = f"{agent_state.name}'s Archive"
         archive = await self.create_archive_async(
             name=archive_name,
-            embedding_config=agent_state.embedding_config,
+            embedding_config=embedding_config,
             description="Default archive created automatically",
             actor=actor,
         )

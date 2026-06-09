@@ -26,9 +26,20 @@ def prepare_vector_for_write(
 ) -> List[float]:
     """Prepare an embedding vector for storage at deployment native width (no 4096 padding)."""
     arr = np.asarray(vec, dtype=np.float64).flatten()
-    target_dim = config.embedding_dim or DEPLOYMENT_EMBEDDING_DIM
-    if arr.shape[0] != target_dim:
-        raise ValueError(f"Embedding dim {arr.shape[0]} does not match config dim {target_dim}")
+    target_dim = DEPLOYMENT_EMBEDDING_DIM
+    config_dim = config.embedding_dim or target_dim
+    if arr.shape[0] != config_dim:
+        raise ValueError(
+            f"Embedding dim {arr.shape[0]} does not match model config dim {config_dim}. "
+            f"Passage storage requires {target_dim}-dim vectors on this deployment "
+            f"(use openrouter/google/gemini-embedding-2-preview for folders)."
+        )
+    if config_dim != target_dim:
+        raise ValueError(
+            f"Embedding model '{config.handle or config.embedding_model}' uses {config_dim}-dim vectors; "
+            f"this deployment stores {target_dim}-dim passage embeddings. "
+            "Recreate the folder with openrouter/google/gemini-embedding-2-preview."
+        )
     if config.normalize:
         return l2_normalize(arr)
     return arr.tolist()

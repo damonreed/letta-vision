@@ -585,19 +585,17 @@ class SyncServer(object):
         if request.reasoning is None:
             request.reasoning = request.llm_config.enable_reasoner or request.llm_config.put_inner_thoughts_in_kwargs
 
-        if request.embedding_config is None:
-            if request.embedding is None:
-                if settings.default_embedding_handle is not None:
-                    request.embedding = settings.default_embedding_handle
-            # Only resolve embedding config if we have an embedding handle
-            if request.embedding is not None:
-                embedding_config_params = {
-                    "handle": request.embedding,
-                    "embedding_chunk_size": request.embedding_chunk_size or constants.DEFAULT_EMBEDDING_CHUNK_SIZE,
-                }
-                log_event(name="start get_embedding_config_from_handle", attributes=embedding_config_params)
-                request.embedding_config = await self.get_embedding_config_from_handle_async(actor=actor, **embedding_config_params)
-                log_event(name="end get_embedding_config_from_handle", attributes=embedding_config_params)
+        if request.embedding or request.embedding_config:
+            logger.info(
+                "Ignoring per-agent embedding on create; using deployment default (%s)",
+                settings.default_embedding_handle,
+            )
+        from letta.embeddings.resolver import resolve_deployment_embedding_config_async
+
+        try:
+            request.embedding_config = await resolve_deployment_embedding_config_async(actor)
+        except ValueError as exc:
+            raise LettaInvalidArgumentError(str(exc), argument_name="default_embedding_handle") from exc
 
         # If git-backed memory is requested on create, we enable it *after* agent creation.
         # We strip the tag during creation so `enable_git_memory_for_agent` can be the
@@ -723,7 +721,10 @@ class SyncServer(object):
             request.llm_config.parallel_tool_calls = request.parallel_tool_calls
 
         if request.embedding is not None:
-            request.embedding_config = await self.get_embedding_config_from_handle_async(handle=request.embedding, actor=actor)
+            logger.info(
+                "Ignoring per-agent embedding on update; deployment default is always used at runtime (%s)",
+                settings.default_embedding_handle,
+            )
 
         if request.enable_sleeptime:
             agent = await self.agent_manager.get_agent_by_id_async(agent_id=agent_id, actor=actor)
