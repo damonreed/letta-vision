@@ -124,6 +124,54 @@ def _recall_snippet(layer: str, row) -> str:
     return str(snippet)
 
 
+def _file_archive_lexical_sql(*, with_agent_filter: bool) -> str:
+    agent_clause = "AND sa.agent_id = :agent_id" if with_agent_filter else ""
+    return f"""
+                SELECT fa.id,
+                       (COALESCE(fm.file_name || ': ', '') || '[' || fa.title || '] ' || fa.content) AS snippet_text,
+                       GREATEST(
+                           COALESCE(similarity(fa.title, :q), 0),
+                           COALESCE(similarity(fa.content, :q), 0)
+                       ) AS sim
+                  FROM file_archives fa
+                  JOIN files fm ON fa.file_id = fm.id
+                  JOIN sources_agents sa ON sa.source_id = fm.source_id
+                 WHERE fa.organization_id = :org
+                   AND fa.is_deleted = FALSE
+                   {agent_clause}
+                   AND (
+                     (fa.title IS NOT NULL AND similarity(fa.title, :q) > 0.1)
+                     OR (fa.content IS NOT NULL AND similarity(fa.content, :q) > 0.1)
+                   )
+                 ORDER BY sim DESC
+                 LIMIT :lim
+                """
+
+
+def _source_passage_lexical_sql(*, with_agent_filter: bool) -> str:
+    if with_agent_filter:
+        return """
+                        SELECT sp.id, sp.text, similarity(sp.text, :q) AS sim
+                          FROM source_passages sp
+                          JOIN sources_agents sa ON sa.source_id = sp.source_id
+                         WHERE sp.organization_id = :org
+                           AND sa.agent_id = :agent_id
+                           AND sp.text IS NOT NULL
+                           AND similarity(sp.text, :q) > 0.1
+                         ORDER BY sim DESC
+                         LIMIT :lim
+                        """
+    return """
+                        SELECT id, text, similarity(text, :q) AS sim
+                          FROM source_passages
+                         WHERE organization_id = :org
+                           AND text IS NOT NULL
+                           AND similarity(text, :q) > 0.1
+                         ORDER BY sim DESC
+                         LIMIT :lim
+                        """
+
+
 async def _vector_hits_for_file_archives(
     session,
     *,
@@ -183,7 +231,11 @@ async def recall(
             ("image", ImageRecord),
         ):
             q = select(model).where(model.organization_id == actor.organization_id)
-            if agent_id and hasattr(model, "agent_id"):
+            if layer == "source" and agent_id:
+                q = q.join(SourcesAgents, SourcesAgents.source_id == model.source_id).where(
+                    SourcesAgents.agent_id == agent_id
+                )
+            elif agent_id and hasattr(model, "agent_id"):
                 q = q.where(model.agent_id == agent_id)
             q = apply_embedding_space_guard(q, model, space_id)
             q = q.order_by(model.embedding.cosine_distance(query_vec).asc()).limit(limit)
@@ -215,7 +267,6 @@ async def recall(
         if query:
             lexical_specs = (
                 ("archival", "archival_passages", "text", "text"),
-                ("source", "source_passages", "text", "text"),
                 ("message", "messages", "text", "text"),
                 (
                     "image",
@@ -272,32 +323,27 @@ async def recall(
                         )
                     )
 
-            archive_lexical = text(
-                """
-                SELECT fa.id,
-                       (COALESCE(fm.file_name || ': ', '') || '[' || fa.title || '] ' || fa.content) AS snippet_text,
-                       GREATEST(
-                           COALESCE(similarity(fa.title, :q), 0),
-                           COALESCE(similarity(fa.content, :q), 0)
-                       ) AS sim
-                  FROM file_archives fa
-                  JOIN files fm ON fa.file_id = fm.id
-                  JOIN sources_agents sa ON sa.source_id = fm.source_id
-                 WHERE fa.organization_id = :org
-                   AND fa.is_deleted = FALSE
-                   AND (:agent_id IS NULL OR sa.agent_id = :agent_id)
-                   AND (
-                     (fa.title IS NOT NULL AND similarity(fa.title, :q) > 0.1)
-                     OR (fa.content IS NOT NULL AND similarity(fa.content, :q) > 0.1)
-                   )
-                 ORDER BY sim DESC
-                 LIMIT :lim
-                """
-            )
-            archive_rows = await session.execute(
-                archive_lexical,
-                {"q": query, "org": actor.organization_id, "agent_id": agent_id, "lim": limit},
-            )
+            source_lexical = text(_source_passage_lexical_sql(with_agent_filter=bool(agent_id)))
+            source_params = {"q": query, "org": actor.organization_id, "lim": limit}
+            if agent_id:
+                source_params["agent_id"] = agent_id
+            source_rows = await session.execute(source_lexical, source_params)
+            for row in source_rows:
+                lexical_hits.append(
+                    RecallHit(
+                        layer="source",
+                        snippet=str(row[1] or "").strip()[:500],
+                        handle=row[0],
+                        score=float(row[2]),
+                        reasons=["lexical"],
+                    )
+                )
+
+            archive_lexical = text(_file_archive_lexical_sql(with_agent_filter=bool(agent_id)))
+            archive_params = {"q": query, "org": actor.organization_id, "lim": limit}
+            if agent_id:
+                archive_params["agent_id"] = agent_id
+            archive_rows = await session.execute(archive_lexical, archive_params)
             for row in archive_rows:
                 lexical_hits.append(
                     RecallHit(

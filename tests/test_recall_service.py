@@ -3,7 +3,13 @@ from letta.schemas.letta_message_content import TextContent
 from letta.schemas.message import Message
 from letta.services.message_manager import MessageManager
 from letta.schemas.letta_message_content import ImageContent, LettaImage, TextContent
-from letta.services.recall.recall_service import _image_recall_snippet, _recall_snippet, _snippet_for_display
+from letta.services.recall.recall_service import (
+    _file_archive_lexical_sql,
+    _image_recall_snippet,
+    _recall_snippet,
+    _snippet_for_display,
+    _source_passage_lexical_sql,
+)
 
 
 def test_snippet_for_display_unwraps_user_json():
@@ -68,3 +74,21 @@ def test_recall_snippet_message_with_image_only_content():
     snippet = _recall_snippet("message", _Row())
     assert "image-111" in snippet
     assert "fetch_image" in snippet
+
+
+def test_file_archive_lexical_sql_avoids_ambiguous_null_agent_param():
+    scoped = _file_archive_lexical_sql(with_agent_filter=True)
+    assert "sa.agent_id = :agent_id" in scoped
+    assert "IS NULL" not in scoped
+
+    unscoped = _file_archive_lexical_sql(with_agent_filter=False)
+    assert "sa.agent_id" not in unscoped
+
+
+def test_source_passage_lexical_sql_scopes_to_agent_when_requested():
+    scoped = _source_passage_lexical_sql(with_agent_filter=True)
+    assert "sources_agents" in scoped
+    assert "sa.agent_id = :agent_id" in scoped
+
+    unscoped = _source_passage_lexical_sql(with_agent_filter=False)
+    assert "sources_agents" not in unscoped
