@@ -1255,7 +1255,12 @@ class LettaAgentV2(BaseAgentV2):
             )
 
             # 3.  Prepare the function-response payload
-            truncate = tool_call_name not in {"conversation_search", "conversation_search_date", "archival_memory_search"}
+            truncate = tool_call_name not in {
+                "conversation_search",
+                "conversation_search_date",
+                "archival_memory_search",
+                "fetch_image",
+            }
             return_char_limit = next(
                 (t.return_char_limit for t in agent_state.tools if t.name == tool_call_name),
                 None,

@@ -140,7 +140,11 @@ async def _generate_three_tier_captions(raw: bytes, media_type: str, actor: Pyda
     """Single structured VLM call for caption/description/details."""
     handle = settings.image_caption_model_handle or settings.default_llm_handle
     if not handle:
-        return {"caption": None, "description": None, "details": None}
+        return {
+            "caption": "Image attached to conversation.",
+            "description": "An image was shared in this conversation.",
+            "details": "Image content available via fetch_image.",
+        }
 
     from letta.services.provider_manager import ProviderManager
 

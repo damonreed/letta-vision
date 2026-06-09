@@ -2160,7 +2160,12 @@ class LettaAgentV3(LettaAgentV2):
                 tool_execution_result.func_return = func_return
 
             # Validate and format function response
-            truncate = spec["name"] not in {"conversation_search", "conversation_search_date", "archival_memory_search"}
+            truncate = spec["name"] not in {
+                "conversation_search",
+                "conversation_search_date",
+                "archival_memory_search",
+                "fetch_image",
+            }
             return_char_limit = next((t.return_char_limit for t in self.agent_state.tools if t.name == spec["name"]), None)
             function_response = validate_function_response(
                 func_return,

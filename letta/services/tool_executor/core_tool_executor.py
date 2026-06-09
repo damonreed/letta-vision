@@ -89,19 +89,9 @@ class LettaCoreToolExecutor(ToolExecutor):
         return "\n\n".join(f"[{h.layer}] handle={h.handle} score={h.score:.4f}\n{h.snippet}" for h in hits)
 
     async def fetch_image(self, agent_state: AgentState, actor: User, handle: str) -> str:
-        import base64
+        from letta.services.image_fetch import build_fetch_image_tool_return
 
-        from letta.services.image_manager import ImageManager
-        from letta.services.object_store.client import get_object_store_client
-
-        mgr = ImageManager()
-        image = await mgr.get_by_id_async(handle, actor)
-        if not image:
-            return f"Image {handle} not found."
-        store = get_object_store_client()
-        raw = await store.get_bytes(image.object_url_full)
-        b64 = base64.standard_b64encode(raw).decode("ascii")
-        return f"data:{image.media_type};base64,{b64}"
+        return await build_fetch_image_tool_return(handle, actor)
 
     async def conversation_search(
         self,

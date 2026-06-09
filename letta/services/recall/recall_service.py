@@ -49,10 +49,58 @@ def _snippet_for_display(text: str) -> str:
     return stripped
 
 
+def _image_recall_snippet(row) -> str:
+    for field in ("description", "caption", "details", "generation_prompt"):
+        value = getattr(row, field, None)
+        if value and str(value).strip():
+            return str(value).strip()
+
+    image_id = getattr(row, "id", "image")
+    provenance = getattr(row, "provenance", "image") or "image"
+    media_type = getattr(row, "media_type", "image") or "image"
+    status = getattr(row, "enrichment_status", "unknown") or "unknown"
+    return (
+        f"{provenance.capitalize()} {media_type} (status: {status}). "
+        f"Use fetch_image({image_id}) to view pixels."
+    )
+
+
+def _message_image_fallback_snippet(row) -> str:
+    msg = row.to_pydantic()
+    content = msg.content
+    if not isinstance(content, list):
+        return ""
+
+    handles: List[str] = []
+    for item in content:
+        item_type = getattr(item, "type", None) or (item.get("type") if isinstance(item, dict) else None)
+        if item_type != "image":
+            continue
+        source = getattr(item, "source", None) or (item.get("source") if isinstance(item, dict) else None)
+        if not source:
+            continue
+        file_id = getattr(source, "file_id", None) or (source.get("file_id") if isinstance(source, dict) else None)
+        if file_id:
+            handles.append(file_id)
+
+    if not handles:
+        return ""
+    joined = ", ".join(handles)
+    if len(handles) == 1:
+        return f"Message with image {joined}. Use fetch_image({handles[0]}) to view pixels."
+    return f"Message with images: {joined}. Use fetch_image on a handle to view pixels."
+
+
 def _recall_snippet(layer: str, row) -> str:
     if layer == "message":
         extracted = _message_manager._extract_message_text(row.to_pydantic())
-        return _snippet_for_display(extracted)
+        snippet = _snippet_for_display(extracted)
+        if snippet.strip():
+            return snippet
+        return _message_image_fallback_snippet(row)
+
+    if layer == "image":
+        return _image_recall_snippet(row)
 
     snippet = getattr(row, "description", None) or getattr(row, "text", None) or getattr(row, "caption", "") or ""
     return str(snippet)
@@ -101,29 +149,59 @@ async def recall(
 
         lexical_hits: List[RecallHit] = []
         if query:
-            for layer, table, col in (
-                ("archival", "archival_passages", "text"),
-                ("source", "source_passages", "text"),
-                ("message", "messages", "text"),
-                ("image", "images", "description"),
-            ):
-                stmt = text(
-                    f"""
-                    SELECT id, {col}, similarity({col}, :q) AS sim
-                      FROM {table}
-                     WHERE organization_id = :org
-                       AND {col} IS NOT NULL
-                       AND similarity({col}, :q) > 0.1
-                     ORDER BY sim DESC
-                     LIMIT :lim
-                    """
-                )
+            lexical_specs = (
+                ("archival", "archival_passages", "text", "text"),
+                ("source", "source_passages", "text", "text"),
+                ("message", "messages", "text", "text"),
+                (
+                    "image",
+                    "images",
+                    "COALESCE(NULLIF(description, ''), NULLIF(caption, ''), NULLIF(details, ''), generation_prompt, '')",
+                    "GREATEST("
+                    "COALESCE(similarity(description, :q), 0), "
+                    "COALESCE(similarity(caption, :q), 0), "
+                    "COALESCE(similarity(details, :q), 0)"
+                    ")",
+                ),
+            )
+            for layer, table, snippet_expr, sim_expr in lexical_specs:
+                if layer == "image":
+                    stmt = text(
+                        f"""
+                        SELECT id, {snippet_expr} AS snippet_text, {sim_expr} AS sim
+                          FROM {table}
+                         WHERE organization_id = :org
+                           AND (
+                             (description IS NOT NULL AND similarity(description, :q) > 0.1)
+                             OR (caption IS NOT NULL AND similarity(caption, :q) > 0.1)
+                             OR (details IS NOT NULL AND similarity(details, :q) > 0.1)
+                           )
+                         ORDER BY sim DESC
+                         LIMIT :lim
+                        """
+                    )
+                else:
+                    col = snippet_expr
+                    stmt = text(
+                        f"""
+                        SELECT id, {col}, similarity({col}, :q) AS sim
+                          FROM {table}
+                         WHERE organization_id = :org
+                           AND {col} IS NOT NULL
+                           AND similarity({col}, :q) > 0.1
+                         ORDER BY sim DESC
+                         LIMIT :lim
+                        """
+                    )
                 result = await session.execute(stmt, {"q": query, "org": actor.organization_id, "lim": limit})
                 for row in result:
+                    snippet_text = str(row[1] or "").strip()
+                    if layer == "image" and not snippet_text:
+                        snippet_text = f"Image {row[0]}. Use fetch_image({row[0]}) to view pixels."
                     lexical_hits.append(
                         RecallHit(
                             layer=layer,
-                            snippet=str(row[1])[:500],
+                            snippet=snippet_text[:500],
                             handle=row[0],
                             score=float(row[2]),
                             reasons=["lexical"],

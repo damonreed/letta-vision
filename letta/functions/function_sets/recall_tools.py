@@ -28,20 +28,10 @@ async def recall(agent_state: "AgentState", query: str, limit: int = 10) -> str:
 
 async def fetch_image(agent_state: "AgentState", handle: str) -> str:
     """Fetch full image pixels for a recall handle (image-<uuid>)."""
-    from letta.services.image_manager import ImageManager
-    from letta.services.object_store.client import get_object_store_client
-    import base64
+    from letta.services.image_fetch import build_fetch_image_tool_return
 
     actor = agent_state.created_by
     if actor is None:
         return "fetch_image unavailable: no actor context."
 
-    mgr = ImageManager()
-    image = await mgr.get_by_id_async(handle, actor)
-    if not image:
-        return f"Image {handle} not found."
-
-    store = get_object_store_client()
-    raw = await store.get_bytes(image.object_url_full)
-    b64 = base64.standard_b64encode(raw).decode("ascii")
-    return f"data:{image.media_type};base64,{b64}"
+    return await build_fetch_image_tool_return(handle, actor)
