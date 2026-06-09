@@ -1842,6 +1842,10 @@ class Message(BaseMessage):
             return getattr(source, "url", None)
 
         if source.type == ImageSourceType.letta:
+            data = getattr(source, "data", None)
+            if data:
+                media_type = getattr(source, "media_type", None) or "image/png"
+                return f"data:{media_type};base64,{data}"
             file_id = getattr(source, "file_id", None)
             if image_render_decisions and file_id:
                 from letta.services.vision.render_policy import RenderTier
@@ -1849,11 +1853,7 @@ class Message(BaseMessage):
                 tier = image_render_decisions.get(file_id)
                 if tier == RenderTier.TEXT:
                     return None
-            data = getattr(source, "data", None)
-            if not data:
-                return None
-            media_type = getattr(source, "media_type", None) or "image/png"
-            return f"data:{media_type};base64,{data}"
+            return None
 
         return None
 

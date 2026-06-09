@@ -5,6 +5,7 @@ from letta.schemas.enums import MessageRole
 from letta.schemas.letta_message_content import Base64Image, ImageContent, LettaImage, TextContent
 from letta.schemas.letta_message import MessageType
 from letta.schemas.message import Message, ToolReturn, user_content_to_openai_chat_content
+from letta.services.vision.render_policy import RenderTier
 from letta.schemas.openai.chat_completion_request import cast_message_to_subtype
 
 
@@ -426,6 +427,17 @@ def test_dedupe_tool_messages_drops_true_duplicate_same_step():
     deduped = Message.dedupe_tool_messages_for_llm_api(messages)
     assert len(deduped) == 1
     assert deduped[0].content == "first"
+
+
+def test_letta_image_with_hydrated_data_serializes_to_image_url():
+    letta_ref = LettaImage(file_id="image-abc", data="dGVzdA==", media_type="image/png")
+    parts = user_content_to_openai_chat_content(
+        [ImageContent(source=letta_ref), TextContent(text="what do you see?")],
+        image_render_decisions={"image-abc": RenderTier.TEXT},
+    )
+    assert isinstance(parts, list)
+    assert parts[0]["type"] == "image_url"
+    assert parts[0]["image_url"]["url"].startswith("data:image/png;base64,")
 
 
 def test_to_letta_messages_stamps_sequence_id_and_sub_order():

@@ -1300,9 +1300,14 @@ class LettaAgentV3(LettaAgentV2):
                             current_system_message=messages[0],
                             messages=messages,
                         )
+                        from letta.services.vision.image_hydration import prepare_messages_for_vision_llm
+
+                        messages_for_llm = await prepare_messages_for_vision_llm(
+                            messages, active_llm_config, self.actor
+                        )
                         request_data = active_llm_client.build_request_data(
                             agent_type=self.agent_state.agent_type,
-                            messages=messages,
+                            messages=messages_for_llm,
                             llm_config=active_llm_config,
                             tools=valid_tools,
                             force_tool_call=force_tool_call,
