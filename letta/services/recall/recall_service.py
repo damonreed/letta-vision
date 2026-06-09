@@ -31,6 +31,16 @@ class RecallHit:
     handle: str
     score: float
     reasons: List[str]
+    filename: Optional[str] = None
+
+
+def format_recall_hit(hit: RecallHit) -> str:
+    """Single recall hit line for tool output."""
+    header = f"[{hit.layer}] handle={hit.handle}"
+    if hit.filename:
+        header += f" filename={hit.filename}"
+    header += f" score={hit.score:.4f}"
+    return f"{header}\n{hit.snippet}"
 
 
 def _snippet_for_display(text: str) -> str:
@@ -151,7 +161,7 @@ def _file_archive_lexical_sql(*, with_agent_filter: bool) -> str:
 def _source_passage_lexical_sql(*, with_agent_filter: bool) -> str:
     if with_agent_filter:
         return """
-                        SELECT sp.id, sp.text, similarity(sp.text, :q) AS sim
+                        SELECT sp.id, sp.text, sp.file_name, similarity(sp.text, :q) AS sim
                           FROM source_passages sp
                           JOIN sources_agents sa ON sa.source_id = sp.source_id
                          WHERE sp.organization_id = :org
@@ -162,7 +172,7 @@ def _source_passage_lexical_sql(*, with_agent_filter: bool) -> str:
                          LIMIT :lim
                         """
     return """
-                        SELECT id, text, similarity(text, :q) AS sim
+                        SELECT id, text, file_name, similarity(text, :q) AS sim
                           FROM source_passages
                          WHERE organization_id = :org
                            AND text IS NOT NULL
@@ -226,12 +236,12 @@ async def recall(
     async with db_registry.async_session() as session:
         for layer, model in (
             ("archival", ArchivalPassage),
-            ("source", SourcePassage),
+            ("file", SourcePassage),
             ("message", MessageModel),
             ("image", ImageRecord),
         ):
             q = select(model).where(model.organization_id == actor.organization_id)
-            if layer == "source" and agent_id:
+            if layer == "file" and agent_id:
                 q = q.join(SourcesAgents, SourcesAgents.source_id == model.source_id).where(
                     SourcesAgents.agent_id == agent_id
                 )
@@ -242,6 +252,7 @@ async def recall(
             rows = (await session.execute(q)).scalars().all()
             for idx, row in enumerate(rows):
                 snippet = _recall_snippet(layer, row)
+                filename = getattr(row, "file_name", None) if layer == "file" else None
                 vector_hits.append(
                     RecallHit(
                         layer=layer,
@@ -249,6 +260,7 @@ async def recall(
                         handle=row.id,
                         score=1.0 / (idx + 1),
                         reasons=["vector"],
+                        filename=filename,
                     )
                 )
 
@@ -331,11 +343,12 @@ async def recall(
             for row in source_rows:
                 lexical_hits.append(
                     RecallHit(
-                        layer="source",
+                        layer="file",
                         snippet=str(row[1] or "").strip()[:500],
                         handle=row[0],
-                        score=float(row[2]),
+                        score=float(row[3]),
                         reasons=["lexical"],
+                        filename=row[2] or None,
                     )
                 )
 

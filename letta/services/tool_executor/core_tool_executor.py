@@ -90,7 +90,9 @@ class LettaCoreToolExecutor(ToolExecutor):
         hits = await recall_service(query, actor, limit=limit, agent_id=agent_state.id)
         if not hits:
             return "No results."
-        return "\n\n".join(f"[{h.layer}] handle={h.handle} score={h.score:.4f}\n{h.snippet}" for h in hits)
+        from letta.services.recall.recall_service import format_recall_hit
+
+        return "\n\n".join(format_recall_hit(h) for h in hits)
 
     async def fetch_image(self, agent_state: AgentState, actor: User, handle: str):
         from letta.services.image_fetch import build_fetch_image_tool_return

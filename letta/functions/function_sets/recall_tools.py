@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 
 async def recall(agent_state: "AgentState", query: str, limit: int = 10) -> str:
     """Search the full memory corpus (passages, file reading notes, messages, images) with hybrid recall."""
-    from letta.services.recall.recall_service import recall as recall_service
+    from letta.services.recall.recall_service import format_recall_hit, recall as recall_service
 
     actor = agent_state.created_by  # fallback; tools pass actor via context in production
     if actor is None:
@@ -20,10 +20,7 @@ async def recall(agent_state: "AgentState", query: str, limit: int = 10) -> str:
     if not hits:
         return "No results."
 
-    lines = []
-    for h in hits:
-        lines.append(f"[{h.layer}] score={h.score:.4f} handle={h.handle}\n{h.snippet}")
-    return "\n\n".join(lines)
+    return "\n\n".join(format_recall_hit(h) for h in hits)
 
 
 async def fetch_image(agent_state: "AgentState", handle: str) -> str:

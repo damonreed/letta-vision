@@ -4,11 +4,13 @@ from letta.schemas.message import Message
 from letta.services.message_manager import MessageManager
 from letta.schemas.letta_message_content import ImageContent, LettaImage, TextContent
 from letta.services.recall.recall_service import (
+    RecallHit,
     _file_archive_lexical_sql,
     _image_recall_snippet,
     _recall_snippet,
     _snippet_for_display,
     _source_passage_lexical_sql,
+    format_recall_hit,
 )
 
 
@@ -89,6 +91,23 @@ def test_source_passage_lexical_sql_scopes_to_agent_when_requested():
     scoped = _source_passage_lexical_sql(with_agent_filter=True)
     assert "sources_agents" in scoped
     assert "sa.agent_id = :agent_id" in scoped
+    assert "sp.file_name" in scoped
 
     unscoped = _source_passage_lexical_sql(with_agent_filter=False)
     assert "sources_agents" not in unscoped
+    assert "file_name" in unscoped
+
+
+def test_format_recall_hit_labels_file_passages_with_filename():
+    hit = format_recall_hit(
+        RecallHit(
+            layer="file",
+            snippet="Victoria\nDamian",
+            handle="passage-abc",
+            score=0.0328,
+            reasons=["lexical"],
+            filename="villains.txt",
+        )
+    )
+    assert hit.startswith("[file] handle=passage-abc filename=villains.txt score=0.0328")
+    assert "Victoria" in hit
