@@ -3,6 +3,7 @@ from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMe
 from letta.llm_api.openai_client import fill_image_content_in_messages, fill_image_content_in_responses_input
 from letta.schemas.enums import MessageRole
 from letta.schemas.letta_message_content import Base64Image, ImageContent, LettaImage, TextContent
+from letta.schemas.letta_message import MessageType
 from letta.schemas.message import Message, ToolReturn, user_content_to_openai_chat_content
 from letta.schemas.openai.chat_completion_request import cast_message_to_subtype
 
@@ -425,3 +426,38 @@ def test_dedupe_tool_messages_drops_true_duplicate_same_step():
     deduped = Message.dedupe_tool_messages_for_llm_api(messages)
     assert len(deduped) == 1
     assert deduped[0].content == "first"
+
+
+def test_to_letta_messages_stamps_sequence_id_and_sub_order():
+    tool_call = ChatCompletionMessageToolCall(
+        id="call-recall",
+        type="function",
+        function=Function(name="recall", arguments='{"query": "codeword"}'),
+    )
+    assistant = Message(
+        id="message-seq-test",
+        role=MessageRole.assistant,
+        sequence_id=2116,
+        content=[TextContent(text="searching memory")],
+        tool_calls=[tool_call],
+    )
+    tool_return = Message(
+        id="message-seq-tool",
+        role=MessageRole.tool,
+        sequence_id=2117,
+        name="recall",
+        tool_call_id="call-recall",
+        content='[{"type":"text","text":"hits"}]',
+    )
+
+    assistant_letta = assistant.to_letta_messages(reverse=False)
+    assert len(assistant_letta) == 2
+    assert assistant_letta[0].message_type == MessageType.reasoning_message
+    assert assistant_letta[1].message_type == MessageType.tool_call_message
+    assert [msg.seq_id for msg in assistant_letta] == [2116, 2116]
+    assert [msg.seq_sub for msg in assistant_letta] == [0, 1]
+
+    return_letta = tool_return.to_letta_messages(reverse=False)
+    assert len(return_letta) == 1
+    assert return_letta[0].seq_id == 2117
+    assert return_letta[0].seq_sub == 0

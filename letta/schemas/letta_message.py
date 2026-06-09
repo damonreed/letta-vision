@@ -98,6 +98,10 @@ class LettaMessage(BaseModel):
     step_id: str | None = None
     is_err: bool | None = None
     seq_id: int | None = None
+    seq_sub: int | None = Field(
+        default=None,
+        description="Order within a single DB message when it expands to multiple Letta API messages.",
+    )
     run_id: str | None = None
 
     @field_serializer("date")

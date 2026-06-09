@@ -417,6 +417,9 @@ class Message(BaseMessage):
     approvals: Optional[List[ApprovalReturn | ToolReturn]] = Field(default=None, description="The list of approvals for this message.")
     # This overrides the optional base orm schema, created_at MUST exist on all messages objects
     created_at: datetime = Field(default_factory=get_utc_time, description="The timestamp when the object was created.")
+    sequence_id: Optional[int] = Field(
+        default=None, description="Monotonic DB ordering key; exposed as seq_id on expanded Letta API messages."
+    )
 
     # validate that run_id is set
     # @model_validator(mode="after")
@@ -679,7 +682,17 @@ class Message(BaseMessage):
         else:
             raise ValueError(f"Unknown role: {self.role}")
 
-        return messages[::-1] if reverse else messages
+        result = messages[::-1] if reverse else messages
+        self._apply_sequence_ordering(result)
+        return result
+
+    def _apply_sequence_ordering(self, letta_messages: List[LettaMessage]) -> None:
+        """Stamp seq_id/seq_sub so clients can sort expanded API messages deterministically."""
+        if self.sequence_id is None:
+            return
+        for sub_index, letta_msg in enumerate(letta_messages):
+            letta_msg.seq_id = self.sequence_id
+            letta_msg.seq_sub = sub_index
 
     def _convert_reasoning_messages(
         self,
