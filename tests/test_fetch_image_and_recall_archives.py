@@ -20,8 +20,7 @@ def test_file_archive_recall_snippet():
         content = "OAuth refresh tokens expire after 24h."
         file_name = "README.md"
 
-    assert "Connector auth" in _file_archive_recall_snippet(_Row())
-    assert "README.md" in _file_archive_recall_snippet(_Row())
+    assert _file_archive_recall_snippet(_Row()) == "[Connector auth] OAuth refresh tokens expire after 24h."
 
 
 def test_recall_snippet_file_archive_layer():

@@ -81,13 +81,11 @@ def _image_recall_snippet(row) -> str:
 def _file_archive_recall_snippet(row) -> str:
     title = (getattr(row, "title", None) or "").strip()
     content = (getattr(row, "content", None) or "").strip()
-    file_name = getattr(row, "file_name", None)
-    prefix = f"{file_name}: " if file_name else ""
     if title and content:
-        return f"{prefix}[{title}] {content}"
+        return f"[{title}] {content}"
     if title:
-        return f"{prefix}{title}"
-    return f"{prefix}{content}"
+        return title
+    return content
 
 
 def _message_image_fallback_snippet(row) -> str:
@@ -138,7 +136,8 @@ def _file_archive_lexical_sql(*, with_agent_filter: bool) -> str:
     agent_clause = "AND sa.agent_id = :agent_id" if with_agent_filter else ""
     return f"""
                 SELECT fa.id,
-                       (COALESCE(fm.file_name || ': ', '') || '[' || fa.title || '] ' || fa.content) AS snippet_text,
+                       ('[' || COALESCE(fa.title, '') || '] ' || COALESCE(fa.content, '')) AS snippet_text,
+                       fm.file_name,
                        GREATEST(
                            COALESCE(similarity(fa.title, :q), 0),
                            COALESCE(similarity(fa.content, :q), 0)
@@ -192,7 +191,7 @@ async def _vector_hits_for_file_archives(
     limit: int,
 ) -> List[RecallHit]:
     q = (
-        select(FileArchiveModel)
+        select(FileArchiveModel, FileMetadataModel.file_name)
         .join(FileMetadataModel, FileArchiveModel.file_id == FileMetadataModel.id)
         .join(SourcesAgents, SourcesAgents.source_id == FileMetadataModel.source_id)
         .where(
@@ -204,9 +203,9 @@ async def _vector_hits_for_file_archives(
         q = q.where(SourcesAgents.agent_id == agent_id)
     q = apply_embedding_space_guard(q, FileArchiveModel, space_id)
     q = q.order_by(FileArchiveModel.embedding.cosine_distance(query_vec).asc()).limit(limit)
-    rows = (await session.execute(q)).scalars().all()
+    rows = (await session.execute(q)).all()
     hits: List[RecallHit] = []
-    for idx, row in enumerate(rows):
+    for idx, (row, file_name) in enumerate(rows):
         hits.append(
             RecallHit(
                 layer="file_archive",
@@ -214,6 +213,7 @@ async def _vector_hits_for_file_archives(
                 handle=row.id,
                 score=1.0 / (idx + 1),
                 reasons=["vector"],
+                filename=file_name or None,
             )
         )
     return hits
@@ -363,8 +363,9 @@ async def recall(
                         layer="file_archive",
                         snippet=str(row[1] or "").strip()[:500],
                         handle=row[0],
-                        score=float(row[2]),
+                        score=float(row[3]),
                         reasons=["lexical"],
+                        filename=row[2] or None,
                     )
                 )
 

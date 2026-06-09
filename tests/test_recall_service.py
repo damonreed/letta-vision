@@ -111,3 +111,19 @@ def test_format_recall_hit_labels_file_passages_with_filename():
     )
     assert hit.startswith("[file] handle=passage-abc filename=villains.txt score=0.0328")
     assert "Victoria" in hit
+
+
+def test_format_recall_hit_labels_file_archives_with_filename():
+    hit = format_recall_hit(
+        RecallHit(
+            layer="file_archive",
+            snippet="[Victoria's character] Victoria is a villain and wears black leather.",
+            handle="file_archive-abc",
+            score=0.0318,
+            reasons=["vector"],
+            filename="v060-test/villains.txt",
+        )
+    )
+    assert hit.startswith(
+        "[file_archive] handle=file_archive-abc filename=v060-test/villains.txt score=0.0318"
+    )
