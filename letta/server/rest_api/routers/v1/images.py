@@ -1,6 +1,7 @@
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 
 from letta.schemas.image import PydanticImage
 from letta.schemas.user import User as PydanticUser
@@ -60,6 +61,22 @@ async def re_enrich_image(
     actor = await server.user_manager.get_actor_or_default_async(actor_id=headers.actor_id)
     await enrich_image_background(image_id, actor)
     return {"ok": True}
+
+
+@router.get("/{image_id}/content")
+async def get_image_content(
+    image_id: str,
+    server: SyncServer = Depends(get_letta_server),
+    headers: HeaderParams = Depends(get_headers),
+):
+    actor = await server.user_manager.get_actor_or_default_async(actor_id=headers.actor_id)
+    mgr = ImageManager()
+    image = await mgr.get_by_id_async(image_id, actor)
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+    store = get_object_store_client()
+    data = await store.get_bytes(image.object_url_full)
+    return Response(content=data, media_type=image.media_type or "application/octet-stream")
 
 
 @router.get("/{image_id}/url")
