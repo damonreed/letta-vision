@@ -190,6 +190,28 @@ async def _ensure_1mp_derivatives_for_render(
     return updated
 
 
+def _strip_letta_image_bytes(messages: List[Message]) -> None:
+    """Remove hydrated base64 so LLM-path tiering is not bypassed by client full-res fills."""
+    for message in messages:
+        if message.content and isinstance(message.content, list):
+            for block in message.content:
+                if isinstance(block, ImageContent) and isinstance(block.source, LettaImage):
+                    block.source.data = None
+        for tool_return in message.tool_returns or []:
+            func_response = tool_return.func_response
+            if not isinstance(func_response, list):
+                continue
+            for part in func_response:
+                if isinstance(part, ImageContent) and isinstance(part.source, LettaImage):
+                    part.source.data = None
+                elif isinstance(part, dict) and part.get("type") == "image":
+                    source = part.get("source") or {}
+                    if source.get("type") == "letta" and source.get("data"):
+                        source = dict(source)
+                        source["data"] = None
+                        part["source"] = source
+
+
 async def _hydrate_content_letta_images(
     message: Message,
     metadata: Dict[str, dict],
@@ -230,6 +252,7 @@ async def prepare_messages_for_vision_llm(
         return messages
 
     hydrated = copy.deepcopy(messages)
+    _strip_letta_image_bytes(hydrated)
     metadata = await _load_image_metadata(image_ids, actor)
     metadata = await _ensure_1mp_derivatives_for_render(hydrated, metadata, llm_config, actor)
     decisions = compute_image_render_decisions(hydrated, llm_config, image_metadata=metadata)
