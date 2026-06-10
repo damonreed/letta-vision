@@ -116,3 +116,40 @@ def test_compute_render_decisions_tool_return_since_last_user_gets_full():
     }
     decisions = compute_image_render_decisions(messages, _llm_config(), image_metadata=meta)
     assert decisions[img] == RenderTier.FULL
+
+
+def _tool_return_generate_image_message(image_id: str) -> Message:
+    from letta.schemas.message import ToolReturn
+
+    return Message(
+        role=MessageRole.tool,
+        tool_returns=[
+            ToolReturn(
+                tool_call_id="functions.generate_image:1",
+                status="success",
+                func_response=[
+                    TextContent(text='{"status":"ok"}'),
+                    ImageContent(source=LettaImage(file_id=image_id, media_type="image/png")),
+                ],
+            )
+        ],
+    )
+
+
+def test_compute_render_decisions_tool_return_persists_on_later_turn():
+    img = "img-gen-persist"
+    meta = {
+        img: {
+            "file_size_full": 300_000,
+            "file_size_1mp": None,
+            "object_url_full": "sha256/gen-persist",
+        }
+    }
+    messages = [
+        Message(role=MessageRole.user, content=[TextContent(text="generate scene 1")]),
+        _tool_return_generate_image_message(img),
+        Message(role=MessageRole.user, content=[TextContent(text="what do you see in that image?")]),
+        Message(role=MessageRole.assistant, content=[TextContent(text="working on it")]),
+    ]
+    decisions = compute_image_render_decisions(messages, _llm_config(), image_metadata=meta)
+    assert decisions[img] == RenderTier.FULL
