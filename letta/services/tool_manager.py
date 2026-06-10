@@ -9,6 +9,8 @@ from letta.constants import (
     BASE_MEMORY_TOOLS,
     BASE_SLEEPTIME_TOOLS,
     BASE_TOOLS,
+    DEPRECATED_FILE_TOOL_NAMES,
+    DEPRECATED_LETTA_TOOLS,
     BASE_VOICE_SLEEPTIME_CHAT_TOOLS,
     BASE_VOICE_SLEEPTIME_TOOLS,
     BUILTIN_TOOLS,
@@ -1132,8 +1134,10 @@ class ToolManager:
                 tool_type = ToolType.LETTA_VOICE_SLEEPTIME_CORE
             elif name in BUILTIN_TOOLS:
                 tool_type = ToolType.LETTA_BUILTIN
-            elif name in FILES_TOOLS:
+            elif name in FILES_TOOLS or name in DEPRECATED_FILE_TOOL_NAMES:
                 tool_type = ToolType.LETTA_FILES_CORE
+            elif name in DEPRECATED_LETTA_TOOLS:
+                tool_type = ToolType.LETTA_CORE
             else:
                 logger.warning(f"Tool name {name} is not in any known base tool set, skipping")
                 continue

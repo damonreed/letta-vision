@@ -209,12 +209,29 @@ async def image_search(
 
 
 async def recall(self: "Agent", query: str, limit: int = 10) -> str:
-    """Deprecated alias for search_all."""
+    """
+    Deprecated alias for search_all.
+
+    Args:
+        query: Natural-language search query.
+        limit: Maximum fused results to return.
+
+    Returns:
+        Ranked hits with layer, handle, score, and snippet for reference-then-fetch.
+    """
     raise NotImplementedError("This should never be invoked directly. Contact Letta if you see this error message.")
 
 
 async def fetch_image(self: "Agent", handle: str) -> str:
-    """Deprecated alias for image_fetch."""
+    """
+    Deprecated alias for image_fetch.
+
+    Args:
+        handle: Image record id (image-<uuid>).
+
+    Returns:
+        Multimodal tool return: text summary plus image reference for vision models and the client UI.
+    """
     raise NotImplementedError("This should never be invoked directly. Contact Letta if you see this error message.")
 
 

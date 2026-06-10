@@ -222,10 +222,30 @@ async def search_file_archives(
     tags: Optional[List[str]] = None,
     limit: int = 10,
 ) -> dict:
-    """Deprecated alias for file_archives_search."""
+    """
+    Deprecated alias for file_archives_search.
+
+    Args:
+        query: Natural-language search query.
+        file_id: Limit search to one file's notes.
+        tags: Filter by note tags.
+        limit: Maximum results to return.
+
+    Returns:
+        Ranked file archive hits with provenance metadata.
+    """
     raise NotImplementedError("Tool not implemented. Please contact the Letta team.")
 
 
 async def search_file_contents(agent_state: "AgentState", query: str, limit: int = 5) -> dict:
-    """Deprecated alias for file_contents_search."""
+    """
+    Deprecated alias for file_contents_search.
+
+    Args:
+        query: Natural-language search query.
+        limit: Maximum passages to return.
+
+    Returns:
+        Matching passage excerpts with file_id, passage_id, and score.
+    """
     raise NotImplementedError("Tool not implemented. Please contact the Letta team.")

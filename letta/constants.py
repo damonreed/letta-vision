@@ -218,9 +218,10 @@ FILE_MEMORY_EMPTY_MESSAGE = (
     "There are no files currently available in memory. Files will appear here once they are uploaded directly to your system."
 )
 
-# Set of all built-in Letta tools
+# Set of all built-in Letta tools (includes deprecated aliases for existing agents)
 LETTA_TOOL_SET = set(
     BASE_TOOLS
+    + DEPRECATED_LETTA_TOOLS
     + BASE_MEMORY_TOOLS
     + MULTI_AGENT_TOOLS
     + BASE_SLEEPTIME_TOOLS
@@ -229,6 +230,12 @@ LETTA_TOOL_SET = set(
     + BUILTIN_TOOLS
     + FILES_TOOLS
 )
+
+DEPRECATED_FILE_TOOL_NAMES = {
+    "search_file_archives",
+    "search_file_contents",
+    "search_archives",
+}
 
 LETTA_PARALLEL_SAFE_TOOLS = {
     "conversation_search",
