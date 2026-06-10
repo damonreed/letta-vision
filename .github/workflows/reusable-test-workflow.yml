@@ -37,10 +37,10 @@ on:
         type: string
         default: '["self-hosted", "small"]'
       matrix-strategy:
-        description: 'JSON string for matrix strategy'
+        description: 'JSON string for matrix strategy (matrix object only, or full strategy with matrix key)'
         required: false
         type: string
-        default: '{}'
+        default: '{"include":[{"test_suite":""}]}'
       changed-files-pattern:
         description: 'Pattern for changed files detection'
         required: false
@@ -198,7 +198,9 @@ jobs:
 
     runs-on: ${{ fromJSON(inputs.runner) }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
-    strategy: ${{ fromJSON(inputs.matrix-strategy) }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(inputs.matrix-strategy).matrix || fromJSON(inputs.matrix-strategy) }}
 
     services:
       postgres:
