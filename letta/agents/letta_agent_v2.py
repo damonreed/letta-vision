@@ -1266,7 +1266,13 @@ class LettaAgentV2(BaseAgentV2):
                 "conversation_search",
                 "conversation_search_date",
                 "archival_memory_search",
+                "image_fetch",
                 "fetch_image",
+                "file_archives_search",
+                "file_contents_search",
+                "image_search",
+                "search_all",
+                "recall",
             }
             return_char_limit = next(
                 (t.return_char_limit for t in agent_state.tools if t.name == tool_call_name),

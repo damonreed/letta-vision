@@ -3,7 +3,6 @@ from typing import List, Optional, Union
 from sqlalchemy import and_, exists, select
 
 from letta.helpers.pinecone_utils import should_use_pinecone
-from letta.helpers.tpuf_client import should_use_tpuf
 from letta.orm import Agent as AgentModel
 from letta.orm.errors import NoResultFound
 from letta.orm.source import Source as SourceModel
@@ -20,16 +19,9 @@ from letta.validators import raise_on_invalid_id
 
 class SourceManager:
     def _get_vector_db_provider(self) -> VectorDBProvider:
-        """
-        determine which vector db provider to use based on configuration.
-        turbopuffer takes precedence when available.
-        """
-        if should_use_tpuf():
-            return VectorDBProvider.TPUF
-        elif should_use_pinecone():
+        if should_use_pinecone():
             return VectorDBProvider.PINECONE
-        else:
-            return VectorDBProvider.NATIVE
+        return VectorDBProvider.NATIVE
 
     """Manager class to handle business logic related to Sources."""
 

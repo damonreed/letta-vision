@@ -370,10 +370,6 @@ jobs:
           E2B_API_KEY: ${{ env.E2B_API_KEY }}
           E2B_SANDBOX_TEMPLATE_ID: ${{ env.E2B_SANDBOX_TEMPLATE_ID }}
 
-          # Turbopuffer flags
-          LETTA_USE_TPUF: true
-          LETTA_TPUF_API_KEY: ${{ env.LETTA_TPUF_API_KEY }}
-
           # Encryption key
           LETTA_ENCRYPTION_KEY: ${{ env.LETTA_ENCRYPTION_KEY }}
 

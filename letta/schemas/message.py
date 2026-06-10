@@ -145,7 +145,7 @@ def tool_return_to_openai_chat_content(
                 parts.append(
                     {
                         "type": "text",
-                        "text": f"[Image reference {handle} — use fetch_image to view pixels]",
+                        "text": f"[Image reference {handle} — use image_fetch to view pixels]",
                     }
                 )
         elif isinstance(part, dict):
@@ -163,7 +163,7 @@ def tool_return_to_openai_chat_content(
                     parts.append(
                         {
                             "type": "text",
-                            "text": f"[Image reference {handle} — use fetch_image to view pixels]",
+                            "text": f"[Image reference {handle} — use image_fetch to view pixels]",
                         }
                     )
 
@@ -209,7 +209,7 @@ def user_content_to_openai_chat_content(
                 parts.append(
                     {
                         "type": "text",
-                        "text": f"[Image reference {handle} — use fetch_image to view pixels]",
+                        "text": f"[Image reference {handle} — use image_fetch to view pixels]",
                     }
                 )
         elif isinstance(part, dict):

@@ -494,8 +494,8 @@ class MessageManager:
             pydantic_msgs: List of Pydantic message models to create
             actor: User performing the action
             strict_mode: If True, wait for embedding to complete; if False, run in background
-            project_id: Optional project ID for the messages (for Turbopuffer indexing)
-            template_id: Optional template ID for the messages (for Turbopuffer indexing)
+            project_id: Optional project ID for the messages
+            template_id: Optional template ID for the messages
             allow_partial: If True, skip messages that already exist; if False, fail on duplicates
 
         Returns:
@@ -710,8 +710,8 @@ class MessageManager:
             message_update: Update data for the message
             actor: User performing the action
             strict_mode: If True, wait for embedding update to complete; if False, run in background
-            project_id: Optional project ID for the message (for Turbopuffer indexing)
-            template_id: Optional template ID for the message (for Turbopuffer indexing)
+            project_id: Optional project ID for the message
+            template_id: Optional template ID for the message
         """
         async with db_registry.async_session() as session:
             # Fetch existing message from database
@@ -791,7 +791,7 @@ class MessageManager:
     @raise_on_invalid_id(param_name="message_id", expected_prefix=PrimitiveType.MESSAGE)
     @trace_method
     async def delete_message_by_id_async(self, message_id: str, actor: PydanticUser, strict_mode: bool = False) -> bool:
-        """Delete a message (async version with turbopuffer support)."""
+        """Delete a message (async version)."""
         # capture agent_id before deletion
         agent_id = None
         async with db_registry.async_session() as session:
@@ -1126,7 +1126,7 @@ class MessageManager:
         end_date: Optional[datetime] = None,
     ) -> List[Tuple[PydanticMessage, dict]]:
         """
-        Search messages using Turbopuffer if enabled, otherwise fall back to SQL search.
+        Search messages using pgvector when enabled, otherwise fall back to SQL search.
 
         Args:
             agent_id: ID of the agent whose messages to search
@@ -1182,7 +1182,7 @@ class MessageManager:
         end_date: Optional[datetime] = None,
     ) -> List[MessageSearchResult]:
         """
-        Search messages across entire organization using Turbopuffer.
+        Search messages across entire organization using pgvector.
 
         Args:
             actor: User performing the search (must have org access)
@@ -1201,7 +1201,7 @@ class MessageManager:
             List of MessageSearchResult objects with scoring details
 
         Raises:
-            ValueError: If message embedding or Turbopuffer is not enabled
+            ValueError: If message embedding is not enabled
         """
         if not settings.embed_all_messages:
             raise ValueError("Message search requires settings.embed_all_messages to be enabled.")

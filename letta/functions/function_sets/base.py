@@ -161,9 +161,9 @@ def conversation_search(
     return results_str
 
 
-async def recall(self: "Agent", query: str, limit: int = 10) -> str:
+async def search_all(self: "Agent", query: str, limit: int = 10) -> str:
     """
-    Unified hybrid recall over archival passages, file passages, file reading notes, messages, and images.
+    Cross-layer hybrid search over archival passages, file passages, file reading notes, messages, and images.
 
     Args:
         query: Natural-language search query.
@@ -175,16 +175,46 @@ async def recall(self: "Agent", query: str, limit: int = 10) -> str:
     raise NotImplementedError("This should never be invoked directly. Contact Letta if you see this error message.")
 
 
-async def fetch_image(self: "Agent", handle: str) -> str:
+async def image_fetch(self: "Agent", handle: str) -> str:
     """
-    Fetch full image pixels for an image handle returned by recall.
+    Fetch full image pixels for an image handle returned by image_search or search_all.
 
     Args:
         handle: Image record id (image-<uuid>).
 
     Returns:
-        Multimodal tool return: text summary plus inline base64 image for vision models and the client UI.
+        Multimodal tool return: text summary plus image reference for vision models and the client UI.
     """
+    raise NotImplementedError("This should never be invoked directly. Contact Letta if you see this error message.")
+
+
+async def image_search(
+    self: "Agent",
+    query: str,
+    limit: int = 10,
+    agent_id: Optional[str] = None,
+) -> dict:
+    """
+    Hybrid search over image descriptions and captions.
+
+    Args:
+        query: Natural-language search query.
+        limit: Maximum results to return.
+        agent_id: Optional agent scope; omit for org-wide search.
+
+    Returns:
+        Ranked hits with image handle and description.
+    """
+    raise NotImplementedError("This should never be invoked directly. Contact Letta if you see this error message.")
+
+
+async def recall(self: "Agent", query: str, limit: int = 10) -> str:
+    """Deprecated alias for search_all."""
+    raise NotImplementedError("This should never be invoked directly. Contact Letta if you see this error message.")
+
+
+async def fetch_image(self: "Agent", handle: str) -> str:
+    """Deprecated alias for image_fetch."""
     raise NotImplementedError("This should never be invoked directly. Contact Letta if you see this error message.")
 
 

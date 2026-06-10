@@ -3,7 +3,6 @@ from typing import Dict, List, Optional
 
 from sqlalchemy import delete, or_, select
 
-from letta.helpers.tpuf_client import should_use_tpuf
 from letta.log import get_logger
 from letta.orm import ArchivalPassage, Archive as ArchiveModel, ArchivesAgents
 from letta.otel.tracing import trace_method
@@ -37,8 +36,7 @@ class ArchiveManager:
         """Create a new archive."""
         try:
             async with db_registry.async_session() as session:
-                # determine vector db provider based on settings
-                vector_db_provider = VectorDBProvider.TPUF if should_use_tpuf() else VectorDBProvider.NATIVE
+                vector_db_provider = VectorDBProvider.NATIVE
 
                 archive = ArchiveModel(
                     name=name,
@@ -346,28 +344,6 @@ class ArchiveManager:
             actor=actor,
         )
 
-        # If archive uses Turbopuffer, also write to Turbopuffer (dual-write)
-        if archive.vector_db_provider == VectorDBProvider.TPUF:
-            try:
-                from letta.helpers.tpuf_client import TurbopufferClient
-
-                tpuf_client = TurbopufferClient()
-
-                # Insert to Turbopuffer with the same ID as SQL, reusing existing embedding
-                await tpuf_client.insert_archival_memories(
-                    archive_id=archive.id,
-                    text_chunks=[created_passage.text],
-                    passage_ids=[created_passage.id],
-                    organization_id=actor.organization_id,
-                    actor=actor,
-                    embeddings=[created_passage.embedding],
-                )
-                logger.info(f"Uploaded passage {created_passage.id} to Turbopuffer for archive {archive_id}")
-            except Exception as e:
-                logger.error(f"Failed to upload passage to Turbopuffer: {e}")
-                # Don't fail the entire operation if Turbopuffer upload fails
-                # The passage is already saved to SQL
-
         logger.info(f"Created passage {created_passage.id} in archive {archive_id}")
         return created_passage
 
@@ -438,22 +414,6 @@ class ArchiveManager:
             actor=actor,
         )
 
-        if archive.vector_db_provider == VectorDBProvider.TPUF:
-            try:
-                from letta.helpers.tpuf_client import TurbopufferClient
-
-                tpuf_client = TurbopufferClient()
-                await tpuf_client.insert_archival_memories(
-                    archive_id=archive.id,
-                    text_chunks=[passage.text for passage in created_passages],
-                    passage_ids=[passage.id for passage in created_passages],
-                    organization_id=actor.organization_id,
-                    actor=actor,
-                )
-                logger.info(f"Uploaded {len(created_passages)} passages to Turbopuffer for archive {archive_id}")
-            except Exception as e:
-                logger.error(f"Failed to upload passages to Turbopuffer: {e}")
-
         logger.info(f"Created {len(created_passages)} passages in archive {archive_id}")
         return created_passages
 
@@ -474,7 +434,7 @@ class ArchiveManager:
             archive_id: ID of the archive containing the passage
             passage_id: ID of the passage to delete
             actor: User performing the operation
-            strict_mode: If True, raise errors on Turbopuffer failures
+            strict_mode: If True, raise errors on vector database failures
 
         Raises:
             NoResultFound: If archive or passage not found
@@ -706,7 +666,7 @@ class ArchiveManager:
             if row and row[0]:
                 return row[0]
 
-            # generate namespace name using same logic as tpuf_client
+            # generate namespace name for the archive vector store
             environment = settings.environment
             if environment:
                 namespace_name = f"archive_{archive_id}_{environment.lower()}"

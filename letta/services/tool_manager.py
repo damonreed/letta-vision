@@ -358,15 +358,6 @@ class ToolManager:
         if upserted_tool.tool_type == ToolType.CUSTOM and tool_requests_modal and modal_configured:
             await self.create_or_update_modal_app(upserted_tool, actor)
 
-        # Embed tool in Turbopuffer if enabled
-        from letta.helpers.tpuf_client import should_use_tpuf_for_tools
-
-        if should_use_tpuf_for_tools():
-            fire_and_forget(
-                self._embed_tool_background(upserted_tool, actor),
-                task_name=f"embed_tool_{upserted_tool.id}",
-            )
-
         return upserted_tool
 
     @enforce_types
@@ -452,15 +443,6 @@ class ToolManager:
 
         if created_tool.tool_type == ToolType.CUSTOM and tool_requests_modal and modal_configured:
             await self.create_or_update_modal_app(created_tool, actor)
-
-        # Embed tool in Turbopuffer if enabled
-        from letta.helpers.tpuf_client import should_use_tpuf_for_tools
-
-        if should_use_tpuf_for_tools():
-            fire_and_forget(
-                self._embed_tool_background(created_tool, actor),
-                task_name=f"embed_tool_{created_tool.id}",
-            )
 
         return created_tool
 
@@ -1074,28 +1056,6 @@ class ToolManager:
             logger.info(f"Deploying Modal app for tool {updated_tool.id} with new hash: {new_hash}")
             await self.create_or_update_modal_app(updated_tool, actor)
 
-        # Update embedding in Turbopuffer if enabled (delete old, insert new)
-        from letta.helpers.tpuf_client import should_use_tpuf_for_tools
-
-        if should_use_tpuf_for_tools():
-
-            async def update_tool_embedding():
-                try:
-                    from letta.helpers.tpuf_client import TurbopufferClient
-
-                    tpuf_client = TurbopufferClient()
-                    # Delete old and re-insert (simpler than update)
-                    await tpuf_client.delete_tools(actor.organization_id, [updated_tool.id])
-                    await tpuf_client.insert_tools([updated_tool], actor.organization_id, actor)
-                    logger.info(f"Successfully updated tool {updated_tool.id} in Turbopuffer")
-                except Exception as e:
-                    logger.error(f"Failed to update tool {updated_tool.id} in Turbopuffer: {e}")
-
-            fire_and_forget(
-                update_tool_embedding(),
-                task_name=f"update_tool_embedding_{updated_tool.id}",
-            )
-
         return updated_tool
 
     @enforce_types
@@ -1128,19 +1088,6 @@ class ToolManager:
                     logger.warning(f"Skipping Modal cleanup for corrupted tool {tool_id}: {e}")
 
                 await tool.hard_delete_async(db_session=session, actor=actor)
-
-                # Delete from Turbopuffer if enabled
-                from letta.helpers.tpuf_client import should_use_tpuf_for_tools
-
-                if should_use_tpuf_for_tools():
-                    try:
-                        from letta.helpers.tpuf_client import TurbopufferClient
-
-                        tpuf_client = TurbopufferClient()
-                        await tpuf_client.delete_tools(actor.organization_id, [tool_id])
-                        logger.info(f"Successfully deleted tool {tool_id} from Turbopuffer")
-                    except Exception as e:
-                        logger.warning(f"Failed to delete tool {tool_id} from Turbopuffer: {e}")
 
             except NoResultFound:
                 raise ValueError(f"Tool with id {tool_id} not found.")
@@ -1372,30 +1319,6 @@ class ToolManager:
             logger.error(f"Error during Modal app deletion for tool {tool.name}: {e}")
             raise
 
-    async def _embed_tool_background(
-        self,
-        tool: PydanticTool,
-        actor: PydanticUser,
-    ) -> None:
-        """Background task to embed a tool in Turbopuffer.
-
-        Args:
-            tool: The tool to embed
-            actor: User performing the action
-        """
-        try:
-            from letta.helpers.tpuf_client import TurbopufferClient
-
-            tpuf_client = TurbopufferClient()
-            await tpuf_client.insert_tools(
-                tools=[tool],
-                organization_id=actor.organization_id,
-                actor=actor,
-            )
-            logger.info(f"Successfully embedded tool {tool.id} in Turbopuffer")
-        except Exception as e:
-            logger.error(f"Failed to embed tool {tool.id} in Turbopuffer: {e}")
-
     @enforce_types
     @trace_method
     async def search_tools_async(
@@ -1408,58 +1331,14 @@ class ToolManager:
         limit: int = 50,
     ) -> List[tuple[PydanticTool, dict]]:
         """
-        Search tools using Turbopuffer semantic search.
-
-        Args:
-            actor: User performing the search
-            query_text: Text query for semantic search
-            search_mode: "vector", "fts", or "hybrid" (default: "hybrid")
-            tool_types: Optional list of tool types to filter by
-            tags: Optional list of tags to filter by
-            limit: Maximum number of results to return
-
-        Returns:
-            List of (tool, metadata) tuples where metadata contains search scores
+        Search tools using semantic search.
 
         Raises:
-            ValueError: If Turbopuffer is not enabled for tools
+            ValueError: If tool embedding is not enabled
         """
-        from letta.helpers.tpuf_client import TurbopufferClient, should_use_tpuf_for_tools
+        from letta.settings import settings
 
-        if not should_use_tpuf_for_tools():
+        if not settings.embed_tools:
             raise ValueError("Tool semantic search requires tool embedding to be enabled (embed_tools=True).")
 
-        tpuf_client = TurbopufferClient()
-        results = await tpuf_client.query_tools(
-            organization_id=actor.organization_id,
-            actor=actor,
-            query_text=query_text,
-            search_mode=search_mode,
-            top_k=limit,
-            tool_types=tool_types,
-            tags=tags,
-        )
-
-        if not results:
-            return []
-
-        # Fetch full tool objects from database
-        tool_ids = [tool_dict["id"] for tool_dict, _, _ in results]
-        tools = []
-        for tool_id in tool_ids:
-            try:
-                tool = await self.get_tool_by_id_async(tool_id, actor=actor)
-                tools.append(tool)
-            except Exception:
-                pass  # Tool may have been deleted
-
-        tool_map = {tool.id: tool for tool in tools}
-
-        # Build result list preserving order and including metadata
-        result_list = []
-        for tool_dict, _, metadata in results:
-            tool_id = tool_dict["id"]
-            if tool_id in tool_map:
-                result_list.append((tool_map[tool_id], metadata))
-
-        return result_list
+        raise ValueError("Tool semantic search is not yet supported.")

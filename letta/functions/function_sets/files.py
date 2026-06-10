@@ -179,7 +179,7 @@ async def write_file_archive(
     raise NotImplementedError("Tool not implemented. Please contact the Letta team.")
 
 
-async def search_file_archives(
+async def file_archives_search(
     agent_state: "AgentState",
     query: str,
     file_id: Optional[str] = None,
@@ -187,7 +187,7 @@ async def search_file_archives(
     limit: int = 10,
 ) -> dict:
     """
-    Semantic search over file reading notes (file archives).
+    Hybrid search over file reading notes (file archives).
 
     Args:
         query (str): Natural-language search query.
@@ -201,15 +201,31 @@ async def search_file_archives(
     raise NotImplementedError("Tool not implemented. Please contact the Letta team.")
 
 
-async def search_file_contents(agent_state: "AgentState", query: str, limit: int = 5) -> str:
+async def file_contents_search(agent_state: "AgentState", query: str, limit: int = 5) -> dict:
     """
-    Semantic search over ingested file passages (folder RAG).
+    Hybrid search over ingested file passages (folder RAG).
 
     Args:
         query (str): Natural-language search query.
         limit (int): Maximum passages to return.
 
     Returns:
-        str: Matching passage excerpts from attached folders.
+        dict: Matching passage excerpts with file_id, passage_id, and score.
     """
+    raise NotImplementedError("Tool not implemented. Please contact the Letta team.")
+
+
+async def search_file_archives(
+    agent_state: "AgentState",
+    query: str,
+    file_id: Optional[str] = None,
+    tags: Optional[List[str]] = None,
+    limit: int = 10,
+) -> dict:
+    """Deprecated alias for file_archives_search."""
+    raise NotImplementedError("Tool not implemented. Please contact the Letta team.")
+
+
+async def search_file_contents(agent_state: "AgentState", query: str, limit: int = 5) -> dict:
+    """Deprecated alias for file_contents_search."""
     raise NotImplementedError("Tool not implemented. Please contact the Letta team.")

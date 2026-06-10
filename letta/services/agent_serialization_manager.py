@@ -11,7 +11,6 @@ from letta.errors import (
     AgentNotFoundForExportError,
 )
 from letta.helpers.pinecone_utils import should_use_pinecone
-from letta.helpers.tpuf_client import should_use_tpuf
 from letta.log import get_logger
 from letta.schemas.agent import AgentState, CreateAgent
 from letta.schemas.agent_file import (
@@ -658,12 +657,7 @@ class AgentSerializationManager:
             if schema.files and any(f.content for f in schema.files):
                 # Use override embedding config if provided, otherwise use agent's config
                 embedder_config = override_embedding_config if override_embedding_config else schema.agents[0].embedding_config
-                # determine which embedder to use - turbopuffer takes precedence
-                if should_use_tpuf():
-                    from letta.services.file_processor.embedder.turbopuffer_embedder import TurbopufferEmbedder
-
-                    embedder = TurbopufferEmbedder(embedding_config=embedder_config)
-                elif should_use_pinecone():
+                if should_use_pinecone():
                     embedder = PineconeEmbedder(embedding_config=embedder_config)
                 else:
                     embedder = OpenAIEmbedder(embedding_config=embedder_config)

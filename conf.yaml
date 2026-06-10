@@ -148,14 +148,10 @@ letta:
     agent_index: recall
 
   # =============================================================================
-  # Turbopuffer (LETTA_TPUF_*, LETTA_USE_TPUF, LETTA_EMBED_*)
+  # Message/tool embedding (LETTA_EMBED_*)
   # =============================================================================
-  use_tpuf: false
   embed_all_messages: false
   embed_tools: false
-  tpuf:
-    # api_key: ""
-    region: gcp-us-central1
 
   # =============================================================================
   # File Processing (LETTA_FILE_PROCESSING_*)

@@ -22,7 +22,6 @@ from letta.orm.passage import ArchivalPassage, SourcePassage
 from letta.orm.passage_tag import PassageTag
 from letta.otel.tracing import trace_method
 from letta.schemas.agent import AgentState
-from letta.schemas.enums import VectorDBProvider
 from letta.schemas.file import FileMetadata as PydanticFileMetadata
 from letta.schemas.passage import Passage as PydanticPassage
 from letta.schemas.user import User as PydanticUser
@@ -571,34 +570,6 @@ class PassageManager:
                 )
                 passages.append(passage)
 
-            # If archive uses Turbopuffer, also write to Turbopuffer (dual-write)
-            if archive.vector_db_provider == VectorDBProvider.TPUF:
-                try:
-                    from letta.helpers.tpuf_client import TurbopufferClient
-
-                    tpuf_client = TurbopufferClient()
-
-                    # Extract IDs, texts, and embeddings from the created passages
-                    passage_ids = [p.id for p in passages]
-                    passage_texts = [p.text for p in passages]
-                    passage_embeddings = [p.embedding for p in passages]
-
-                    # Insert to Turbopuffer with the same IDs as SQL, reusing existing embeddings
-                    await tpuf_client.insert_archival_memories(
-                        archive_id=archive.id,
-                        text_chunks=passage_texts,
-                        passage_ids=passage_ids,
-                        organization_id=actor.organization_id,
-                        actor=actor,
-                        tags=tags,
-                        created_at=passages[0].created_at if passages else None,
-                        embeddings=passage_embeddings,
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to insert passages to Turbopuffer: {e}")
-                    if strict_mode:
-                        raise  # Re-raise the exception in strict mode
-
             return passages
 
         except Exception as e:
@@ -716,24 +687,9 @@ class PassageManager:
         async with db_registry.async_session() as session:
             try:
                 passage = await ArchivalPassage.read_async(db_session=session, identifier=passage_id, actor=actor)
-                archive_id = passage.archive_id
 
                 # Delete from SQL first
                 await passage.hard_delete_async(session, actor=actor)
-
-                # Check if archive uses Turbopuffer and dual-delete
-                if archive_id:
-                    archive = await self.archive_manager.get_archive_by_id_async(archive_id=archive_id, actor=actor)
-                    if archive.vector_db_provider == VectorDBProvider.TPUF:
-                        try:
-                            from letta.helpers.tpuf_client import TurbopufferClient
-
-                            tpuf_client = TurbopufferClient()
-                            await tpuf_client.delete_passage(archive_id=archive_id, passage_id=passage_id)
-                        except Exception as e:
-                            logger.error(f"Failed to delete passage from Turbopuffer: {e}")
-                            if strict_mode:
-                                raise  # Re-raise the exception in strict mode
 
                 return True
             except NoResultFound:
@@ -811,28 +767,6 @@ class PassageManager:
         async with db_registry.async_session() as session:
             # Delete from SQL first
             await ArchivalPassage.bulk_hard_delete_async(db_session=session, identifiers=[p.id for p in passages], actor=actor)
-
-            # Group passages by archive_id for efficient Turbopuffer deletion
-            passages_by_archive = {}
-            for passage in passages:
-                if passage.archive_id:
-                    if passage.archive_id not in passages_by_archive:
-                        passages_by_archive[passage.archive_id] = []
-                    passages_by_archive[passage.archive_id].append(passage.id)
-
-            # Check each archive and delete from Turbopuffer if needed
-            for archive_id, passage_ids in passages_by_archive.items():
-                archive = await self.archive_manager.get_archive_by_id_async(archive_id=archive_id, actor=actor)
-                if archive.vector_db_provider == VectorDBProvider.TPUF:
-                    try:
-                        from letta.helpers.tpuf_client import TurbopufferClient
-
-                        tpuf_client = TurbopufferClient()
-                        await tpuf_client.delete_passages(archive_id=archive_id, passage_ids=passage_ids)
-                    except Exception as e:
-                        logger.error(f"Failed to delete passages from Turbopuffer: {e}")
-                        if strict_mode:
-                            raise  # Re-raise the exception in strict mode
 
             return True
 

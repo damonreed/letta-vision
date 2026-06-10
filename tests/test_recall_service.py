@@ -59,7 +59,7 @@ def test_image_recall_snippet_prefers_description_and_falls_back():
         enrichment_status = "pending"
 
     snippet = _image_recall_snippet(_Bare())
-    assert "fetch_image(image-xyz)" in snippet
+    assert "image_fetch(image-xyz)" in snippet
     assert "pending" in snippet
 
 
@@ -78,7 +78,7 @@ def test_recall_snippet_message_with_image_only_content():
 
     snippet = _recall_snippet("message", _Row())
     assert "image-111" in snippet
-    assert "fetch_image" in snippet
+    assert "image_fetch" in snippet
 
 
 def test_file_archive_lexical_sql_avoids_ambiguous_null_agent_param():

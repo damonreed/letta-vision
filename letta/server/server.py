@@ -877,7 +877,7 @@ class SyncServer(object):
                 argument_name="memory_contents",
             )
 
-        # Use passage manager which handles dual-write to Turbopuffer if enabled
+        # Use passage manager for archival memory writes
         passages = await self.passage_manager.insert_passage(
             agent_state=agent_state, text=memory_contents, tags=tags, actor=actor, created_at=created_at
         )

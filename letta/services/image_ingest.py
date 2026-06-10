@@ -395,7 +395,7 @@ async def ingest_images_in_message(message: PydanticMessage, actor: PydanticUser
         message.content = updated_content
 
     # fetch_image already references persisted images; re-ingesting strips inline bytes.
-    if message.tool_returns and message.name != "fetch_image":
+    if message.tool_returns and message.name not in ("fetch_image", "image_fetch"):
         for tool_return in message.tool_returns:
             func_response = tool_return.func_response
             if not isinstance(func_response, list):

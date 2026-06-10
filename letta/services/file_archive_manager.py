@@ -1,13 +1,11 @@
 from typing import List, Optional
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import select
 
-from letta.embeddings.query import apply_embedding_space_guard, embed_search_query
 from letta.embeddings.resolver import resolve_embedding_config_async
 from letta.llm_api.llm_client import LLMClient
 from letta.orm.file import FileMetadata as FileMetadataModel
 from letta.orm.file_archive import FileArchive as FileArchiveModel
-from letta.orm.sources_agents import SourcesAgents
 from letta.otel.tracing import trace_method
 from letta.schemas.embedding_config import EmbeddingConfig
 from letta.schemas.file_archive import FileArchive as PydanticFileArchive
@@ -15,7 +13,6 @@ from letta.schemas.user import User as PydanticUser
 from letta.server.db import db_registry
 from letta.services.file_archive_embedding import prepare_file_archive_embedding_fields
 from letta.services.files.archive_tags import normalize_archive_tags
-from letta.settings import DatabaseChoice, settings
 from letta.utils import enforce_types
 
 
@@ -89,45 +86,40 @@ class FileArchiveManager:
         tags: Optional[List[str]] = None,
         limit: int = 10,
     ) -> List[PydanticFileArchive]:
-        config = await resolve_embedding_config_async(actor=actor)
-        query_vec, space_id = await embed_search_query(query, config, actor=actor)
+        from letta.services.recall.hybrid_search import search_file_archives_hybrid
+
+        hits = await search_file_archives_hybrid(
+            query,
+            actor,
+            limit=limit,
+            agent_id=agent_id,
+            file_id=file_id,
+            tags=tags,
+        )
+        if not hits:
+            return []
 
         async with db_registry.async_session() as session:
-            base = (
-                select(FileArchiveModel, FileMetadataModel)
-                .join(FileMetadataModel, FileArchiveModel.file_id == FileMetadataModel.id)
-                .join(SourcesAgents, SourcesAgents.source_id == FileMetadataModel.source_id)
-                .where(
-                    FileArchiveModel.organization_id == actor.organization_id,
-                    FileArchiveModel.is_deleted == False,
-                    SourcesAgents.agent_id == agent_id,
+            archive_ids = [h.handle for h in hits]
+            rows = (
+                await session.execute(
+                    select(FileArchiveModel, FileMetadataModel)
+                    .join(FileMetadataModel, FileArchiveModel.file_id == FileMetadataModel.id)
+                    .where(FileArchiveModel.id.in_(archive_ids))
                 )
-            )
-            if file_id:
-                base = base.where(FileArchiveModel.file_id == file_id)
-            if tags:
-                normalized = normalize_archive_tags(tags)
-                if normalized:
-                    tag_filters = [FileArchiveModel.tags.contains([t]) for t in normalized]
-                    base = base.where(or_(*tag_filters))
+            ).all()
+            by_id = {r[0].id: (r[0], r[1]) for r in rows}
 
-            if settings.database_engine is DatabaseChoice.POSTGRES:
-                base = apply_embedding_space_guard(base, FileArchiveModel, space_id)
-                base = base.order_by(FileArchiveModel.embedding.cosine_distance(query_vec).asc())
-            else:
-                from letta.orm.sqlite_functions import adapt_array
-
-                base = base.order_by(
-                    func.cosine_distance(FileArchiveModel.embedding, adapt_array(query_vec)).asc(),
-                )
-
-            rows = (await session.execute(base.limit(limit))).all()
-            results: List[PydanticFileArchive] = []
-            for archive_row, file_meta in rows:
-                item = archive_row.to_pydantic()
-                item.file_name = file_meta.file_name
-                results.append(item)
-            return results
+        results: List[PydanticFileArchive] = []
+        for hit in hits:
+            tup = by_id.get(hit.handle)
+            if not tup:
+                continue
+            archive_row, file_meta = tup
+            item = archive_row.to_pydantic()
+            item.file_name = file_meta.file_name
+            results.append(item)
+        return results
 
     @enforce_types
     @trace_method

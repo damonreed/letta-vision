@@ -2164,7 +2164,13 @@ class LettaAgentV3(LettaAgentV2):
                 "conversation_search",
                 "conversation_search_date",
                 "archival_memory_search",
+                "image_fetch",
                 "fetch_image",
+                "file_archives_search",
+                "file_contents_search",
+                "image_search",
+                "search_all",
+                "recall",
             }
             return_char_limit = next((t.return_char_limit for t in self.agent_state.tools if t.name == spec["name"]), None)
             function_response = validate_function_response(

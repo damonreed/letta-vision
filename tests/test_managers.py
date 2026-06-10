@@ -3649,7 +3649,7 @@ async def test_passage_tags_functionality(disable_turbopuffer, server: SyncServe
         else:
             assert passage.tags is None
 
-    # Test querying with tag filtering (if Turbopuffer is enabled)
+    # Test querying with tag filtering
     if hasattr(server.agent_manager, "query_agent_passages_async"):
         # Test querying with python tag (should find 3 passages)
         python_results = await server.agent_manager.query_agent_passages_async(
@@ -7204,55 +7204,26 @@ async def test_create_source(server: SyncServer, default_user):
     assert source.organization_id == default_user.organization_id
 
 
-async def test_source_vector_db_provider_with_tpuf(server: SyncServer, default_user):
-    """Test that vector_db_provider is correctly set based on should_use_tpuf."""
-    from letta.settings import settings
+async def test_source_vector_db_provider_defaults_to_native(server: SyncServer, default_user):
+    """Test that new sources default to NATIVE and can persist legacy TPUF values."""
+    source_pydantic = PydanticSource(
+        name="Test Source Native Default",
+        description="Source with native provider",
+        metadata={"type": "test"},
+        embedding_config=DEFAULT_EMBEDDING_CONFIG,
+    )
+    source = await server.source_manager.create_source(source=source_pydantic, actor=default_user)
+    assert source.vector_db_provider == VectorDBProvider.NATIVE
 
-    # save original values
-    original_use_tpuf = settings.use_tpuf
-    original_tpuf_api_key = settings.tpuf_api_key
-
-    try:
-        # test when should_use_tpuf returns True (expect TPUF provider)
-        settings.use_tpuf = True
-        settings.tpuf_api_key = "test_key"
-
-        # need to mock it in source_manager since it's already imported
-        with patch("letta.services.source_manager.should_use_tpuf", return_value=True):
-            source_pydantic = PydanticSource(
-                name="Test Source TPUF",
-                description="Source with TPUF provider",
-                metadata={"type": "test"},
-                embedding_config=DEFAULT_EMBEDDING_CONFIG,
-                vector_db_provider=VectorDBProvider.TPUF,  # explicitly set it
-            )
-            assert source_pydantic.vector_db_provider == VectorDBProvider.TPUF
-
-            # create source and verify it's saved with TPUF provider
-            source = await server.source_manager.create_source(source=source_pydantic, actor=default_user)
-            assert source.vector_db_provider == VectorDBProvider.TPUF
-
-        # test when should_use_tpuf returns False (expect NATIVE provider)
-        settings.use_tpuf = False
-        settings.tpuf_api_key = None
-
-        with patch("letta.services.source_manager.should_use_tpuf", return_value=False):
-            source_pydantic = PydanticSource(
-                name="Test Source Native",
-                description="Source with Native provider",
-                metadata={"type": "test"},
-                embedding_config=DEFAULT_EMBEDDING_CONFIG,
-                vector_db_provider=VectorDBProvider.NATIVE,  # explicitly set it
-            )
-            assert source_pydantic.vector_db_provider == VectorDBProvider.NATIVE
-
-            # create source and verify it's saved with NATIVE provider
-            source = await server.source_manager.create_source(source=source_pydantic, actor=default_user)
-            assert source.vector_db_provider == VectorDBProvider.NATIVE
-    finally:
-        # restore original values
-        settings.use_tpuf = original_use_tpuf
-        settings.tpuf_api_key = original_tpuf_api_key
+    legacy_source_pydantic = PydanticSource(
+        name="Test Source Legacy TPUF",
+        description="Source with legacy TPUF provider",
+        metadata={"type": "test"},
+        embedding_config=DEFAULT_EMBEDDING_CONFIG,
+        vector_db_provider=VectorDBProvider.TPUF,
+    )
+    legacy_source = await server.source_manager.create_source(source=legacy_source_pydantic, actor=default_user)
+    assert legacy_source.vector_db_provider == VectorDBProvider.TPUF
 
 
 async def test_create_sources_with_same_name_raises_error(server: SyncServer, default_user):

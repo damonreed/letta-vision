@@ -2,7 +2,7 @@
 End-to-end tests for passage and message search endpoints using the SDK client.
 
 These tests verify that the /v1/passages/search and /v1/messages/search endpoints work correctly
-with Turbopuffer integration, including vector search, FTS, hybrid search, filtering, and pagination.
+with native pgvector storage, including vector search, FTS, hybrid search, filtering, and pagination.
 """
 
 import time
@@ -20,62 +20,18 @@ from letta.server.rest_api.routers.v1.passages import PassageSearchResult
 from letta.server.server import SyncServer
 from letta.settings import model_settings, settings
 
-DEFAULT_ORG_ID = "org-00000000-0000-4000-8000-000000000000"
-
 
 def cleanup_agent_with_messages(client: Letta, agent_id: str):
-    """
-    Helper function to properly clean up an agent by first deleting all its messages
-    from Turbopuffer before deleting the agent itself.
-
-    Args:
-        client: Letta SDK client
-        agent_id: ID of the agent to clean up
-    """
+    """Delete an agent and its messages."""
     try:
-        # First, delete all messages for this agent from Turbopuffer
-        # This ensures no orphaned messages remain in Turbopuffer
-        try:
-            import asyncio
-
-            from letta.helpers.tpuf_client import TurbopufferClient, should_use_tpuf_for_messages
-
-            if should_use_tpuf_for_messages():
-                tpuf_client = TurbopufferClient()
-                # Delete all messages for this agent from Turbopuffer
-                asyncio.run(tpuf_client.delete_all_messages(agent_id, DEFAULT_ORG_ID))
-        except Exception as e:
-            print(f"Warning: Failed to clean up Turbopuffer messages for agent {agent_id}: {e}")
-
-        # Now delete the agent itself (which will delete SQL messages via cascade)
         client.agents.delete(agent_id=agent_id)
     except Exception as e:
         print(f"Warning: Failed to clean up agent {agent_id}: {e}")
 
 
 def cleanup_tool(client: Letta, tool_id: str):
-    """
-    Helper function to properly clean up a tool by deleting it from both
-    Turbopuffer and the database.
-
-    Args:
-        client: Letta SDK client
-        tool_id: ID of the tool to clean up
-    """
+    """Delete a tool from the database."""
     try:
-        # First, delete from Turbopuffer if tool embedding is enabled
-        try:
-            import asyncio
-
-            from letta.helpers.tpuf_client import TurbopufferClient, should_use_tpuf_for_tools
-
-            if should_use_tpuf_for_tools():
-                tpuf_client = TurbopufferClient()
-                asyncio.run(tpuf_client.delete_tools(DEFAULT_ORG_ID, [tool_id]))
-        except Exception as e:
-            print(f"Warning: Failed to clean up Turbopuffer tool {tool_id}: {e}")
-
-        # Now delete the tool from the database
         client.tools.delete(tool_id=tool_id)
     except Exception as e:
         print(f"Warning: Failed to clean up tool {tool_id}: {e}")
@@ -91,64 +47,22 @@ def server():
 
 
 @pytest.fixture
-def enable_turbopuffer():
-    """Temporarily enable Turbopuffer for testing"""
-    original_use_tpuf = settings.use_tpuf
-    original_api_key = settings.tpuf_api_key
-    original_environment = settings.environment
-
-    # Enable Turbopuffer with test key
-    settings.use_tpuf = True
-    if not settings.tpuf_api_key:
-        settings.tpuf_api_key = original_api_key
-    settings.environment = "DEV"
-
-    yield
-
-    # Restore original values
-    settings.use_tpuf = original_use_tpuf
-    settings.tpuf_api_key = original_api_key
-    settings.environment = original_environment
-
-
-@pytest.fixture
 def enable_message_embedding():
-    """Enable both Turbopuffer and message embedding"""
-    original_use_tpuf = settings.use_tpuf
-    original_api_key = settings.tpuf_api_key
+    """Enable message embedding for search tests."""
     original_embed_messages = settings.embed_all_messages
     original_environment = settings.environment
 
-    settings.use_tpuf = True
-    settings.tpuf_api_key = settings.tpuf_api_key or "test-key"
     settings.embed_all_messages = True
     settings.environment = "DEV"
 
     yield
 
-    settings.use_tpuf = original_use_tpuf
-    settings.tpuf_api_key = original_api_key
     settings.embed_all_messages = original_embed_messages
     settings.environment = original_environment
 
 
-@pytest.fixture
-def disable_turbopuffer():
-    """Ensure Turbopuffer is disabled for testing"""
-    original_use_tpuf = settings.use_tpuf
-    original_embed_messages = settings.embed_all_messages
-
-    settings.use_tpuf = False
-    settings.embed_all_messages = False
-
-    yield
-
-    settings.use_tpuf = original_use_tpuf
-    settings.embed_all_messages = original_embed_messages
-
-
-@pytest.mark.skipif(not settings.tpuf_api_key, reason="Turbopuffer API key not configured")
-def test_passage_search_basic(client: Letta, enable_turbopuffer):
+@pytest.mark.skipif(not model_settings.openai_api_key, reason="OpenAI API key not configured")
+def test_passage_search_basic(client: Letta):
     """Test basic passage search functionality through the SDK"""
     # Create an agent
     agent = client.agents.create(
@@ -170,7 +84,7 @@ def test_passage_search_basic(client: Letta, enable_turbopuffer):
             test_passages = [
                 "Python is a popular programming language for data science and machine learning.",
                 "JavaScript is widely used for web development and frontend applications.",
-                "Turbopuffer is a vector database optimized for performance and scalability.",
+                "PostgreSQL pgvector stores embeddings for semantic recall.",
             ]
 
             for passage_text in test_passages:
@@ -212,7 +126,7 @@ def test_passage_search_basic(client: Letta, enable_turbopuffer):
             )
 
             assert len(archive_results) > 0, "Should find passages in archive"
-            assert any("Turbopuffer" in result["passage"]["text"] or "vector" in result["passage"]["text"] for result in archive_results), (
+            assert any("pgvector" in result["passage"]["text"] or "vector" in result["passage"]["text"] for result in archive_results), (
                 "Should find vector-related passage"
             )
 
@@ -228,8 +142,8 @@ def test_passage_search_basic(client: Letta, enable_turbopuffer):
         cleanup_agent_with_messages(client, agent.id)
 
 
-@pytest.mark.skipif(not settings.tpuf_api_key, reason="Turbopuffer API key not configured")
-def test_passage_search_with_tags(client: Letta, enable_turbopuffer):
+@pytest.mark.skipif(not model_settings.openai_api_key, reason="OpenAI API key not configured")
+def test_passage_search_with_tags(client: Letta):
     """Test passage search with tag filtering"""
     # Create an agent
     agent = client.agents.create(
@@ -290,8 +204,8 @@ def test_passage_search_with_tags(client: Letta, enable_turbopuffer):
         cleanup_agent_with_messages(client, agent.id)
 
 
-@pytest.mark.skipif(not settings.tpuf_api_key, reason="Turbopuffer API key not configured")
-def test_passage_search_with_date_filters(client: Letta, enable_turbopuffer):
+@pytest.mark.skipif(not model_settings.openai_api_key, reason="OpenAI API key not configured")
+def test_passage_search_with_date_filters(client: Letta):
     """Test passage search with date range filtering"""
     # Create an agent
     agent = client.agents.create(
@@ -359,8 +273,8 @@ def test_passage_search_with_date_filters(client: Letta, enable_turbopuffer):
 
 
 @pytest.mark.skipif(
-    not (settings.use_tpuf and settings.tpuf_api_key and model_settings.openai_api_key and settings.embed_all_messages),
-    reason="Message search requires Turbopuffer, OpenAI, and message embedding to be enabled",
+    not (model_settings.openai_api_key and settings.embed_all_messages),
+    reason="Message search requires OpenAI and message embedding to be enabled",
 )
 def test_message_search_basic(client: Letta, enable_message_embedding):
     """Test basic message search functionality through the SDK"""
@@ -422,8 +336,8 @@ def test_message_search_basic(client: Letta, enable_message_embedding):
         cleanup_agent_with_messages(client, agent.id)
 
 
-@pytest.mark.skipif(not settings.tpuf_api_key, reason="Turbopuffer API key not configured")
-def test_passage_search_pagination(client: Letta, enable_turbopuffer):
+@pytest.mark.skipif(not model_settings.openai_api_key, reason="OpenAI API key not configured")
+def test_passage_search_pagination(client: Letta):
     """Test passage search pagination"""
     # Create an agent
     agent = client.agents.create(
@@ -497,8 +411,8 @@ def test_passage_search_pagination(client: Letta, enable_turbopuffer):
         cleanup_agent_with_messages(client, agent.id)
 
 
-@pytest.mark.skipif(not settings.tpuf_api_key, reason="Turbopuffer API key not configured")
-def test_passage_search_org_wide(client: Letta, enable_turbopuffer):
+@pytest.mark.skipif(not model_settings.openai_api_key, reason="OpenAI API key not configured")
+def test_passage_search_org_wide(client: Letta):
     """Test organization-wide passage search (without agent_id or archive_id)"""
     # Create multiple agents with archives
     agent1 = client.agents.create(
@@ -569,29 +483,20 @@ def test_passage_search_org_wide(client: Letta, enable_turbopuffer):
 
 @pytest.fixture
 def enable_tool_embedding():
-    """Enable both Turbopuffer and tool embedding"""
-    original_use_tpuf = settings.use_tpuf
-    original_api_key = settings.tpuf_api_key
+    """Enable tool embedding flag for search tests."""
     original_embed_tools = settings.embed_tools
     original_environment = settings.environment
 
-    settings.use_tpuf = True
-    settings.tpuf_api_key = settings.tpuf_api_key or "test-key"
     settings.embed_tools = True
     settings.environment = "DEV"
 
     yield
 
-    settings.use_tpuf = original_use_tpuf
-    settings.tpuf_api_key = original_api_key
     settings.embed_tools = original_embed_tools
     settings.environment = original_environment
 
 
-@pytest.mark.skipif(
-    not (settings.use_tpuf and settings.tpuf_api_key and model_settings.openai_api_key and settings.embed_tools),
-    reason="Tool search requires Turbopuffer, OpenAI, and tool embedding to be enabled",
-)
+@pytest.mark.skip(reason="Tool semantic search is not yet supported after Turbopuffer removal")
 def test_tool_search_basic(client: Letta, enable_tool_embedding):
     """Test basic tool search functionality through the SDK"""
     tool_ids = []

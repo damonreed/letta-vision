@@ -52,7 +52,7 @@ def _collect_tool_return_letta_image_ids(message: Message) -> set[str]:
 
 def _text_for_demoted_image(file_id: str, info: dict) -> str:
     description = (info.get("description") or "").strip() or f"Image {file_id}"
-    return f"{description} [{file_id} — use fetch_image to view pixels]"
+    return f"{description} [{file_id} — use image_fetch to view pixels]"
 
 
 async def _hydrate_letta_image_bytes(

@@ -782,8 +782,8 @@ async def test_filter_existing_messages(server: SyncServer, sarah_agent, default
 
 
 @pytest.mark.asyncio
-async def test_create_many_messages_async_with_turbopuffer(server: SyncServer, sarah_agent, default_user):
-    """Test batch creation with turbopuffer embedding (if enabled)"""
+async def test_create_many_messages_async_with_embedding(server: SyncServer, sarah_agent, default_user):
+    """Test batch creation with optional message embedding."""
     message_manager = server.message_manager
 
     messages = []

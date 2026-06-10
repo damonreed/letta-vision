@@ -72,7 +72,6 @@ class ThreeTierFileTools:
         agent_state: AgentState,
     ) -> None:
         from letta.helpers.pinecone_utils import should_use_pinecone
-        from letta.helpers.tpuf_client import should_use_tpuf
         from letta.services.file_processor.embedder.openai_embedder import OpenAIEmbedder
         from letta.services.file_processor.embedder.pinecone_embedder import PineconeEmbedder
         from letta.services.file_processor.file_processor import FileProcessor
@@ -95,11 +94,7 @@ class ThreeTierFileTools:
         else:
             file_parser = MarkitdownFileParser()
 
-        if should_use_tpuf():
-            from letta.services.file_processor.embedder.turbopuffer_embedder import TurbopufferEmbedder
-
-            embedder = TurbopufferEmbedder(embedding_config=embedding_config)
-        elif should_use_pinecone():
+        if should_use_pinecone():
             embedder = PineconeEmbedder(embedding_config=embedding_config)
         else:
             embedder = OpenAIEmbedder(embedding_config=embedding_config)

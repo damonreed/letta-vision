@@ -41,8 +41,12 @@ class LettaCoreToolExecutor(ToolExecutor):
         function_map = {
             "send_message": self.send_message,
             "conversation_search": self.conversation_search,
-            "recall": self.recall,
-            "fetch_image": self.fetch_image,
+            "search_all": self.search_all,
+            "image_fetch": self.image_fetch,
+            "image_search": self.image_search,
+            # Deprecated aliases
+            "recall": self.search_all,
+            "fetch_image": self.image_fetch,
             "archival_memory_search": self.archival_memory_search,
             "archival_memory_insert": self.archival_memory_insert,
             "core_memory_append": self.core_memory_append,
@@ -84,20 +88,41 @@ class LettaCoreToolExecutor(ToolExecutor):
     async def send_message(self, agent_state: AgentState, actor: User, message: str) -> Optional[str]:
         return "Sent message successfully."
 
-    async def recall(self, agent_state: AgentState, actor: User, query: str, limit: int = 10) -> str:
-        from letta.services.recall.recall_service import recall as recall_service
+    async def search_all(self, agent_state: AgentState, actor: User, query: str, limit: int = 10) -> str:
+        from letta.services.recall.hybrid_search import format_search_all_hit, search_all_hybrid
 
-        hits = await recall_service(query, actor, limit=limit, agent_id=agent_state.id)
+        hits = await search_all_hybrid(query, actor, limit=limit, agent_id=agent_state.id)
         if not hits:
             return "No results."
-        from letta.services.recall.recall_service import format_recall_hit
+        return "\n\n".join(format_search_all_hit(h) for h in hits)
 
-        return "\n\n".join(format_recall_hit(h) for h in hits)
-
-    async def fetch_image(self, agent_state: AgentState, actor: User, handle: str):
+    async def image_fetch(self, agent_state: AgentState, actor: User, handle: str):
         from letta.services.image_fetch import build_fetch_image_tool_return
 
         return await build_fetch_image_tool_return(handle, actor)
+
+    async def image_search(
+        self,
+        agent_state: AgentState,
+        actor: User,
+        query: str,
+        limit: int = 10,
+        agent_id: Optional[str] = None,
+    ) -> dict:
+        from letta.services.recall.hybrid_search import search_images_hybrid
+
+        scope_agent = agent_id if agent_id is not None else None
+        hits = await search_images_hybrid(query, actor, limit=limit, agent_id=scope_agent)
+        return {
+            "results": [
+                {
+                    "handle": h.handle,
+                    "description": h.description or h.snippet,
+                    "score": h.score,
+                }
+                for h in hits
+            ]
+        }
 
     async def conversation_search(
         self,

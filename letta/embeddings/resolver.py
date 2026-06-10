@@ -110,9 +110,8 @@ async def resolve_embedding_config_async(
 def validate_native_pg_embedding_config(config: EmbeddingConfig) -> None:
     """Ensure deployment default matches native pgvector storage width."""
     from letta.helpers.pinecone_utils import should_use_pinecone
-    from letta.helpers.tpuf_client import should_use_tpuf
 
-    if should_use_tpuf() or should_use_pinecone():
+    if should_use_pinecone():
         return
     if config.embedding_dim != DEPLOYMENT_EMBEDDING_DIM:
         handle = config.handle or config.embedding_model

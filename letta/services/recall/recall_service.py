@@ -152,6 +152,7 @@ def _snippet_for_display(text: str) -> str:
             value = parsed.get(key)
             if value:
                 return str(value)
+        return ""
     return stripped
 
 
@@ -167,7 +168,7 @@ def _image_recall_snippet(row) -> str:
     status = getattr(row, "enrichment_status", "unknown") or "unknown"
     return (
         f"{provenance.capitalize()} {media_type} (status: {status}). "
-        f"Use fetch_image({image_id}) to view pixels."
+        f"Use image_fetch({image_id}) to view pixels."
     )
 
 
@@ -203,8 +204,8 @@ def _message_image_fallback_snippet(row) -> str:
         return ""
     joined = ", ".join(handles)
     if len(handles) == 1:
-        return f"Message with image {joined}. Use fetch_image({handles[0]}) to view pixels."
-    return f"Message with images: {joined}. Use fetch_image on a handle to view pixels."
+        return f"Message with image {joined}. Use image_fetch({handles[0]}) to view pixels."
+    return f"Message with images: {joined}. Use image_fetch on a handle to view pixels."
 
 
 def _recall_snippet(layer: str, row) -> str:
@@ -320,212 +321,7 @@ async def recall(
     limit: int = 10,
     agent_id: Optional[str] = None,
 ) -> List[RecallHit]:
-    if settings.database_engine != DatabaseChoice.POSTGRES:
-        return []
+    """Deprecated alias for search_all_hybrid."""
+    from letta.services.recall.hybrid_search import search_all_hybrid
 
-    config = await resolve_embedding_config_async(actor=actor)
-    query_vec, space_id = await embed_search_query(query, config, actor=actor)
-
-    vector_hits: List[RecallHit] = []
-    async with db_registry.async_session() as session:
-        for layer, model in (
-            ("archival", ArchivalPassage),
-            ("file", SourcePassage),
-            ("message", MessageModel),
-            ("image", ImageRecord),
-        ):
-            q = select(model).where(model.organization_id == actor.organization_id)
-            if layer == "file" and agent_id:
-                q = q.join(SourcesAgents, SourcesAgents.source_id == model.source_id).where(
-                    SourcesAgents.agent_id == agent_id
-                )
-            elif agent_id and hasattr(model, "agent_id"):
-                q = q.where(model.agent_id == agent_id)
-            q = apply_embedding_space_guard(q, model, space_id)
-            q = q.order_by(model.embedding.cosine_distance(query_vec).asc()).limit(limit)
-            rows = (await session.execute(q)).scalars().all()
-            for idx, row in enumerate(rows):
-                snippet = _recall_snippet(layer, row)
-                filename = getattr(row, "file_name", None) if layer == "file" else None
-                source_group = None
-                linked_image_ids: List[str] = []
-                if layer == "file":
-                    source_group = filename
-                elif layer == "message":
-                    source_group = _message_source_group(row)
-                    linked_image_ids = _message_linked_image_ids(row)
-
-                vector_hits.append(
-                    RecallHit(
-                        layer=layer,
-                        snippet=_truncate_snippet(snippet),
-                        handle=row.id,
-                        score=1.0 / (idx + 1),
-                        reasons=["vector"],
-                        filename=filename,
-                        source_group=source_group,
-                        linked_image_ids=linked_image_ids,
-                    )
-                )
-
-        vector_hits.extend(
-            await _vector_hits_for_file_archives(
-                session,
-                actor=actor,
-                agent_id=agent_id,
-                query_vec=query_vec,
-                space_id=space_id,
-                limit=limit,
-            )
-        )
-
-        lexical_hits: List[RecallHit] = []
-        if query:
-            lexical_specs = (
-                ("archival", "archival_passages", "text", "text"),
-                (
-                    "image",
-                    "images",
-                    "COALESCE(NULLIF(description, ''), NULLIF(caption, ''), NULLIF(details, ''), generation_prompt, '')",
-                    "GREATEST("
-                    "COALESCE(similarity(description, :q), 0), "
-                    "COALESCE(similarity(caption, :q), 0), "
-                    "COALESCE(similarity(details, :q), 0)"
-                    ")",
-                ),
-            )
-            message_lexical = text(
-                """
-                SELECT id, text, conversation_id, agent_id, similarity(text, :q) AS sim
-                  FROM messages
-                 WHERE organization_id = :org
-                   AND text IS NOT NULL
-                   AND similarity(text, :q) > 0.1
-                 ORDER BY sim DESC
-                 LIMIT :lim
-                """
-            )
-            message_rows = await session.execute(
-                message_lexical, {"q": query, "org": actor.organization_id, "lim": limit}
-            )
-            for row in message_rows:
-                conversation_id = row[2]
-                agent_id_val = row[3]
-                if conversation_id:
-                    source_group = f"conversation:{conversation_id}"
-                elif agent_id_val:
-                    source_group = f"agent:{agent_id_val}"
-                else:
-                    source_group = None
-                lexical_hits.append(
-                    RecallHit(
-                        layer="message",
-                        snippet=_truncate_snippet(str(row[1] or "").strip()),
-                        handle=row[0],
-                        score=float(row[4]),
-                        reasons=["lexical"],
-                        source_group=source_group,
-                    )
-                )
-
-            for layer, table, snippet_expr, sim_expr in lexical_specs:
-                if layer == "image":
-                    stmt = text(
-                        f"""
-                        SELECT id, {snippet_expr} AS snippet_text, {sim_expr} AS sim
-                          FROM {table}
-                         WHERE organization_id = :org
-                           AND (
-                             (description IS NOT NULL AND similarity(description, :q) > 0.1)
-                             OR (caption IS NOT NULL AND similarity(caption, :q) > 0.1)
-                             OR (details IS NOT NULL AND similarity(details, :q) > 0.1)
-                           )
-                         ORDER BY sim DESC
-                         LIMIT :lim
-                        """
-                    )
-                else:
-                    col = snippet_expr
-                    stmt = text(
-                        f"""
-                        SELECT id, {col}, similarity({col}, :q) AS sim
-                          FROM {table}
-                         WHERE organization_id = :org
-                           AND {col} IS NOT NULL
-                           AND similarity({col}, :q) > 0.1
-                         ORDER BY sim DESC
-                         LIMIT :lim
-                        """
-                    )
-                result = await session.execute(stmt, {"q": query, "org": actor.organization_id, "lim": limit})
-                for row in result:
-                    snippet_text = str(row[1] or "").strip()
-                    if layer == "image" and not snippet_text:
-                        snippet_text = f"Image {row[0]}. Use fetch_image({row[0]}) to view pixels."
-                    lexical_hits.append(
-                        RecallHit(
-                            layer=layer,
-                            snippet=_truncate_snippet(snippet_text),
-                            handle=row[0],
-                            score=float(row[2]),
-                            reasons=["lexical"],
-                        )
-                    )
-
-            source_lexical = text(_source_passage_lexical_sql(with_agent_filter=bool(agent_id)))
-            source_params = {"q": query, "org": actor.organization_id, "lim": limit}
-            if agent_id:
-                source_params["agent_id"] = agent_id
-            source_rows = await session.execute(source_lexical, source_params)
-            for row in source_rows:
-                file_name = row[2] or None
-                lexical_hits.append(
-                    RecallHit(
-                        layer="file",
-                        snippet=_truncate_snippet(str(row[1] or "").strip()),
-                        handle=row[0],
-                        score=float(row[3]),
-                        reasons=["lexical"],
-                        filename=file_name,
-                        source_group=file_name,
-                    )
-                )
-
-            archive_lexical = text(_file_archive_lexical_sql(with_agent_filter=bool(agent_id)))
-            archive_params = {"q": query, "org": actor.organization_id, "lim": limit}
-            if agent_id:
-                archive_params["agent_id"] = agent_id
-            archive_rows = await session.execute(archive_lexical, archive_params)
-            for row in archive_rows:
-                archive_name = row[2] or None
-                lexical_hits.append(
-                    RecallHit(
-                        layer="file_archive",
-                        snippet=_truncate_snippet(str(row[1] or "").strip()),
-                        handle=row[0],
-                        score=float(row[3]),
-                        reasons=["lexical"],
-                        filename=archive_name,
-                        source_group=archive_name,
-                    )
-                )
-
-    fused: dict[str, RecallHit] = {}
-    for rank, hit in enumerate(sorted(vector_hits, key=lambda h: -h.score)):
-        key = f"{hit.layer}:{hit.handle}"
-        rrf = 1.0 / (60 + rank + 1)
-        if key in fused:
-            _merge_recall_hit(fused[key], hit, rrf)
-        else:
-            hit.score = rrf
-            fused[key] = hit
-    for rank, hit in enumerate(sorted(lexical_hits, key=lambda h: -h.score)):
-        key = f"{hit.layer}:{hit.handle}"
-        rrf = 1.0 / (60 + rank + 1)
-        if key in fused:
-            _merge_recall_hit(fused[key], hit, rrf)
-        else:
-            hit.score = rrf
-            fused[key] = hit
-
-    return finalize_recall_hits(list(fused.values()), limit)
+    return await search_all_hybrid(query, actor, limit=limit, agent_id=agent_id)

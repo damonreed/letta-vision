@@ -2456,7 +2456,6 @@ class AgentManager:
         tag_match_mode: Optional[TagMatchMode] = None,
     ) -> List[Tuple[PydanticPassage, float, dict]]:
         """Lists all passages attached to an agent."""
-        # Check if we should use Turbopuffer for vector search
         # Support searching by either agent_id or archive_id directly
         if embed_query and query_text and embedding_config:
             target_archive_id = None
@@ -2474,33 +2473,7 @@ class AgentManager:
                 # Use the provided archive_id directly
                 target_archive_id = archive_id
 
-            if target_archive_id:
-                # Get archive to check vector_db_provider
-                archive = await self.archive_manager.get_archive_by_id_async(archive_id=target_archive_id, actor=actor)
-
-                # Use Turbopuffer for vector search if archive is configured for TPUF
-                if archive.vector_db_provider == VectorDBProvider.TPUF:
-                    from letta.helpers.tpuf_client import TurbopufferClient
-
-                    # Query Turbopuffer - use hybrid search when text is available
-                    tpuf_client = TurbopufferClient()
-                    # use hybrid search to combine vector and full-text search
-                    passages_with_scores = await tpuf_client.query_passages(
-                        archive_id=target_archive_id,
-                        query_text=query_text,  # pass text for potential hybrid search
-                        search_mode="hybrid",  # use hybrid mode for better results
-                        top_k=limit,
-                        tags=tags,
-                        tag_match_mode=tag_match_mode or TagMatchMode.ANY,
-                        start_date=start_date,
-                        end_date=end_date,
-                        actor=actor,
-                    )
-
-                    # Return full tuples with metadata
-                    return passages_with_scores
-
-        # Fall back to SQL-based search for non-vector queries or NATIVE archives
+        # SQL-based search for native archives
         async with db_registry.async_session() as session:
             main_query = await build_agent_passage_query(
                 actor=actor,
@@ -2637,61 +2610,44 @@ class AgentManager:
         # Convert string to TagMatchMode enum
         tag_mode = TagMatchMode.ANY if tag_match_mode == "any" else TagMatchMode.ALL
 
-        from letta.embeddings.resolver import resolve_deployment_embedding_config_async
+        from letta.services.recall.hybrid_search import search_archival_hybrid
 
-        embedding_config = await resolve_deployment_embedding_config_async(actor)
-
-        # Get results using existing passage query method
         limit = top_k if top_k is not None else RETRIEVAL_QUERY_DEFAULT_PAGE_SIZE
-        passages_with_metadata = await self.query_agent_passages_async(
-            actor=actor,
-            agent_id=agent_id,
-            query_text=query,
+        hits = await search_archival_hybrid(
+            query,
+            actor,
             limit=limit,
-            embedding_config=embedding_config,
-            embed_query=True,
+            agent_id=agent_id,
             tags=tags,
             tag_match_mode=tag_mode,
             start_date=start_date,
             end_date=end_date,
         )
 
-        # Format results to include tags with friendly timestamps and relevance metadata
         formatted_results = []
-        for passage, score, metadata in passages_with_metadata:
-            # Format timestamp in agent's timezone if available
-            timestamp = passage.created_at
+        for hit in hits:
+            timestamp = hit.created_at
             if timestamp and agent_state.timezone:
                 try:
-                    # Convert to agent's timezone
                     tz = ZoneInfo(agent_state.timezone)
                     local_time = timestamp.astimezone(tz)
-                    # Format as ISO string with timezone
                     formatted_timestamp = local_time.isoformat()
                 except Exception:
-                    # Fallback to ISO format if timezone conversion fails
                     formatted_timestamp = str(timestamp)
             else:
-                # Use ISO format if no timezone is set
                 formatted_timestamp = str(timestamp) if timestamp else "Unknown"
 
-            result_dict = {"id": passage.id, "timestamp": formatted_timestamp, "content": passage.text, "tags": passage.tags or []}
-
-            # Add relevance metadata if available
-            if metadata:
-                relevance_info = {
-                    k: v
-                    for k, v in {
-                        "rrf_score": metadata.get("combined_score"),
-                        "vector_rank": metadata.get("vector_rank"),
-                        "fts_rank": metadata.get("fts_rank"),
-                    }.items()
-                    if v is not None
-                }
-
-                if relevance_info:  # Only add if we have metadata
-                    result_dict["relevance"] = relevance_info
-
+            content = hit.full_text or hit.snippet or ""
+            result_dict = {
+                "id": hit.handle,
+                "timestamp": formatted_timestamp,
+                "content": content,
+                "tags": hit.tags or [],
+                "relevance": {
+                    "rrf_score": hit.score,
+                    "reasons": hit.reasons,
+                },
+            }
             formatted_results.append(result_dict)
 
         return formatted_results

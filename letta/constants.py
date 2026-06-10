@@ -114,14 +114,21 @@ SEND_MESSAGE_TOOL_NAME = "send_message"
 # Note that we don't include "conversation_search_date" for now
 BASE_TOOLS = [
     SEND_MESSAGE_TOOL_NAME,
-    "recall",
-    "fetch_image",
+    "search_all",
+    "image_fetch",
+    "image_search",
     "conversation_search",
     "archival_memory_insert",
     "archival_memory_search",
 ]
-# Archival memory (passages) remains supported; distinct from file reading notes (write_file_archive / search_file_archives).
-DEPRECATED_LETTA_TOOLS: list[str] = []
+# Archival memory (passages) remains supported; distinct from file reading notes (write_file_archive / file_archives_search).
+DEPRECATED_LETTA_TOOLS: list[str] = [
+    "recall",
+    "fetch_image",
+    "search_file_archives",
+    "search_file_contents",
+    "search_archives",
+]
 # Base memory tools CAN be edited, and are added by default by the server
 BASE_MEMORY_TOOLS = ["core_memory_append", "core_memory_replace", "memory", "memory_apply_patch"]
 # New v2 collection of the base memory tools (effecitvely same as sleeptime set), to pair with memgpt_v2 prompt
@@ -188,8 +195,8 @@ FILES_TOOLS = [
     "file_grep",
     "update_file_headline",
     "write_file_archive",
-    "search_file_archives",
-    "search_file_contents",
+    "file_archives_search",
+    "file_contents_search",
 ]
 
 # File tools that mutate in-context <open_files> / directories and require system prompt refresh.
@@ -226,11 +233,14 @@ LETTA_TOOL_SET = set(
 LETTA_PARALLEL_SAFE_TOOLS = {
     "conversation_search",
     "archival_memory_search",
+    "file_archives_search",
+    "file_contents_search",
+    "image_search",
+    "search_all",
     "run_code",
     "web_search",
     "fetch_webpage",
     "grep_files",
-    "semantic_search_files",
 }
 
 
