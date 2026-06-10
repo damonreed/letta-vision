@@ -34,6 +34,16 @@ async def _load_image_metadata(image_ids: set[str], actor: PydanticUser) -> Dict
     return meta
 
 
+def load_image_metadata_for_render_walk_sync(messages: List[Message], actor: PydanticUser) -> Dict[str, dict]:
+    """Load persisted image sizes for the byte-budget walk (sync callers)."""
+    from letta.utils import run_async_task
+
+    image_ids = _collect_letta_image_ids(messages)
+    if not image_ids:
+        return {}
+    return run_async_task(_load_image_metadata(image_ids, actor))
+
+
 def _collect_letta_image_ids(messages: List[Message]) -> set[str]:
     from letta.services.vision.render_policy import _content_letta_image_ids, _tool_return_letta_image_ids
 

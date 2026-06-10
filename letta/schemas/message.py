@@ -119,6 +119,7 @@ def tool_return_to_text(func_response: Optional[Union[str, List]]) -> Optional[s
 def tool_return_to_openai_chat_content(
     func_response: Optional[Union[str, List]],
     tool_return_truncation_chars: Optional[int] = None,
+    image_render_decisions: Optional[dict] = None,
 ) -> Union[str, List[dict]]:
     """Build OpenAI Chat Completions tool message content (string or vision multimodal parts)."""
     if func_response is None:
@@ -136,7 +137,7 @@ def tool_return_to_openai_chat_content(
             if text:
                 parts.append({"type": "text", "text": text})
         elif isinstance(part, ImageContent):
-            image_url = Message._image_source_to_data_url(part)
+            image_url = Message._image_source_to_data_url(part, image_render_decisions=image_render_decisions)
             if image_url:
                 detail = getattr(part.source, "detail", None) or "auto"
                 parts.append({"type": "image_url", "image_url": {"url": image_url, "detail": detail}})
@@ -154,7 +155,7 @@ def tool_return_to_openai_chat_content(
                 if text:
                     parts.append({"type": "text", "text": text})
             elif part.get("type") == "image":
-                image_url = Message._image_dict_to_data_url(part)
+                image_url = Message._image_dict_to_data_url(part, image_render_decisions=image_render_decisions)
                 if image_url:
                     detail = part.get("source", {}).get("detail", "auto")
                     parts.append({"type": "image_url", "image_url": {"url": image_url, "detail": detail}})
@@ -1607,7 +1608,7 @@ class Message(BaseMessage):
                 if not tool_return.tool_call_id:
                     raise TypeError("OpenAI API requires tool_call_id to be set.")
                 func_response = tool_return_to_openai_chat_content(
-                    tool_return.func_response, tool_return_truncation_chars
+                    tool_return.func_response, tool_return_truncation_chars, image_render_decisions
                 )
                 openai_message = {
                     "content": func_response,
@@ -1665,7 +1666,7 @@ class Message(BaseMessage):
                     if not tr.tool_call_id:
                         raise TypeError("ToolReturn came back without a tool_call_id.")
                     func_response = tool_return_to_openai_chat_content(
-                        tr.func_response, tool_return_truncation_chars
+                        tr.func_response, tool_return_truncation_chars, image_render_decisions
                     )
                     result.append(
                         {
@@ -1874,7 +1875,7 @@ class Message(BaseMessage):
         return None
 
     @staticmethod
-    def _image_dict_to_data_url(part: dict) -> Optional[str]:
+    def _image_dict_to_data_url(part: dict, image_render_decisions: Optional[dict] = None) -> Optional[str]:
         """Convert image dict to data URL."""
         source = part.get("source", {})
         if source.get("type") == "base64" and source.get("data"):
@@ -1885,6 +1886,13 @@ class Message(BaseMessage):
             return f"data:{media_type};base64,{source['data']}"
         if source.get("type") == "url":
             return source.get("url")
+        if source.get("type") == ImageSourceType.letta.value:
+            file_id = source.get("file_id")
+            if image_render_decisions and file_id:
+                from letta.services.vision.render_policy import RenderTier
+
+                if image_render_decisions.get(file_id) == RenderTier.TEXT:
+                    return None
         return None
 
     @staticmethod

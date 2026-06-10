@@ -2,29 +2,16 @@
 
 from __future__ import annotations
 
-import base64
 from enum import Enum
 from typing import Dict, List, Optional, Set
 
-from letta.helpers.vision_context_hint import conversation_has_user_images
 from letta.log import get_logger
-from letta.schemas.letta_message_content import ImageContent, ImageSourceType, LettaImage, MessageContentType
+from letta.schemas.letta_message_content import ImageContent, ImageSourceType, LettaImage
 from letta.schemas.message import Message
 from letta.schemas.llm_config import LLMConfig
 from letta.settings import settings
 
 logger = get_logger(__name__)
-
-# Pre-seed providers validated at 20MB cap (§17 r2)
-_SUPPORTS_IMAGE_HISTORY_MODELS = frozenset(
-    {
-        "anthropic/claude-sonnet-4",
-        "anthropic/claude-3.5-sonnet",
-        "openai/gpt-4o",
-        "google/gemini-2.5-pro-preview",
-        "moonshotai/kimi-k2",
-    }
-)
 
 
 class RenderTier(str, Enum):
@@ -34,12 +21,10 @@ class RenderTier(str, Enum):
 
 
 def supports_image_blocks_in_history(llm_config: LLMConfig) -> bool:
-    model = (llm_config.model or llm_config.handle or "").lower()
-    if any(m in model for m in _SUPPORTS_IMAGE_HISTORY_MODELS):
-        return True
-    if "kimi" in model or "claude" in model or "gpt-4" in model or "gemini" in model:
-        return True
-    return False
+    """True when the configured model can receive image blocks in message history."""
+    from letta.llm_api.model_registry import model_supports_vision
+
+    return model_supports_vision(llm_config.model, handle=llm_config.handle)
 
 
 def _letta_file_id_from_image_block(block) -> Optional[str]:
@@ -84,14 +69,6 @@ def conversation_has_letta_images(messages: List[Message]) -> bool:
     return False
 
 
-def _all_tool_return_image_ids(messages: List[Message]) -> Set[str]:
-    """Every Letta image id delivered via a tool return (canonical for generate_image, etc.)."""
-    ids: Set[str] = set()
-    for message in messages:
-        ids.update(_tool_return_letta_image_ids(message))
-    return ids
-
-
 def _last_user_message_index(messages: List[Message]) -> Optional[int]:
     for i in range(len(messages) - 1, -1, -1):
         role = getattr(messages[i].role, "value", messages[i].role)
@@ -100,11 +77,11 @@ def _last_user_message_index(messages: List[Message]) -> Optional[int]:
     return None
 
 
-def _collect_letta_images(messages: List[Message]) -> List[tuple[str, bool, bool]]:
-    """Return (image_id, is_current_turn, prefer_full_tier) newest-first.
+def _collect_letta_images(messages: List[Message]) -> List[tuple[str, bool]]:
+    """Return (image_id, is_current_turn) newest-first (content + tool returns).
 
-    Tool-return images always prefer full-resolution tiering: they are usually the
-    only in-context appearance of generated pixels across later turns.
+    Current turn = user attachments on the latest user message plus Letta refs
+    from tool returns on messages after that user message (generate_image, etc.).
     """
     current_turn_ids: Set[str] = set()
     last_user_idx = _last_user_message_index(messages)
@@ -113,44 +90,14 @@ def _collect_letta_images(messages: List[Message]) -> List[tuple[str, bool, bool
         for msg in messages[last_user_idx + 1 :]:
             current_turn_ids.update(_tool_return_letta_image_ids(msg))
 
-    tool_return_ids = _all_tool_return_image_ids(messages)
-
-    found: List[tuple[str, bool, bool]] = []
+    found: List[tuple[str, bool]] = []
     seen: Set[str] = set()
     for msg in reversed(messages):
         for fid in _tool_return_letta_image_ids(msg) + _content_letta_image_ids(msg):
             if fid not in seen:
                 seen.add(fid)
-                is_current = fid in current_turn_ids
-                prefer_full = is_current or fid in tool_return_ids
-                found.append((fid, is_current, prefer_full))
+                found.append((fid, fid in current_turn_ids))
     return found
-
-
-def _decide_render_tier(
-    *,
-    prefer_full_tier: bool,
-    full_size: int,
-    onemp_size: Optional[int],
-    remaining: int,
-    demoted: bool,
-) -> tuple[RenderTier, int, bool]:
-    """Choose tier and return (tier, remaining_budget, demoted)."""
-    if demoted:
-        return RenderTier.TEXT, remaining, True
-
-    if prefer_full_tier:
-        if full_size <= remaining:
-            return RenderTier.FULL, remaining - full_size, False
-        if onemp_size is None:
-            return RenderTier.TEXT, remaining, True
-        if onemp_size <= remaining:
-            return RenderTier.ONE_MP, remaining - onemp_size, False
-        return RenderTier.TEXT, remaining, True
-
-    if onemp_size and onemp_size <= remaining:
-        return RenderTier.ONE_MP, remaining - onemp_size, False
-    return RenderTier.TEXT, remaining, True
 
 
 def find_image_needing_1mp_now(
@@ -159,7 +106,7 @@ def find_image_needing_1mp_now(
     *,
     image_metadata: Optional[Dict[str, dict]] = None,
 ) -> Optional[str]:
-    """Return the first image that needs an on-demand 1MP bake (current turn or tool-return)."""
+    """Return the first current-turn image that needs an on-demand 1MP bake."""
     if not conversation_has_letta_images(messages):
         return None
     if not supports_image_blocks_in_history(llm_config):
@@ -170,7 +117,7 @@ def find_image_needing_1mp_now(
     demoted = False
     meta = image_metadata or {}
 
-    for img_id, _is_current, prefer_full in _collect_letta_images(messages):
+    for img_id, is_current in _collect_letta_images(messages):
         if demoted:
             return None
 
@@ -178,7 +125,7 @@ def find_image_needing_1mp_now(
         full_size = info.get("file_size_full") or 0
         onemp_size = info.get("file_size_1mp")
 
-        if prefer_full:
+        if is_current:
             if full_size <= remaining:
                 remaining -= full_size
                 continue
@@ -208,7 +155,7 @@ def compute_image_render_decisions(
         return {}
 
     if not supports_image_blocks_in_history(llm_config):
-        return {img_id: RenderTier.TEXT for img_id, _, _ in _collect_letta_images(messages)}
+        return {img_id: RenderTier.TEXT for img_id, _ in _collect_letta_images(messages)}
 
     cap = settings.vision_context_byte_cap
     remaining = cap
@@ -216,7 +163,7 @@ def compute_image_render_decisions(
     decisions: Dict[str, RenderTier] = {}
     meta = image_metadata or {}
 
-    for img_id, _is_current, prefer_full in _collect_letta_images(messages):
+    for img_id, is_current in _collect_letta_images(messages):
         if demoted:
             decisions[img_id] = RenderTier.TEXT
             continue
@@ -225,13 +172,27 @@ def compute_image_render_decisions(
         full_size = info.get("file_size_full") or 0
         onemp_size = info.get("file_size_1mp")
 
-        tier, remaining, demoted = _decide_render_tier(
-            prefer_full_tier=prefer_full,
-            full_size=full_size,
-            onemp_size=onemp_size,
-            remaining=remaining,
-            demoted=demoted,
-        )
-        decisions[img_id] = tier
+        if is_current:
+            if full_size <= remaining:
+                decisions[img_id] = RenderTier.FULL
+                remaining -= full_size
+            else:
+                if onemp_size is None:
+                    decisions[img_id] = RenderTier.TEXT
+                    demoted = True
+                    continue
+                if onemp_size <= remaining:
+                    decisions[img_id] = RenderTier.ONE_MP
+                    remaining -= onemp_size
+                else:
+                    decisions[img_id] = RenderTier.TEXT
+                    demoted = True
+        else:
+            if onemp_size and onemp_size <= remaining:
+                decisions[img_id] = RenderTier.ONE_MP
+                remaining -= onemp_size
+            else:
+                decisions[img_id] = RenderTier.TEXT
+                demoted = True
 
     return decisions

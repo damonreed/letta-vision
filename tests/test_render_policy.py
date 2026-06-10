@@ -85,27 +85,10 @@ def test_compute_render_decisions_text_when_1mp_missing():
 
 
 def test_compute_render_decisions_tool_return_since_last_user_gets_full():
-    from letta.schemas.enums import MessageRole
-    from letta.schemas.letta_message_content import TextContent
-    from letta.schemas.message import Message, ToolReturn
-    from letta.schemas.letta_message_content import ImageContent, LettaImage
-
     img = "img-gen"
     messages = [
         Message(role=MessageRole.user, content=[TextContent(text="generate a scene")]),
-        Message(
-            role=MessageRole.tool,
-            tool_returns=[
-                ToolReturn(
-                    tool_call_id="functions.generate_image:1",
-                    status="success",
-                    func_response=[
-                        TextContent(text='{"status":"ok"}'),
-                        ImageContent(source=LettaImage(file_id=img, media_type="image/png")),
-                    ],
-                )
-            ],
-        ),
+        _tool_return_generate_image_message(img),
     ]
     meta = {
         img: {
@@ -136,12 +119,13 @@ def _tool_return_generate_image_message(image_id: str) -> Message:
     )
 
 
-def test_compute_render_decisions_tool_return_persists_on_later_turn():
+def test_compute_render_decisions_tool_return_image_in_walk_on_later_turn():
     img = "img-gen-persist"
     meta = {
         img: {
             "file_size_full": 300_000,
-            "file_size_1mp": None,
+            "file_size_1mp": 200_000,
+            "object_url_1mp": "sha256/gen-persist_1mp",
             "object_url_full": "sha256/gen-persist",
         }
     }
@@ -152,4 +136,5 @@ def test_compute_render_decisions_tool_return_persists_on_later_turn():
         Message(role=MessageRole.assistant, content=[TextContent(text="working on it")]),
     ]
     decisions = compute_image_render_decisions(messages, _llm_config(), image_metadata=meta)
-    assert decisions[img] == RenderTier.FULL
+    assert img in decisions
+    assert decisions[img] == RenderTier.ONE_MP
