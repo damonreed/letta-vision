@@ -952,6 +952,10 @@ class ConversationManager:
             result = await session.execute(query)
             messages = [msg.to_pydantic() for msg in result.scalars().all()]
 
+            from letta.services.vision.image_hydration import hydrate_tool_return_images_in_messages
+
+            await hydrate_tool_return_images_in_messages(messages, actor)
+
             # Convert to LettaMessages (reverse=False keeps sub-messages in natural order)
             return PydanticMessage.to_letta_messages_from_list(
                 messages, reverse=False, include_err=include_err, text_is_assistant_message=True, include_return_message_types=include_return_message_types
