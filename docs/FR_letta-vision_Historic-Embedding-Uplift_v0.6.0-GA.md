@@ -1,0 +1,137 @@
+# FR: Historic Embedding Uplift & Corpus Conversion
+
+Status: Draft — gate to **v0.6.0 GA**
+Author: Ada (architecture); implementation by Cursor
+Depends on: v0.6.0-rc (shipped & validated on sliver against new data) — see `IMPLEMENTATION_REPORT_v0.6.0_unified-embedding-recall.md`
+Grounded in as-built: five vector tables (`archival_passages`, `source_passages`, `file_archives`, `messages`, `images`); dual-column passages/archives (`embedding_legacy_4096` + `embedding Vector(768)`); deployment-global embedding (`LETTA_DEFAULT_EMBEDDING_HANDLE` = `openrouter/google/gemini-embedding-2-preview` @768); atomic message embed guard (`embeddings/write.py::write_message_embedding_atomic`); content-addressed object store with wire-byte sizing (`object_store/client.py`); `image_ingest.py` sync+background pipeline.
+
+This FR runs in **two ordered parts**. Part 1 (base64→object conversion) must complete before Part 2 (re-embed), because Part 1 creates the image records Part 2 embeds, and the message re-embed in Part 2 folds in image caption gists that don't exist until Part 1's records are enriched.
+
+---
+
+## 1. Problem / Context
+
+v0.6.0-rc moved all *new* writes into the unified 768 gemini-embedding-2 space and made images first-class object-store records. Two bodies of historic data remain outside that world:
+
+1. **Inline base64 images in `messages.content`.** Pre-rc (v0.3.0 vision) messages still carry image bytes inline as base64 `ImageContent` blocks. These are not `images` records, are not in the object store, are not pixel-embedded (so invisible to recall), and bloat the `messages` table. The rc message-persistence switch only redirected *new* uploads; it did not back-convert history. The report's uplift checklist does not cover this.
+2. **Un-embedded historic rows.** `archival_passages`, `source_passages`, and `file_archives` have `NULL` in the new 768 `embedding` column (their vectors live in `embedding_legacy_4096`, a different/incomparable space). Pre-rc `messages` have no vector at all. These are excluded from the vector leg by the space guard, so historic memory is currently unsearchable by semantics.
+
+Until both are resolved, recall only covers data created since the rc deploy. Resolving them is the GA gate.
+
+## 2. Goals
+
+- **Part 1:** Convert every recoverable inline base64 image in `messages.content` into an `images` record + object-store blob + lightweight `LettaImage` reference, rewriting the message content to the reference form. Deduplicate by content hash against the existing `images` table. Idempotent and resumable. Net effect: large `messages` size reduction and historic images become enrichable/searchable.
+- **Part 2:** Roll-fill the 768 `embedding` column across all five vector tables from retained source text/pixels, under the single deployment space id, resumably and idempotently, then validate recall quality and HNSW performance on the full corpus, then drop `embedding_legacy_4096`.
+- Land the two recall post-processing gaps (per-source diversity cap + image/message dedup) **with** this uplift, since uplift is what fills the vector leg and makes their absence visible.
+- No model change. The space id is the existing deployment config's `compute_space_id()`. (If gemini-embedding-2 leaves preview mid-effort, that is a *different* space and a *different* uplift — see §9.)
+
+## 3. Conceptual Model
+
+**No cutover event — the schema is already shadow-column.** The 768 `embedding` is the shadow; NULL until filled. The space guard (`embeddings/query.py::apply_embedding_space_guard`) already excludes NULL/`legacy-unknown` rows from vector ranking. So backfill is a *rolling fill*: each row joins the vector leg the instant it has a 768 vector + the deployment space id; recall coverage increases monotonically; nothing flips. The only discrete step is dropping the legacy column after validation. This answers the report's "shadow vs hard cutover" question: it is shadow, by construction.
+
+**Strict part ordering.** Part 1 → (image enrichment) → Part 2 message re-embed. A message that referenced an inline image must, after conversion, re-embed with that image's caption gist (the two-embed pattern), so the image record and its caption must exist first.
+
+**Conversion is lossless and forward-only.** Decoded bytes are preserved in the object store (content-addressed); the original base64 is reconstructable from the ref if ever needed. The message-content rewrite is a mutation of the historic event log, so it is gated behind a DB snapshot and a dry-run (see §4).
+
+## 4. Part 1 — Base64 → Object Conversion
+
+New module: `letta/services/migration/image_base64_conversion.py`. Reuse the existing ingest primitives — do **not** fork a parallel store/insert path.
+
+**Scan & classify.** Iterate `messages` (resumable cursor on `(created_at, id)`), inspect each `content` block:
+- `ImageContent` with a base64 source (inline `data` / data-URL) → **convert**.
+- `ImageContent` already `LettaImage` (`type=letta`, `file_id`) → **skip** (already converted).
+- A text/placeholder block from the old decayed serializer (`"[Image ...]"` with no recoverable bytes) → **skip & count** (nothing to recover; report these so the loss from the old decay bug is visible).
+- Non-image blocks → untouched.
+
+**Convert (per base64 block):**
+1. Decode → bytes → `content_hash = sha256(bytes)`.
+2. Dedup: if an `images` row with `(org, content_hash)` exists (from rc live use or an earlier message in this run), reuse its id — no re-store, no new record.
+3. Else call the **existing synchronous ingest primitive** (`image_ingest.py` sync phase): store full bytes (wire-byte sized), insert `images` row (`provenance="uploaded"` unless the message is a tool return — preserve `generated` + `generation_prompt` where derivable; `enrichment_status=pending`).
+4. Rewrite the block in place to `LettaImage(file_id=<image-id>, data=None)`, preserving the block's position in the content list.
+5. Persist the rewritten `messages.content`.
+
+**Enrichment.** Newly-created `pending` records are picked up by the normal background enrichment (1MP + structured VLM captions + pixel embed). For a bulk historic run, drive enrichment explicitly (a batched pass over `enrichment_status IN (pending, failed)`) rather than relying on incidental scheduling, so Part 2 can depend on a known-complete state. This pass is shared with Part 2's image step (§5.3) — they are the same work; run it once, after conversion.
+
+**Idempotency & safety.**
+- Re-running converts only base64 blocks; already-`letta` blocks are skipped, so the job is safe to resume/repeat.
+- `--dry-run`: report counts (convertible blocks, unrecoverable placeholders, dedup hits, distinct new images) and **estimated `messages` size reduction** without writing.
+- Require a Postgres snapshot before the live run (it mutates the event log). Document the snapshot step in the runbook; the conversion itself is lossless but in-place.
+
+**Acceptance (Part 1):** zero `ImageContent` base64 blocks remain in `messages.content` (all converted or are unrecoverable placeholders, counted); each converted image is an `images` row with bytes in the object store; N identical inline copies collapse to one record with N references; measured `messages` table size drop reported.
+
+## 5. Part 2 — Unified Rolling Re-embed
+
+New module: `letta/services/migration/historic_reembed.py`. One resumable, idempotent, throttled job with per-table passes. Target space id = `resolve_deployment_embedding_config().compute_space_id()`. Use the deployment resolver, `prepare_vector_for_write` (768 + L2 normalize), and the existing atomic message write.
+
+**Run with tpuf dual-write disabled** (sliver default). The optional tpuf dual-write paths are slated for removal post-uplift; the backfill targets PG 768 only.
+
+### 5.1 Passages & file archives (independent, parallelizable)
+- `archival_passages`, `source_passages`: re-embed from the retained `text` column (input_type `search_document`).
+- `file_archives`: re-embed from `title` + `content`.
+- For each: `WHERE embedding IS NULL OR embedding_space_id IS DISTINCT FROM :target_space_id`, batched on `(created_at, id)`. Write the 768 vector + stamp `embedding_space_id`. Idempotent via the WHERE predicate (a re-run skips already-filled rows).
+
+### 5.2 Order constraint
+Images (5.3) must reach `enrichment_status=complete` **before** the message pass (5.4), because converted-image messages re-embed with the caption gist. Passages/archives (5.1) have no such dependency and may run anytime/in parallel.
+
+### 5.3 Images
+`WHERE embedding IS NULL OR embedding_space_id IS DISTINCT FROM :target OR enrichment_status='failed'`. For each: ensure 1MP exists (generate if absent), ensure the three caption tiers exist (VLM via `image_caption_model_handle`), pixel-embed via gemini-2 image input → 768 normalized → stamp space id → `enrichment_status=complete`. Content-hash addressing makes retries cheap (no re-store). This pass subsumes Part 1's enrichment pass — run it once here.
+
+### 5.4 Messages
+`WHERE embedding IS NULL OR embedding_space_id IS DISTINCT FROM :target`. Embed message text; for messages carrying a `LettaImage` ref whose image is now enriched, include the short caption gist (a sentence, not the full description) before embedding. Write via `write_message_embedding_atomic` with a strictly higher `embedding_version` so the monotonic guard supersedes any prior text-only vector without racing. Pre-rc messages (no prior vector) embed fresh; rc-era text-only messages bump version.
+
+### 5.5 Throttle, cost, resume
+- **Cost estimate first.** Extend the existing `estimate_embeddings_size` to produce a pre-run report: row counts per table, token estimates, projected OpenRouter call count and rough cost/time. Print and require confirm before a live run.
+- **Throttle + retry.** gemini-embedding-2-preview via OpenRouter is a preview endpoint with rate limits; the job rate-limits, retries with backoff, and checkpoints the `(created_at, id)` cursor per table so an interrupted run resumes without re-embedding completed rows.
+- **HNSW fill strategy.** Default: incremental insert into the existing (currently near-empty) HNSW indexes — fine at sliver/personal-corpus scale. If a table's backfill is large enough that per-row index maintenance dominates, drop the HNSW index, bulk-fill, then `CREATE INDEX` + `ANALYZE`. Decide per-table at run time based on the cost estimate; document which path was taken.
+
+## 6. Coupled recall fix (lands with this uplift)
+
+Implement the two deferred recall post-steps now, because uplift fills the vector leg and exposes them:
+- **Per-source diversity cap** (default 2–3 hits per file/conversation) in `recall_service.py`.
+- **Image↔message dedup**: collapse an `images` hit and the `messages` hit that references it into one result with two reasons. After Part 1, many messages reference images, so this becomes common immediately.
+
+(Optional, recommended alongside: the TEXT-tier `description` injection and space-guard exclusion logging from the report's gap list — the logging in particular is useful *during* the backfill to watch coverage climb. Treat description injection as in-scope-if-cheap, logging as in-scope for observability.)
+
+## 7. Validation (the GA gate)
+
+- **Coverage:** zero rows with `embedding IS NULL` across all five tables (excluding unrecoverable image placeholders); zero `embedding_space_id='legacy-unknown'` in the vector path.
+- **Quality (empirical, the real gate):** on the full migrated corpus, run a fixed query set with known-good answers — including (a) text-finds-image cases, (b) literal-identifier lookups that must come from the trigram leg, (c) historic-memory recalls that were invisible pre-uplift — and judge the ranked results by eye. Green plumbing is not the bar; correct top-K is.
+- **HNSW:** index built/usable on the full corpus; spot-check latency vs the prior flat scan.
+- **Part 1 size:** report `messages` table size before/after.
+- **Dedup/diversity:** verify a chunked file no longer floods top-K and an image+referencing-message appear once.
+- **Then and only then:** drop `embedding_legacy_4096` from `archival_passages`, `source_passages`, `file_archives` (final migration). Keep a snapshot until post-drop validation passes.
+
+## 8. Non-Goals
+
+- Model change / second embedding space (this uplift is into the *existing* deployment space).
+- Tool semantic search / PG tool vectors (still out of scope; lexical fallback is a separate small PR per the report).
+- Audio/video embedding; summary-text image embedding; two-stage MRL retrieval.
+- Removing the optional tpuf dual-write code paths (separate cleanup once tpuf is permanently retired).
+
+## 9. Open Questions (with Defaults)
+
+- **Preview→GA mid-run.** If `gemini-embedding-2` GAs and its handle/space changes during the effort, default: pin the exact preview handle for the duration; a GA move is a new uplift, and the space guard keeps the mixed corpus correct (old-space rows abstain) until then.
+- **Unrecoverable placeholders.** Default: count and report; leave the message text as-is (no synthetic image). These are casualties of the old decay bug and cannot be recovered.
+- **Enrichment cost ceiling.** Captioning every historic image is a VLM cost. Default: caption all; if the historic image volume makes that expensive, allow a flag to pixel-embed first (restores searchability) and backfill captions lazily — embedding is the searchability-critical step, captions are payload.
+- **Provenance of converted images.** Default `uploaded`; preserve `generated` + `generation_prompt` only where the source message is a recoverable tool return.
+
+## 10. Cursor Implementation Notes
+
+- Reuse `image_ingest.py` sync primitive and `object_store/client.py` in Part 1 — the only net-new code is the message scan/classify and the in-place content rewrite.
+- Both parts are management jobs (CLI/manage command), resumable, `--dry-run` first, with per-table `(created_at, id)` checkpoints. Not alembic — alembic only does the final `embedding_legacy_4096` drop.
+- The idempotency predicates (`embedding IS NULL OR embedding_space_id IS DISTINCT FROM :target`) are the resume mechanism; trust them over external state.
+- Run order in one orchestrated command: Part 1 convert → image enrich pass → {passages/archives in parallel} + message re-embed (after image enrich) → validate → (manual gate) → drop legacy.
+- Land the diversity cap + dedup (§6) in the same release; add space-guard exclusion logging early so the backfill is observable.
+- `estimate_embeddings_size` extension prints the cost report and is also the dry-run for Part 2.
+
+## 11. Risk Register
+
+| Risk | Mitigation |
+|------|------------|
+| Event-log mutation in Part 1 | DB snapshot + dry-run + lossless (bytes in object store) + idempotent rewrite |
+| Message re-embed races image enrichment | Strict order (5.2): images complete before message pass; atomic version guard |
+| OpenRouter preview rate limits / drift | Throttle + backoff + resumable cursor; pin handle; cost estimate before run |
+| Large HNSW incremental fill slow | Per-table drop/bulk-fill/recreate option based on cost estimate |
+| Dedup/diversity absence surfaces at GA | Land §6 with the uplift, not after |
+| Dropping legacy column too early | Drop only after full validation; keep snapshot through post-drop check |
+| Partial run leaves mixed state | Space guard keeps mixed state *correct* (rolling fill); resume continues from cursor |
