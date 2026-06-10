@@ -7,6 +7,8 @@ Supersedes: `FR_letta-vision_Image-Context-Persistence-Across-Turns.md` (the v0.
 The only remaining FR before cutting v0.6.0: **historic embedding uplift & validation** (re-embed/re-width existing rows into the new space, build HNSW over the migrated corpus). That migration is explicitly out of scope here and runs *after* this feature is validated against new data.
 
 > **Revision r2** (post implementation-plan review). Six corrections, the first of which is a hard blocker for phase 2: (1) passages get a **second** 768 vector column rather than reusing the 4096 one — a pgvector column has one fixed dim, so "new 768 writes + historic 4096 untouched + one column" was impossible as originally written (§4.2, §4.7, §16). (2) The 20MB cap is defined as a **wire-bytes** ceiling; the render walk accounts for base64 inflation (§10). (3) The monotonic version guard is an **atomic conditional UPDATE**, not read-then-write, and message edits bump the version (§8). (4) Current-turn 1MP fallback **generates the derivative on demand** if enrichment hasn't baked it yet (§9, §10). (5) **Tool embedding** is a fourth Turbopuffer consumer; tool semantic search is declared **out of scope** for v0.6.0 and degrades to lexical name/description matching so the stack boots tpuf-less (§7, §16). (6) `supports_image_blocks_in_history` **pre-flags researched providers as supported**; only unknown models default off, so the feature doesn't ship dark (§10, §17). Plus: the 3-tier caption VLM gets its own setting (§9, §17).
+>
+> **Revision r3** (post sliver validation, 2026-06-09). Three implementation amendments: (1) **Deployment-global embedding** — the resolver ignores per-agent and per-folder `embedding_config`; all ingest/search/recall paths use `LETTA_DEFAULT_EMBEDDING_HANDLE` only (§5, §16). Client embedding pickers removed from Agents and Files tabs. (2) **Recall tool output** — folder-ingested passage hits use layer label `file` (not `source`); both `file` and `file_archive` hits include `filename=` in the header so agents distinguish file content from archival memory (§12). (3) **`fetch_image` hydration** — tool-return `LettaImage` refs with `file_id` but `data: null` are hydrated from object store on message read; `fetch_image` results are not re-ingested as new image records (§12). See Appendix B and [IMPLEMENTATION_REPORT_v0.6.0_unified-embedding-recall.md](IMPLEMENTATION_REPORT_v0.6.0_unified-embedding-recall.md).
 
 ---
 
@@ -152,7 +154,7 @@ One ordered set: EmbeddingConfig has no schema (pydantic) → no migration; add 
 ## 5. The Resolver — `letta/embeddings/resolver.py` (new)
 
 `resolve_embedding_config(agent_state: Optional[AgentState] = None) -> EmbeddingConfig`:
-1. Agent-level override if explicitly set and recorded.
+1. ~~Agent-level override if explicitly set and recorded.~~ **(r3)** Shipped: **deployment default only.** `resolve_embedding_config` / `resolve_embedding_config_async` ignore `agent_state.embedding_config` and always return `settings.default_embedding_handle` (`LETTA_DEFAULT_EMBEDDING_HANDLE`). Per-agent and per-folder embedding pickers are removed from the client. Rationale: mixed models/dims caused ingest failures and violated the single-space invariant; extends §16's fixed deployment dim to a fixed deployment model.
 2. Deployment default from `settings.default_embedding_handle` (e.g. `openrouter/google/gemini-embedding-2-preview`).
 3. Hard error if neither resolves — no hardcoded fallback.
 
@@ -288,6 +290,19 @@ Signature (Letta tool): `recall(query: str, *, layers: Optional[list[str]] = Non
 
 **Return shape (reference-then-fetch).** Each hit: a context-bearing snippet (passage; file chunk + neighbors via v0.5.0 char offsets; **file reading note title+content**; message + a surrounding turn or two; image `description`), the layer/type, the fused rank/score, and an opaque handle. Handles drive existing access paths: open file at offset, read conversation around message id, **`search_file_archives` for a specific note**, and `fetch_image(handle)` that pulls full pixels into context on demand as a **multimodal tool return** (inline base64 for the model and client UI).
 
+**(r3) Tool-return line format.** The agent-facing `recall` tool formats each hit as a header line plus snippet body, e.g.:
+```
+[file] handle=passage-… filename=v060-test/villains.txt score=0.0328
+Victoria
+Damian
+
+[file_archive] handle=file_archive-… filename=v060-test/villains.txt score=0.0318
+[Victoria's character] Victoria is a villain and wears black leather.
+```
+Folder-ingested passage hits use layer label **`file`** (not `source`). Both `file` and `file_archive` hits include **`filename=`** so agents can distinguish raw file chunks from agent-written reading notes and from archival memory.
+
+**(r3) `fetch_image` hydration.** `fetch_image` returns a multimodal tool result with a `LettaImage` ref (`file_id`, inline `data`). That result is **not** re-ingested as a new image record. On subsequent message reads, refs with `file_id` but `data: null` are hydrated from object store (`image_hydration.py`) so the UI and LLM receive pixels without duplicating storage.
+
 **Image findability backstop.** Image `description`/`details` are trigram-searched, so an image is findable by described content even if the pixel vector under-ranks it for a text query (the modality gap). This is why image-only embedding is sufficient for v0.6.0 and the optional summary-text embedding is deferred — measure the modality gap empirically before adding it.
 
 ## 13. Client Changes — Images Tab (`letta-vision-client`)
@@ -333,7 +348,7 @@ Stack: Svelte 5 + Vite frontend, FastAPI backend proxying the Letta SDK.
 - Audio/video embedding (OpenRouter embeddings is text+image only; native google_ai/Vertex client deferred).
 - Optional summary-text embedding for images (modality-gap backstop) — add only if empirical recall shows the gap hurting.
 - Two-stage MRL retrieval (256-dim candidate + 3072 re-rank) — scale optimization, deferred.
-- Per-agent embedding dimension override (deployment dim is fixed so columns are uniform).
+- Per-agent embedding dimension override (deployment dim is fixed so columns are uniform). **(r3)** Extended to **per-agent and per-folder embedding model override** — all resources use the deployment default handle.
 
 ## 17. Open Questions (with Defaults)
 
@@ -377,3 +392,18 @@ The implementation plan is faithful and got the three highest-risk calls right (
 - **Phase 5 — caption VLM setting.** Add `settings.image_caption_model_handle` for the three-tier captioner; it is distinct from the embedding model and the runtime chat model and the plan doesn't name where it's configured (§9/§17).
 
 Plan sequencing impact: resolve the passage dual-column and the byte-accounting unit before PR-B, and the tool-embedding scope before PR-C. PR-A and PR-D onward are sound as planned. The risk-register row "Historic 4096 passages vs 768 queries → space guard excludes them" stays true, but the *mechanism* is now the NULL 768 column plus the legacy column's old space id, not a single mixed-width column.
+
+---
+
+## Appendix B — Implementation amendments (r3)
+
+Post sliver validation (2026-06-09). Full detail in [IMPLEMENTATION_REPORT_v0.6.0_unified-embedding-recall.md](IMPLEMENTATION_REPORT_v0.6.0_unified-embedding-recall.md).
+
+| Amendment | FR section | Shipped behavior |
+|-----------|------------|------------------|
+| **Deployment-global embedding** | §5, §16 | Resolver ignores agent/folder `embedding_config`; `LETTA_DEFAULT_EMBEDDING_HANDLE` for all ingest/search/recall. Client: no embedding pickers on Agents or Files. |
+| **Recall output clarity** | §12 | Layer `file` for folder passages; `filename=` on `file` and `file_archive` hit headers. |
+| **`fetch_image` hydration** | §12 | Skip re-ingest on `fetch_image` tool returns; hydrate `LettaImage` refs from object store on message read. |
+| **Passage schema padding removed** | §4.2 | `Passage` pydantic validator no longer zero-pads to 4096 before `prepare_vector_for_write` (folder ingest bug). |
+
+**Partial gaps vs FR (documented in implementation report, not blocking uplift FR):** recall diversity cap + dedup; TEXT tier description injection; space-guard exclusion logging; tool lexical fallback when tpuf absent; optional tpuf dual-write on passage paths.
