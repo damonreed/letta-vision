@@ -42,27 +42,65 @@ def supports_image_blocks_in_history(llm_config: LLMConfig) -> bool:
     return False
 
 
+def _letta_file_id_from_image_block(block) -> Optional[str]:
+    if isinstance(block, ImageContent) and isinstance(block.source, LettaImage):
+        return block.source.file_id
+    if isinstance(block, dict) and block.get("type") == "image":
+        source = block.get("source") or {}
+        if source.get("type") == ImageSourceType.letta.value and source.get("file_id"):
+            return source["file_id"]
+    return None
+
+
+def _content_letta_image_ids(message: Message) -> List[str]:
+    ids: List[str] = []
+    if not message.content or not isinstance(message.content, list):
+        return ids
+    for block in message.content:
+        fid = _letta_file_id_from_image_block(block)
+        if fid:
+            ids.append(fid)
+    return ids
+
+
+def _tool_return_letta_image_ids(message: Message) -> List[str]:
+    ids: List[str] = []
+    for tool_return in message.tool_returns or []:
+        func_response = tool_return.func_response
+        if not isinstance(func_response, list):
+            continue
+        for part in func_response:
+            fid = _letta_file_id_from_image_block(part)
+            if fid:
+                ids.append(fid)
+    return ids
+
+
+def conversation_has_letta_images(messages: List[Message]) -> bool:
+    """True if any in-context message carries LettaImage refs (content or tool returns)."""
+    for message in messages:
+        if _content_letta_image_ids(message) or _tool_return_letta_image_ids(message):
+            return True
+    return False
+
+
 def _collect_letta_images(messages: List[Message]) -> List[tuple[str, bool]]:
-    """Return (image_id, is_current_turn) newest-first."""
+    """Return (image_id, is_current_turn) newest-first (content + tool returns)."""
     current_turn_ids: Set[str] = set()
     for msg in reversed(messages):
-        if msg.role == "user" and msg.content:
-            for block in msg.content:
-                if isinstance(block, ImageContent) and isinstance(block.source, LettaImage):
-                    current_turn_ids.add(block.source.file_id)
+        role = getattr(msg.role, "value", msg.role)
+        if role == "user" and msg.content:
+            for fid in _content_letta_image_ids(msg):
+                current_turn_ids.add(fid)
             break
 
     found: List[tuple[str, bool]] = []
     seen: Set[str] = set()
     for msg in reversed(messages):
-        if not msg.content:
-            continue
-        for block in msg.content:
-            if isinstance(block, ImageContent) and isinstance(block.source, LettaImage):
-                fid = block.source.file_id
-                if fid not in seen:
-                    seen.add(fid)
-                    found.append((fid, fid in current_turn_ids))
+        for fid in _tool_return_letta_image_ids(msg) + _content_letta_image_ids(msg):
+            if fid not in seen:
+                seen.add(fid)
+                found.append((fid, fid in current_turn_ids))
     return found
 
 
@@ -73,7 +111,7 @@ def find_image_needing_1mp_now(
     image_metadata: Optional[Dict[str, dict]] = None,
 ) -> Optional[str]:
     """Return the first current-turn image that needs an on-demand 1MP bake."""
-    if not conversation_has_user_images(messages):
+    if not conversation_has_letta_images(messages):
         return None
     if not supports_image_blocks_in_history(llm_config):
         return None
@@ -117,7 +155,7 @@ def compute_image_render_decisions(
     image_metadata: Optional[Dict[str, dict]] = None,
 ) -> Dict[str, RenderTier]:
     """Walk message list newest-first spending wire-byte budget."""
-    if not conversation_has_user_images(messages):
+    if not conversation_has_letta_images(messages):
         return {}
 
     if not supports_image_blocks_in_history(llm_config):

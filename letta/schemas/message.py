@@ -140,6 +140,14 @@ def tool_return_to_openai_chat_content(
             if image_url:
                 detail = getattr(part.source, "detail", None) or "auto"
                 parts.append({"type": "image_url", "image_url": {"url": image_url, "detail": detail}})
+            elif getattr(part.source, "type", None) == ImageSourceType.letta:
+                handle = getattr(part.source, "file_id", "image")
+                parts.append(
+                    {
+                        "type": "text",
+                        "text": f"[Image reference {handle} — use fetch_image to view pixels]",
+                    }
+                )
         elif isinstance(part, dict):
             if part.get("type") == "text":
                 text = truncate_tool_return(part.get("text", ""), tool_return_truncation_chars) or ""
@@ -150,6 +158,14 @@ def tool_return_to_openai_chat_content(
                 if image_url:
                     detail = part.get("source", {}).get("detail", "auto")
                     parts.append({"type": "image_url", "image_url": {"url": image_url, "detail": detail}})
+                elif (part.get("source") or {}).get("type") == "letta":
+                    handle = (part.get("source") or {}).get("file_id", "image")
+                    parts.append(
+                        {
+                            "type": "text",
+                            "text": f"[Image reference {handle} — use fetch_image to view pixels]",
+                        }
+                    )
 
     return parts if parts else ""
 
