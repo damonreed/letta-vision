@@ -179,13 +179,13 @@ def main() -> int:
     )
     enrich.set_defaults(func=cmd_enrich_pending)
 
-    reembed = sub.add_parser("reembed", help="Part 2: re-embed passages and file archives")
+    reembed = sub.add_parser("reembed", help="Part 2: re-embed passages, file archives, and messages")
     reembed.add_argument("--dry-run", action="store_true", help="Count rows needing uplift only")
     reembed.add_argument(
         "--table",
         default="all",
-        choices=["all", "archival_passages", "source_passages", "file_archives"],
-        help="Table(s) to re-embed (default: all passage/archive tables)",
+        choices=["all", "archival_passages", "source_passages", "file_archives", "messages"],
+        help="Table(s) to re-embed (default: all Part 2 tables)",
     )
     reembed.add_argument("--throttle", type=float, default=0.25, help="Seconds between embed batches (0 to disable)")
     reembed.add_argument(

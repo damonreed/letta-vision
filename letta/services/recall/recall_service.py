@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
 
 from sqlalchemy import select, text
@@ -23,6 +23,9 @@ from letta.services.message_manager import MessageManager
 
 _message_manager = MessageManager()
 
+RECALL_PER_SOURCE_DIVERSITY_CAP = 3
+RECALL_SNIPPET_MAX_CHARS = 500
+
 
 @dataclass
 class RecallHit:
@@ -32,6 +35,96 @@ class RecallHit:
     score: float
     reasons: List[str]
     filename: Optional[str] = None
+    source_group: Optional[str] = None
+    linked_image_ids: List[str] = field(default_factory=list)
+
+
+def _truncate_snippet(text: str) -> str:
+    return (text or "")[:RECALL_SNIPPET_MAX_CHARS]
+
+
+def _message_source_group(row) -> Optional[str]:
+    conversation_id = getattr(row, "conversation_id", None)
+    if conversation_id:
+        return f"conversation:{conversation_id}"
+    agent_id = getattr(row, "agent_id", None)
+    if agent_id:
+        return f"agent:{agent_id}"
+    return None
+
+
+def _message_linked_image_ids(row) -> List[str]:
+    from letta.embeddings.message_embed_text import collect_letta_image_ids_from_message
+
+    return collect_letta_image_ids_from_message(row.to_pydantic())
+
+
+def _dedup_image_message_hits(hits: List[RecallHit]) -> List[RecallHit]:
+    """Drop message hits when the same image is already in the result set (FR §6)."""
+    image_handles = {hit.handle for hit in hits if hit.layer == "image"}
+    if not image_handles:
+        return hits
+
+    dropped_message_handles: set[str] = set()
+    image_by_handle = {hit.handle: hit for hit in hits if hit.layer == "image"}
+
+    for hit in hits:
+        if hit.layer != "message":
+            continue
+        for image_id in hit.linked_image_ids:
+            if image_id not in image_handles:
+                continue
+            image_hit = image_by_handle.get(image_id)
+            if image_hit is None:
+                continue
+            if "message" not in image_hit.reasons:
+                image_hit.reasons.append("message")
+            dropped_message_handles.add(hit.handle)
+            break
+
+    if not dropped_message_handles:
+        return hits
+    return [hit for hit in hits if not (hit.layer == "message" and hit.handle in dropped_message_handles)]
+
+
+def _apply_diversity_cap(
+    hits: List[RecallHit],
+    limit: int,
+    *,
+    per_source_cap: int = RECALL_PER_SOURCE_DIVERSITY_CAP,
+) -> List[RecallHit]:
+    """Limit hits per file/conversation before applying top-K (FR §6)."""
+    selected: List[RecallHit] = []
+    source_counts: dict[str, int] = {}
+
+    for hit in sorted(hits, key=lambda h: -h.score):
+        if len(selected) >= limit:
+            break
+        group = hit.source_group
+        if group:
+            count = source_counts.get(group, 0)
+            if count >= per_source_cap:
+                continue
+            source_counts[group] = count + 1
+        selected.append(hit)
+
+    return selected
+
+
+def _merge_recall_hit(existing: RecallHit, incoming: RecallHit, rrf: float) -> None:
+    existing.score += rrf
+    existing.reasons.extend(incoming.reasons)
+    if incoming.source_group and not existing.source_group:
+        existing.source_group = incoming.source_group
+    if incoming.filename and not existing.filename:
+        existing.filename = incoming.filename
+    if incoming.linked_image_ids and not existing.linked_image_ids:
+        existing.linked_image_ids = list(incoming.linked_image_ids)
+
+
+def finalize_recall_hits(hits: List[RecallHit], limit: int) -> List[RecallHit]:
+    """Post-fusion dedup and diversity cap."""
+    return _apply_diversity_cap(_dedup_image_message_hits(hits), limit)
 
 
 def format_recall_hit(hit: RecallHit) -> str:
@@ -209,11 +302,12 @@ async def _vector_hits_for_file_archives(
         hits.append(
             RecallHit(
                 layer="file_archive",
-                snippet=_recall_snippet("file_archive", row)[:500],
+                snippet=_truncate_snippet(_recall_snippet("file_archive", row)),
                 handle=row.id,
                 score=1.0 / (idx + 1),
                 reasons=["vector"],
                 filename=file_name or None,
+                source_group=file_name or None,
             )
         )
     return hits
@@ -253,14 +347,24 @@ async def recall(
             for idx, row in enumerate(rows):
                 snippet = _recall_snippet(layer, row)
                 filename = getattr(row, "file_name", None) if layer == "file" else None
+                source_group = None
+                linked_image_ids: List[str] = []
+                if layer == "file":
+                    source_group = filename
+                elif layer == "message":
+                    source_group = _message_source_group(row)
+                    linked_image_ids = _message_linked_image_ids(row)
+
                 vector_hits.append(
                     RecallHit(
                         layer=layer,
-                        snippet=snippet[:500],
+                        snippet=_truncate_snippet(snippet),
                         handle=row.id,
                         score=1.0 / (idx + 1),
                         reasons=["vector"],
                         filename=filename,
+                        source_group=source_group,
+                        linked_image_ids=linked_image_ids,
                     )
                 )
 
@@ -279,7 +383,6 @@ async def recall(
         if query:
             lexical_specs = (
                 ("archival", "archival_passages", "text", "text"),
-                ("message", "messages", "text", "text"),
                 (
                     "image",
                     "images",
@@ -291,6 +394,40 @@ async def recall(
                     ")",
                 ),
             )
+            message_lexical = text(
+                """
+                SELECT id, text, conversation_id, agent_id, similarity(text, :q) AS sim
+                  FROM messages
+                 WHERE organization_id = :org
+                   AND text IS NOT NULL
+                   AND similarity(text, :q) > 0.1
+                 ORDER BY sim DESC
+                 LIMIT :lim
+                """
+            )
+            message_rows = await session.execute(
+                message_lexical, {"q": query, "org": actor.organization_id, "lim": limit}
+            )
+            for row in message_rows:
+                conversation_id = row[2]
+                agent_id_val = row[3]
+                if conversation_id:
+                    source_group = f"conversation:{conversation_id}"
+                elif agent_id_val:
+                    source_group = f"agent:{agent_id_val}"
+                else:
+                    source_group = None
+                lexical_hits.append(
+                    RecallHit(
+                        layer="message",
+                        snippet=_truncate_snippet(str(row[1] or "").strip()),
+                        handle=row[0],
+                        score=float(row[4]),
+                        reasons=["lexical"],
+                        source_group=source_group,
+                    )
+                )
+
             for layer, table, snippet_expr, sim_expr in lexical_specs:
                 if layer == "image":
                     stmt = text(
@@ -328,7 +465,7 @@ async def recall(
                     lexical_hits.append(
                         RecallHit(
                             layer=layer,
-                            snippet=snippet_text[:500],
+                            snippet=_truncate_snippet(snippet_text),
                             handle=row[0],
                             score=float(row[2]),
                             reasons=["lexical"],
@@ -341,14 +478,16 @@ async def recall(
                 source_params["agent_id"] = agent_id
             source_rows = await session.execute(source_lexical, source_params)
             for row in source_rows:
+                file_name = row[2] or None
                 lexical_hits.append(
                     RecallHit(
                         layer="file",
-                        snippet=str(row[1] or "").strip()[:500],
+                        snippet=_truncate_snippet(str(row[1] or "").strip()),
                         handle=row[0],
                         score=float(row[3]),
                         reasons=["lexical"],
-                        filename=row[2] or None,
+                        filename=file_name,
+                        source_group=file_name,
                     )
                 )
 
@@ -358,14 +497,16 @@ async def recall(
                 archive_params["agent_id"] = agent_id
             archive_rows = await session.execute(archive_lexical, archive_params)
             for row in archive_rows:
+                archive_name = row[2] or None
                 lexical_hits.append(
                     RecallHit(
                         layer="file_archive",
-                        snippet=str(row[1] or "").strip()[:500],
+                        snippet=_truncate_snippet(str(row[1] or "").strip()),
                         handle=row[0],
                         score=float(row[3]),
                         reasons=["lexical"],
-                        filename=row[2] or None,
+                        filename=archive_name,
+                        source_group=archive_name,
                     )
                 )
 
@@ -374,8 +515,7 @@ async def recall(
         key = f"{hit.layer}:{hit.handle}"
         rrf = 1.0 / (60 + rank + 1)
         if key in fused:
-            fused[key].score += rrf
-            fused[key].reasons.extend(hit.reasons)
+            _merge_recall_hit(fused[key], hit, rrf)
         else:
             hit.score = rrf
             fused[key] = hit
@@ -383,10 +523,9 @@ async def recall(
         key = f"{hit.layer}:{hit.handle}"
         rrf = 1.0 / (60 + rank + 1)
         if key in fused:
-            fused[key].score += rrf
-            fused[key].reasons.extend(hit.reasons)
+            _merge_recall_hit(fused[key], hit, rrf)
         else:
             hit.score = rrf
             fused[key] = hit
 
-    return sorted(fused.values(), key=lambda h: -h.score)[:limit]
+    return finalize_recall_hits(list(fused.values()), limit)

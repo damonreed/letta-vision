@@ -1,4 +1,4 @@
-"""Part 2 historic re-embed: passages and file archives (FR v0.6.0 GA §5.1)."""
+"""Part 2 historic re-embed: passages, file archives, and messages (FR v0.6.0 GA §5.1)."""
 
 from __future__ import annotations
 
@@ -14,7 +14,10 @@ from sqlalchemy import func, or_, select, tuple_, update
 
 from letta.embeddings.resolver import resolve_deployment_embedding_config_async
 from letta.llm_api.llm_client import LLMClient
+from letta.embeddings.write import write_message_embedding_atomic
+from letta.embeddings.util import prepare_vector_for_write
 from letta.orm.file_archive import FileArchive
+from letta.orm.message import Message as MessageModel
 from letta.orm.passage import ArchivalPassage, SourcePassage
 from letta.schemas.embedding_config import EmbeddingConfig
 from letta.schemas.user import User as PydanticUser
@@ -26,14 +29,24 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_PART2_CHECKPOINT_PATH = Path.home() / ".letta" / "uplift_part2_checkpoint.json"
 
-REEMBED_TABLES = ("archival_passages", "source_passages", "file_archives")
-ALL_PASSAGE_ARCHIVE_TABLES = REEMBED_TABLES
+MESSAGE_EMBED_VERSION = 2
+
+REEMBED_TABLES = ("archival_passages", "source_passages", "file_archives", "messages")
+ALL_REEMBED_TABLES = REEMBED_TABLES
 
 
 def _needs_uplift_clause(model: type, target_space_id: str):
     return or_(
         model.embedding.is_(None),
         model.embedding_space_id.is_distinct_from(target_space_id),
+    )
+
+
+def _needs_message_uplift_clause(model: type, target_space_id: str):
+    return or_(
+        _needs_uplift_clause(model, target_space_id),
+        model.embedding_version.is_(None),
+        model.embedding_version < MESSAGE_EMBED_VERSION,
     )
 
 
@@ -60,6 +73,7 @@ TABLE_SPECS: dict[str, TableSpec] = {
     "archival_passages": TableSpec("archival_passages", ArchivalPassage, _passage_embed_text),
     "source_passages": TableSpec("source_passages", SourcePassage, _passage_embed_text),
     "file_archives": TableSpec("file_archives", FileArchive, _file_archive_embed_text),
+    "messages": TableSpec("messages", MessageModel, lambda _row: ""),
 }
 
 
@@ -130,7 +144,7 @@ class ReembedDryRunReport:
 
     def summary_lines(self) -> list[str]:
         lines = [
-            "=== Part 2 Re-embed Dry Run (passages + file archives) ===",
+            "=== Part 2 Re-embed Dry Run (passages, file archives, messages) ===",
             f"Generated: {self.generated_at}",
             f"Organization: {self.organization_id}",
             f"Deployment handle: {self.deployment_handle}",
@@ -158,7 +172,7 @@ class ReembedLiveReport:
     def summary_lines(self) -> list[str]:
         status = "complete" if self.completed else "interrupted (checkpoint saved)"
         lines = [
-            "=== Part 2 Re-embed Live Run (passages + file archives) ===",
+            "=== Part 2 Re-embed Live Run (passages, file archives, messages) ===",
             f"Generated: {self.generated_at}",
             f"Organization: {self.organization_id}",
             f"Status: {status}",
@@ -184,13 +198,21 @@ def save_part2_checkpoint(path: Path, checkpoint: Part2Checkpoint) -> None:
 
 def resolve_tables(table_arg: str) -> list[str]:
     if table_arg == "all":
-        return list(ALL_PASSAGE_ARCHIVE_TABLES)
+        return list(ALL_REEMBED_TABLES)
     if table_arg not in TABLE_SPECS:
         raise ValueError(f"Unknown table {table_arg!r}; choose from {', '.join(REEMBED_TABLES)} or all")
     return [table_arg]
 
 
+def _uplift_clause_for_table(spec: TableSpec, target_space_id: str):
+    if spec.name == "messages":
+        return _needs_message_uplift_clause(spec.model, target_space_id)
+    return _needs_uplift_clause(spec.model, target_space_id)
+
+
 def _embeddable_text_clause(spec: TableSpec):
+    if spec.name == "messages":
+        return True
     if spec.name == "file_archives":
         return or_(FileArchive.title != "", FileArchive.content != "")
     return spec.model.text != ""
@@ -206,7 +228,7 @@ async def count_pending_rows(
         select(func.count())
         .select_from(spec.model)
         .where(spec.model.organization_id == org_id)
-        .where(_needs_uplift_clause(spec.model, target_space_id))
+        .where(_uplift_clause_for_table(spec, target_space_id))
         .where(_embeddable_text_clause(spec))
     )
     return int((await session.execute(q)).scalar_one() or 0)
@@ -281,6 +303,43 @@ async def _write_passage_embedding(
     )
 
 
+async def _build_message_embed_texts(rows, actor: PydanticUser) -> list[tuple[Any, str]]:
+    from letta.embeddings.message_embed_text import build_message_embed_text
+    from letta.services.message_manager import MessageManager
+
+    extractor = MessageManager()._extract_message_text
+    pairs: list[tuple[Any, str]] = []
+    for row in rows:
+        text = (
+            await build_message_embed_text(
+                row.to_pydantic(),
+                actor,
+                include_image_captions=True,
+                base_extractor=extractor,
+            )
+        ).strip()
+        if text:
+            pairs.append((row, text))
+    return pairs
+
+
+async def _write_message_embedding(
+    *,
+    row_id: str,
+    org_id: str,
+    embedding: list[float],
+    config: EmbeddingConfig,
+) -> bool:
+    prepared = prepare_vector_for_write(embedding, config)
+    return await write_message_embedding_atomic(
+        message_id=row_id,
+        organization_id=org_id,
+        embedding=prepared,
+        embedding_config=config,
+        embedding_version=MESSAGE_EMBED_VERSION,
+    )
+
+
 async def _write_file_archive_embedding(
     session,
     *,
@@ -345,7 +404,7 @@ async def _reembed_table_live(
             query = (
                 select(model)
                 .where(model.organization_id == org_id)
-                .where(_needs_uplift_clause(model, target_space_id))
+                .where(_uplift_clause_for_table(spec, target_space_id))
                 .where(_embeddable_text_clause(spec))
                 .order_by(model.created_at, model.id)
             )
@@ -357,10 +416,19 @@ async def _reembed_table_live(
         if not rows:
             break
 
-        texts = [spec.embed_text(row) for row in rows]
+        if table_name == "messages":
+            embed_pairs = await _build_message_embed_texts(rows, actor)
+            embed_rows = [pair[0] for pair in embed_pairs]
+            texts = [pair[1] for pair in embed_pairs]
+            embed_ids = {row.id for row in embed_rows}
+            skipped_rows = [row for row in rows if row.id not in embed_ids]
+        else:
+            embed_rows = rows
+            texts = [spec.embed_text(row) for row in rows]
+            skipped_rows = []
 
         try:
-            vectors = await _request_embeddings_with_retry(client, texts, doc_config)
+            vectors = await _request_embeddings_with_retry(client, texts, doc_config) if texts else []
         except Exception as e:
             logger.error("Batch embed failed for %s (%s rows): %s", table_name, len(texts), e)
             failed += len(rows)
@@ -377,7 +445,12 @@ async def _reembed_table_live(
             raise
 
         async with db_registry.async_session() as session:
-            for row, vec in zip(rows, vectors):
+            for row in skipped_rows:
+                processed += 1
+                succeeded += 1
+                logger.debug("Skipped empty embed text for %s %s", table_name, row.id)
+
+            for row, vec in zip(embed_rows, vectors):
                 if vec is None:
                     failed += 1
                 else:
@@ -386,6 +459,12 @@ async def _reembed_table_live(
                             await _write_file_archive_embedding(
                                 session, row_id=row.id, org_id=org_id, embedding=vec, config=doc_config
                             )
+                        elif table_name == "messages":
+                            applied = await _write_message_embedding(
+                                row_id=row.id, org_id=org_id, embedding=vec, config=doc_config
+                            )
+                            if not applied:
+                                logger.debug("Monotonic guard skipped %s %s", table_name, row.id)
                         else:
                             await _write_passage_embedding(
                                 session, row_id=row.id, org_id=org_id, embedding=vec, config=doc_config, model=model
@@ -396,7 +475,8 @@ async def _reembed_table_live(
                         failed += 1
                         logger.error("Write failed for %s %s: %s", table_name, row.id, e)
                 processed += 1
-            await session.commit()
+            if table_name != "messages":
+                await session.commit()
 
         last = rows[-1]
         cursor_created_at = last.created_at

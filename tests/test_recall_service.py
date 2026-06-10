@@ -5,11 +5,14 @@ from letta.services.message_manager import MessageManager
 from letta.schemas.letta_message_content import ImageContent, LettaImage, TextContent
 from letta.services.recall.recall_service import (
     RecallHit,
+    _apply_diversity_cap,
+    _dedup_image_message_hits,
     _file_archive_lexical_sql,
     _image_recall_snippet,
     _recall_snippet,
     _snippet_for_display,
     _source_passage_lexical_sql,
+    finalize_recall_hits,
     format_recall_hit,
 )
 
@@ -111,6 +114,63 @@ def test_format_recall_hit_labels_file_passages_with_filename():
     )
     assert hit.startswith("[file] handle=passage-abc filename=villains.txt score=0.0328")
     assert "Victoria" in hit
+
+
+def test_dedup_image_message_hits_drops_redundant_message():
+    hits = [
+        RecallHit(
+            layer="image",
+            snippet="Portrait description",
+            handle="image-111",
+            score=0.02,
+            reasons=["vector"],
+        ),
+        RecallHit(
+            layer="message",
+            snippet="Here is the portrait",
+            handle="message-222",
+            score=0.015,
+            reasons=["vector"],
+            linked_image_ids=["image-111"],
+        ),
+    ]
+    filtered = _dedup_image_message_hits(hits)
+    assert len(filtered) == 1
+    assert filtered[0].layer == "image"
+    assert "message" in filtered[0].reasons
+
+
+def test_apply_diversity_cap_limits_hits_per_file():
+    hits = [
+        RecallHit(layer="file", snippet="a", handle="p1", score=0.05, reasons=["vector"], source_group="doc.md"),
+        RecallHit(layer="file", snippet="b", handle="p2", score=0.04, reasons=["vector"], source_group="doc.md"),
+        RecallHit(layer="file", snippet="c", handle="p3", score=0.03, reasons=["vector"], source_group="doc.md"),
+        RecallHit(layer="file", snippet="d", handle="p4", score=0.02, reasons=["vector"], source_group="doc.md"),
+        RecallHit(layer="archival", snippet="e", handle="a1", score=0.01, reasons=["vector"]),
+    ]
+    capped = _apply_diversity_cap(hits, limit=10, per_source_cap=3)
+    assert len(capped) == 4
+    assert sum(1 for hit in capped if hit.source_group == "doc.md") == 3
+
+
+def test_finalize_recall_hits_applies_dedup_then_cap():
+    hits = [
+        RecallHit(layer="image", snippet="img", handle="image-1", score=0.05, reasons=["vector"]),
+        RecallHit(
+            layer="message",
+            snippet="msg",
+            handle="message-1",
+            score=0.04,
+            reasons=["vector"],
+            linked_image_ids=["image-1"],
+        ),
+        RecallHit(layer="file", snippet="1", handle="p1", score=0.03, reasons=["vector"], source_group="x.md"),
+        RecallHit(layer="file", snippet="2", handle="p2", score=0.02, reasons=["vector"], source_group="x.md"),
+        RecallHit(layer="file", snippet="3", handle="p3", score=0.01, reasons=["vector"], source_group="x.md"),
+    ]
+    final = finalize_recall_hits(hits, limit=5)
+    assert len(final) == 4
+    assert all(hit.layer != "message" for hit in final)
 
 
 def test_format_recall_hit_labels_file_archives_with_filename():

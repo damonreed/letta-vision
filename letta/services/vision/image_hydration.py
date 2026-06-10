@@ -220,25 +220,53 @@ async def _hydrate_content_letta_images(
 ) -> None:
     if not message.content or not isinstance(message.content, list):
         return
+
+    updated_parts = []
     for block in message.content:
-        if not isinstance(block, ImageContent) or not isinstance(block.source, LettaImage):
-            continue
-        file_id = block.source.file_id
-        if not file_id:
-            continue
-        tier = decisions.get(file_id, RenderTier.TEXT)
-        info = metadata.get(file_id, {})
-        media_type = block.source.media_type or info.get("media_type") or "image/png"
-        if tier == RenderTier.TEXT:
-            block.source.data = None
-            continue
-        try:
-            data, hydrated_type = await _hydrate_letta_image_bytes(file_id, tier, info, store)
-            if data:
-                block.source.data = data
-                block.source.media_type = hydrated_type or media_type
-        except Exception as exc:
-            logger.warning("Failed to hydrate image %s for LLM request: %s", file_id, exc)
+        if isinstance(block, ImageContent) and isinstance(block.source, LettaImage):
+            file_id = block.source.file_id
+            if not file_id:
+                updated_parts.append(block)
+                continue
+            tier = decisions.get(file_id, RenderTier.TEXT)
+            info = metadata.get(file_id, {})
+            if tier == RenderTier.TEXT:
+                updated_parts.append(TextContent(text=_text_for_demoted_image(file_id, info)))
+                continue
+            media_type = block.source.media_type or info.get("media_type") or "image/png"
+            try:
+                data, hydrated_type = await _hydrate_letta_image_bytes(file_id, tier, info, store)
+                if data:
+                    block.source.data = data
+                    block.source.media_type = hydrated_type or media_type
+            except Exception as exc:
+                logger.warning("Failed to hydrate image %s for LLM request: %s", file_id, exc)
+            updated_parts.append(block)
+        elif isinstance(block, dict) and block.get("type") == "image":
+            source = block.get("source") or {}
+            file_id = source.get("file_id")
+            if source.get("type") != "letta" or not file_id:
+                updated_parts.append(block)
+                continue
+            tier = decisions.get(file_id, RenderTier.TEXT)
+            info = metadata.get(file_id, {})
+            if tier == RenderTier.TEXT:
+                updated_parts.append({"type": "text", "text": _text_for_demoted_image(file_id, info)})
+                continue
+            try:
+                data, hydrated_type = await _hydrate_letta_image_bytes(file_id, tier, info, store)
+                if data:
+                    source = dict(source)
+                    source["data"] = data
+                    source["media_type"] = source.get("media_type") or hydrated_type or info.get("media_type")
+                    block = {**block, "source": source}
+            except Exception as exc:
+                logger.warning("Failed to hydrate image %s for LLM request: %s", file_id, exc)
+            updated_parts.append(block)
+        else:
+            updated_parts.append(block)
+
+    message.content = updated_parts
 
 
 async def prepare_messages_for_vision_llm(

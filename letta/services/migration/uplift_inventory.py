@@ -18,6 +18,7 @@ from letta.schemas.user import User as PydanticUser
 from letta.server.db import db_registry
 from letta.services.migration.block_classifier import MessageScanStats
 from letta.services.migration.image_base64_conversion import scan_messages_for_conversion
+from letta.services.migration.historic_reembed import MESSAGE_EMBED_VERSION
 from letta.services.migration.uplift_cost import (
     CostEstimate,
     Part2Inventory,
@@ -104,7 +105,16 @@ async def collect_part2_inventory(actor: PydanticUser, target_space_id: str, dep
         archival = await _count_table(session, ArchivalPassage, org_id, target_space_id, has_legacy_column=True)
         source = await _count_table(session, SourcePassage, org_id, target_space_id, has_legacy_column=True)
         archives = await _count_table(session, FileArchive, org_id, target_space_id, has_legacy_column=True)
-        messages = await _count_table(session, MessageModel, org_id, target_space_id)
+        messages = await _count_table(
+            session,
+            MessageModel,
+            org_id,
+            target_space_id,
+            extra_needs_uplift=or_(
+                MessageModel.embedding_version.is_(None),
+                MessageModel.embedding_version < MESSAGE_EMBED_VERSION,
+            ),
+        )
         images = await _count_table(
             session,
             ImageRecord,

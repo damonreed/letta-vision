@@ -29,7 +29,11 @@ def test_passage_embed_text_strips():
 
 
 def test_resolve_tables_all():
-    assert resolve_tables("all") == ["archival_passages", "source_passages", "file_archives"]
+    assert resolve_tables("all") == ["archival_passages", "source_passages", "file_archives", "messages"]
+
+
+def test_resolve_tables_messages_only():
+    assert resolve_tables("messages") == ["messages"]
 
 
 def test_part2_checkpoint_roundtrip(tmp_path: Path):
