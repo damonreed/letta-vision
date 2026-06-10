@@ -1,6 +1,6 @@
 """Historic embedding uplift management jobs (FR v0.6.0 GA)."""
 
-__all__ = ["build_inventory_report", "run_conversion_dry_run"]
+__all__ = ["build_inventory_report", "run_conversion_dry_run", "run_conversion_live"]
 
 
 def __getattr__(name: str):
@@ -12,4 +12,8 @@ def __getattr__(name: str):
         from letta.services.migration.image_base64_conversion import run_conversion_dry_run
 
         return run_conversion_dry_run
+    if name == "run_conversion_live":
+        from letta.services.migration.image_base64_conversion import run_conversion_live
+
+        return run_conversion_live
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

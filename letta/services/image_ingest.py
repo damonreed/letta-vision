@@ -229,6 +229,118 @@ async def _ingest_image_block(
     )
 
 
+async def _ingest_migration_image_block(
+    block: Union[ImageContent, dict],
+    actor: PydanticUser,
+    *,
+    provenance: ImageProvenance,
+    generation_prompt: Optional[str] = None,
+) -> tuple[Optional[Union[ImageContent, dict]], Optional[str]]:
+    """Convert historic inline bytes (base64 or letta+data) to LettaImage refs."""
+    if isinstance(block, ImageContent):
+        source = block.source
+        if source.type == ImageSourceType.letta:
+            inline_data = getattr(source, "data", None)
+            if inline_data:
+                letta_source = await _ingest_base64_source(
+                    data=inline_data,
+                    media_type=getattr(source, "media_type", None) or "image/png",
+                    detail=getattr(source, "detail", None),
+                    actor=actor,
+                    provenance=provenance,
+                    generation_prompt=generation_prompt,
+                )
+                return ImageContent(source=letta_source), letta_source.file_id
+            return block, getattr(source, "file_id", None)
+    elif isinstance(block, dict) and block.get("type") == "image":
+        source = block.get("source") or {}
+        if source.get("type") == "letta" and source.get("data"):
+            letta_source = await _ingest_base64_source(
+                data=source["data"],
+                media_type=source.get("media_type") or "image/png",
+                detail=source.get("detail"),
+                actor=actor,
+                provenance=provenance,
+                generation_prompt=generation_prompt,
+            )
+            return (
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "letta",
+                        "file_id": letta_source.file_id,
+                        "media_type": letta_source.media_type,
+                        "data": None,
+                        "detail": letta_source.detail,
+                    },
+                },
+                letta_source.file_id,
+            )
+
+    return await _ingest_image_block(
+        block,
+        actor,
+        provenance=provenance,
+        generation_prompt=generation_prompt,
+    )
+
+
+async def convert_historic_images_in_message(message: PydanticMessage, actor: PydanticUser) -> tuple[List[str], bool]:
+    """Part 1 migration: convert all inline image bytes, including tool returns."""
+    provenance = _provenance_for_message(message)
+    generation_prompt = None
+    image_ids: List[str] = []
+    changed = False
+
+    if isinstance(message.content, list):
+        updated_content = []
+        for block in message.content:
+            if (isinstance(block, ImageContent) and block.type == MessageContentType.image) or (
+                isinstance(block, dict) and block.get("type") == "image"
+            ):
+                new_block, image_id = await _ingest_migration_image_block(
+                    block,
+                    actor,
+                    provenance=provenance,
+                    generation_prompt=generation_prompt,
+                )
+                if new_block != block:
+                    changed = True
+                updated_content.append(new_block)
+                if image_id:
+                    image_ids.append(image_id)
+            else:
+                updated_content.append(block)
+        message.content = updated_content
+
+    if message.tool_returns:
+        for tool_return in message.tool_returns:
+            func_response = tool_return.func_response
+            if not isinstance(func_response, list):
+                continue
+            updated_parts = []
+            for part in func_response:
+                if (isinstance(part, ImageContent) and part.type == MessageContentType.image) or (
+                    isinstance(part, dict) and part.get("type") == "image"
+                ):
+                    new_part, image_id = await _ingest_migration_image_block(
+                        part,
+                        actor,
+                        provenance=provenance,
+                        generation_prompt=generation_prompt,
+                    )
+                    if new_part != part:
+                        changed = True
+                    updated_parts.append(new_part)
+                    if image_id:
+                        image_ids.append(image_id)
+                else:
+                    updated_parts.append(part)
+            tool_return.func_response = updated_parts
+
+    return image_ids, changed
+
+
 async def ingest_images_in_message(message: PydanticMessage, actor: PydanticUser) -> List[str]:
     """Persist inline image bytes as image records; replace with LettaImage refs."""
     provenance = _provenance_for_message(message)
