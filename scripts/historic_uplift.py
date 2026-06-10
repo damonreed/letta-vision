@@ -12,6 +12,12 @@ from pathlib import Path
 
 from letta.server.server import SyncServer
 from letta.services.migration.enrich_pending_images import run_enrich_pending_dry_run, run_enrich_pending_live
+from letta.services.migration.historic_reembed import (
+    DEFAULT_PART2_CHECKPOINT_PATH,
+    resolve_tables,
+    run_reembed_dry_run,
+    run_reembed_live,
+)
 from letta.services.migration.image_base64_conversion import (
     DEFAULT_CHECKPOINT_PATH,
     run_conversion_dry_run,
@@ -74,6 +80,28 @@ async def cmd_enrich_pending(args: argparse.Namespace) -> int:
         )
     if args.json:
         print(json.dumps(report.__dict__, indent=2))
+    else:
+        print("\n".join(report.summary_lines()))
+    return 0
+
+
+async def cmd_reembed(args: argparse.Namespace) -> int:
+    actor = await _get_actor()
+    tables = resolve_tables(args.table)
+    if args.dry_run:
+        report = await run_reembed_dry_run(actor, tables=tables)
+    else:
+        report = await run_reembed_live(
+            actor,
+            tables=tables,
+            batch_size=args.batch_size,
+            limit=args.limit,
+            throttle_seconds=args.throttle,
+            checkpoint_path=Path(args.checkpoint),
+            resume=not args.no_resume,
+        )
+    if args.json:
+        print(json.dumps(report.__dict__, indent=2, default=str))
     else:
         print("\n".join(report.summary_lines()))
     return 0
@@ -150,6 +178,23 @@ def main() -> int:
         help="Parallel enrichment workers (VLM + embed are I/O bound; try 4-8)",
     )
     enrich.set_defaults(func=cmd_enrich_pending)
+
+    reembed = sub.add_parser("reembed", help="Part 2: re-embed passages and file archives")
+    reembed.add_argument("--dry-run", action="store_true", help="Count rows needing uplift only")
+    reembed.add_argument(
+        "--table",
+        default="all",
+        choices=["all", "archival_passages", "source_passages", "file_archives"],
+        help="Table(s) to re-embed (default: all passage/archive tables)",
+    )
+    reembed.add_argument("--throttle", type=float, default=0.25, help="Seconds between embed batches (0 to disable)")
+    reembed.add_argument(
+        "--checkpoint",
+        default=str(DEFAULT_PART2_CHECKPOINT_PATH),
+        help="Checkpoint file for resume (default: ~/.letta/uplift_part2_checkpoint.json)",
+    )
+    reembed.add_argument("--no-resume", action="store_true", help="Ignore checkpoint and start from the beginning")
+    reembed.set_defaults(func=cmd_reembed)
 
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
