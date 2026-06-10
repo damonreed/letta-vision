@@ -23,6 +23,11 @@ from letta.services.migration.image_base64_conversion import (
     run_conversion_dry_run,
     run_conversion_live,
 )
+from letta.services.migration.tool_return_byte_strip import (
+    DEFAULT_TOOL_RETURN_STRIP_CHECKPOINT,
+    run_tool_return_strip_dry_run,
+    run_tool_return_strip_live,
+)
 from letta.services.migration.uplift_inventory import build_inventory_report, format_inventory_report
 
 logger = logging.getLogger(__name__)
@@ -97,6 +102,25 @@ async def cmd_reembed(args: argparse.Namespace) -> int:
             batch_size=args.batch_size,
             limit=args.limit,
             throttle_seconds=args.throttle,
+            checkpoint_path=Path(args.checkpoint),
+            resume=not args.no_resume,
+        )
+    if args.json:
+        print(json.dumps(report.__dict__, indent=2, default=str))
+    else:
+        print("\n".join(report.summary_lines()))
+    return 0
+
+
+async def cmd_strip_tool_returns(args: argparse.Namespace) -> int:
+    actor = await _get_actor()
+    if args.dry_run:
+        report = await run_tool_return_strip_dry_run(actor, batch_size=args.batch_size, limit=args.limit)
+    else:
+        report = await run_tool_return_strip_live(
+            actor,
+            batch_size=args.batch_size,
+            limit=args.limit,
             checkpoint_path=Path(args.checkpoint),
             resume=not args.no_resume,
         )
@@ -196,6 +220,24 @@ def main() -> int:
     reembed.add_argument("--no-resume", action="store_true", help="Ignore checkpoint and start from the beginning")
     reembed.set_defaults(func=cmd_reembed)
 
+    strip_tr = sub.add_parser(
+        "strip-tool-returns",
+        help="Strip persisted base64 from tool_returns (fetch_image refs; historic cleanup)",
+    )
+    strip_tr.add_argument("--dry-run", action="store_true", help="Scan and report only; no writes")
+    strip_tr.add_argument(
+        "--i-have-a-snapshot",
+        action="store_true",
+        help="Required for live run: confirms a Postgres snapshot was taken",
+    )
+    strip_tr.add_argument(
+        "--checkpoint",
+        default=str(DEFAULT_TOOL_RETURN_STRIP_CHECKPOINT),
+        help="Checkpoint file for resume (default: ~/.letta/uplift_tool_return_strip_checkpoint.json)",
+    )
+    strip_tr.add_argument("--no-resume", action="store_true", help="Ignore checkpoint and start from the beginning")
+    strip_tr.set_defaults(func=None)
+
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
 
@@ -210,6 +252,18 @@ def main() -> int:
             )
             return 2
         return asyncio.run(cmd_convert_live(args))
+
+    if args.command == "strip-tool-returns":
+        if args.dry_run:
+            return asyncio.run(cmd_strip_tool_returns(args))
+        if not args.i_have_a_snapshot:
+            print(
+                "Live strip mutates messages.tool_returns. Take a Postgres snapshot first, then re-run with "
+                "--i-have-a-snapshot",
+                file=sys.stderr,
+            )
+            return 2
+        return asyncio.run(cmd_strip_tool_returns(args))
 
     return asyncio.run(args.func(args))
 

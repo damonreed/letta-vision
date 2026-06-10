@@ -523,10 +523,13 @@ class MessageManager:
                     return [msg.to_pydantic() for msg in result.scalars()]
 
         from letta.services.image_ingest import ingest_images_in_message, schedule_image_enrichment_for_message
+        from letta.services.vision.tool_return_storage import strip_persisted_image_bytes_from_tool_returns
 
         image_ids_by_message: list[list[str]] = []
         for message in messages_to_create:
-            image_ids_by_message.append(await ingest_images_in_message(message, actor))
+            image_ids = await ingest_images_in_message(message, actor)
+            strip_persisted_image_bytes_from_tool_returns(message)
+            image_ids_by_message.append(image_ids)
 
         # Validate run_ids exist before inserting to prevent ForeignKeyViolationError
         # This handles the case where a run is deleted while messages are being created

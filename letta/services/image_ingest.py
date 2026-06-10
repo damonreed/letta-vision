@@ -241,6 +241,19 @@ async def _ingest_migration_image_block(
         source = block.source
         if source.type == ImageSourceType.letta:
             inline_data = getattr(source, "data", None)
+            existing_id = getattr(source, "file_id", None)
+            if inline_data and existing_id:
+                return (
+                    ImageContent(
+                        source=LettaImage(
+                            file_id=existing_id,
+                            data=None,
+                            media_type=getattr(source, "media_type", None) or "image/png",
+                            detail=getattr(source, "detail", None),
+                        )
+                    ),
+                    existing_id,
+                )
             if inline_data:
                 letta_source = await _ingest_base64_source(
                     data=inline_data,
@@ -251,10 +264,25 @@ async def _ingest_migration_image_block(
                     generation_prompt=generation_prompt,
                 )
                 return ImageContent(source=letta_source), letta_source.file_id
-            return block, getattr(source, "file_id", None)
+            return block, existing_id
     elif isinstance(block, dict) and block.get("type") == "image":
         source = block.get("source") or {}
         if source.get("type") == "letta" and source.get("data"):
+            existing_id = source.get("file_id")
+            if existing_id:
+                return (
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "letta",
+                            "file_id": existing_id,
+                            "media_type": source.get("media_type") or "image/png",
+                            "data": None,
+                            "detail": source.get("detail"),
+                        },
+                    },
+                    existing_id,
+                )
             letta_source = await _ingest_base64_source(
                 data=source["data"],
                 media_type=source.get("media_type") or "image/png",

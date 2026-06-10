@@ -155,6 +155,43 @@ async def test_convert_historic_images_converts_fetch_image_tool_return(monkeypa
     assert image_ids == ["image-historic-2"]
 
 
+@pytest.mark.asyncio
+async def test_convert_historic_strips_fetch_image_letta_inline_data_without_reingest(monkeypatch):
+    ingest_called = False
+
+    async def fake_ingest(data, media_type, actor, **kwargs):
+        nonlocal ingest_called
+        ingest_called = True
+        return "image-should-not-create"
+
+    monkeypatch.setattr("letta.services.image_ingest.ingest_image_sync", fake_ingest)
+
+    msg = Message(
+        role=MessageRole.tool,
+        name="fetch_image",
+        tool_returns=[
+            ToolReturn(
+                status="success",
+                func_response=[
+                    ImageContent(
+                        source=LettaImage(
+                            file_id="image-existing",
+                            data=base64.b64encode(b"png").decode(),
+                            media_type="image/png",
+                        )
+                    ),
+                ],
+            )
+        ],
+    )
+    image_ids, changed = await convert_historic_images_in_message(msg, actor=None)
+
+    assert changed is True
+    assert image_ids == ["image-existing"]
+    assert ingest_called is False
+    assert msg.tool_returns[0].func_response[0].source.data is None
+
+
 def test_parse_caption_json_plain_object():
     parsed = _parse_caption_json(
         '{"caption": "Red apple", "description": "A red apple on wood", "details": "Close-up fruit"}'
