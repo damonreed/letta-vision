@@ -609,12 +609,22 @@ class MessageManager:
                 actor=actor,
             )
 
+            from letta.embeddings.message_embed_text import build_message_embed_text
+
             combined_messages = self._combine_assistant_tool_messages(messages)
+            include_image_captions = embedding_version >= 2
             message_texts = []
             message_ids = []
 
             for msg in combined_messages:
-                text = self._extract_message_text(msg).strip()
+                text = (
+                    await build_message_embed_text(
+                        msg,
+                        actor,
+                        include_image_captions=include_image_captions,
+                        base_extractor=self._extract_message_text,
+                    )
+                ).strip()
                 if text:
                     message_texts.append(text)
                     message_ids.append(msg.id)
