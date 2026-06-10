@@ -45,7 +45,7 @@ class ImageManager:
         self,
         actor: PydanticUser,
         *,
-        limit: int = 50,
+        limit: Optional[int] = None,
         enrichment_status: Optional[str] = None,
     ) -> List[PydanticImage]:
         async with db_registry.async_session() as session:
@@ -53,8 +53,9 @@ class ImageManager:
                 select(ImageRecord)
                 .where(ImageRecord.organization_id == actor.organization_id, ImageRecord.is_deleted == False)  # noqa: E712
                 .order_by(ImageRecord.created_at.desc())
-                .limit(limit)
             )
+            if limit is not None:
+                q = q.limit(limit)
             if enrichment_status:
                 q = q.where(ImageRecord.enrichment_status == enrichment_status)
             result = await session.execute(q)

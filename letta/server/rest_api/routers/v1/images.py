@@ -16,7 +16,7 @@ router = APIRouter(prefix="/images", tags=["images"])
 
 @router.get("", response_model=List[PydanticImage])
 async def list_images(
-    limit: int = 50,
+    limit: Optional[int] = Query(None, description="Max images to return; omit for full org corpus"),
     enrichment_status: Optional[str] = None,
     server: SyncServer = Depends(get_letta_server),
     headers: HeaderParams = Depends(get_headers),
