@@ -70,6 +70,7 @@ async def cmd_enrich_pending(args: argparse.Namespace) -> int:
             actor,
             limit=args.limit,
             throttle_seconds=args.throttle,
+            concurrency=args.concurrency,
         )
     if args.json:
         print(json.dumps(report.__dict__, indent=2))
@@ -141,7 +142,13 @@ def main() -> int:
 
     enrich = sub.add_parser("enrich-pending", help="Part 1: 1MP + captions + pixel embed for pending images")
     enrich.add_argument("--dry-run", action="store_true", help="Count pending images only; no API calls")
-    enrich.add_argument("--throttle", type=float, default=0.5, help="Seconds between images (rate limit)")
+    enrich.add_argument("--throttle", type=float, default=0.5, help="Seconds after each image completes (0 to disable)")
+    enrich.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        help="Parallel enrichment workers (VLM + embed are I/O bound; try 4-8)",
+    )
     enrich.set_defaults(func=cmd_enrich_pending)
 
     args = parser.parse_args()

@@ -99,11 +99,35 @@ async def run_enrich_pending_dry_run(actor: PydanticUser) -> EnrichPendingReport
     )
 
 
+async def _enrich_one_image(
+    image_id: str,
+    status: str,
+    actor: PydanticUser,
+) -> bool:
+    """Returns True if image reached complete status."""
+    force = status == "failed"
+    try:
+        await enrich_image_background(image_id, actor, message_id=None, force=force)
+
+        from letta.services.image_manager import ImageManager
+
+        image = await ImageManager().get_by_id_async(image_id, actor)
+        if image and image.enrichment_status == "complete":
+            logger.info("Enriched image %s", image_id)
+            return True
+        logger.warning("Enrichment incomplete for %s (status=%s)", image_id, getattr(image, "enrichment_status", None))
+        return False
+    except Exception as e:
+        logger.error("Enrichment error for %s: %s", image_id, e)
+        return False
+
+
 async def run_enrich_pending_live(
     actor: PydanticUser,
     *,
     limit: Optional[int] = None,
     throttle_seconds: float = 0.5,
+    concurrency: int = 1,
 ) -> EnrichPendingReport:
     pending = await _list_pending_images(actor, limit=limit)
     pending_count = await count_pending_images(actor)
@@ -111,28 +135,28 @@ async def run_enrich_pending_live(
     succeeded = 0
     failed = 0
 
-    for image_id, status in pending:
-        force = status == "failed"
-        try:
-            await enrich_image_background(image_id, actor, message_id=None, force=force)
+    workers = max(1, concurrency)
+    sem = asyncio.Semaphore(workers)
+
+    async def _run_one(image_id: str, status: str) -> bool:
+        async with sem:
+            ok = await _enrich_one_image(image_id, status, actor)
+            if throttle_seconds > 0:
+                await asyncio.sleep(throttle_seconds)
+            return ok
+
+    if workers == 1:
+        for image_id, status in pending:
             processed += 1
-
-            from letta.services.image_manager import ImageManager
-
-            image = await ImageManager().get_by_id_async(image_id, actor)
-            if image and image.enrichment_status == "complete":
+            if await _run_one(image_id, status):
                 succeeded += 1
-                logger.info("Enriched image %s", image_id)
             else:
                 failed += 1
-                logger.warning("Enrichment incomplete for %s (status=%s)", image_id, getattr(image, "enrichment_status", None))
-        except Exception as e:
-            processed += 1
-            failed += 1
-            logger.error("Enrichment error for %s: %s", image_id, e)
-
-        if throttle_seconds > 0:
-            await asyncio.sleep(throttle_seconds)
+    else:
+        results = await asyncio.gather(*[_run_one(image_id, status) for image_id, status in pending])
+        processed = len(results)
+        succeeded = sum(1 for ok in results if ok)
+        failed = processed - succeeded
 
     return EnrichPendingReport(
         generated_at=datetime.utcnow().isoformat() + "Z",
