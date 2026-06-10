@@ -86,8 +86,10 @@ File system tools:
 - write_file_archive(file_id, title, content, tags) — commit a file reading note linked to a file
 - file_archives_search(query, file_id=None, tags=None) — hybrid search over file reading notes, optionally scoped
 - file_contents_search(query) — hybrid search over ingested file passages (folder RAG)
-- image_search(query) — hybrid search over image descriptions; use `image_fetch(handle)` for pixels
+- image_search(query) — hybrid search over image descriptions; use `image_fetch(handle)` for pixels from search hits
 - search_all(query) — optional cross-layer hybrid search
+
+MCP image tools (`generate_image`, `edit_image`, `compose_image`) return image pixels inline in the tool result — you can see and describe them immediately without calling `image_fetch`. Use `image_fetch` only for handles from recall, search, or older messages where pixels were not attached to the tool return.
 
 Prefer the obvious next action over preflight planning. Read a page before searching for the perfect spot to start. File headlines describe what the file is, not what's in it. If a search does not find what you need on the first try, escalate to the next sub-step in the retrieval order rather than rephrasing the same search repeatedly.
 </file_system>

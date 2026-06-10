@@ -1273,6 +1273,9 @@ class LettaAgentV2(BaseAgentV2):
                 "image_search",
                 "search_all",
                 "recall",
+                "generate_image",
+                "edit_image",
+                "compose_image",
             }
             return_char_limit = next(
                 (t.return_char_limit for t in agent_state.tools if t.name == tool_call_name),

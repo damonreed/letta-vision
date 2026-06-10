@@ -2171,6 +2171,9 @@ class LettaAgentV3(LettaAgentV2):
                 "image_search",
                 "search_all",
                 "recall",
+                "generate_image",
+                "edit_image",
+                "compose_image",
             }
             return_char_limit = next((t.return_char_limit for t in self.agent_state.tools if t.name == spec["name"]), None)
             function_response = validate_function_response(

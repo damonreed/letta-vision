@@ -82,3 +82,37 @@ def test_compute_render_decisions_text_when_1mp_missing():
     }
     decisions = compute_image_render_decisions(messages, _llm_config(), image_metadata=meta)
     assert decisions["img-big"] == RenderTier.TEXT
+
+
+def test_compute_render_decisions_tool_return_since_last_user_gets_full():
+    from letta.schemas.enums import MessageRole
+    from letta.schemas.letta_message_content import TextContent
+    from letta.schemas.message import Message, ToolReturn
+    from letta.schemas.letta_message_content import ImageContent, LettaImage
+
+    img = "img-gen"
+    messages = [
+        Message(role=MessageRole.user, content=[TextContent(text="generate a scene")]),
+        Message(
+            role=MessageRole.tool,
+            tool_returns=[
+                ToolReturn(
+                    tool_call_id="functions.generate_image:1",
+                    status="success",
+                    func_response=[
+                        TextContent(text='{"status":"ok"}'),
+                        ImageContent(source=LettaImage(file_id=img, media_type="image/png")),
+                    ],
+                )
+            ],
+        ),
+    ]
+    meta = {
+        img: {
+            "file_size_full": 300_000,
+            "file_size_1mp": None,
+            "object_url_full": "sha256/gen",
+        }
+    }
+    decisions = compute_image_render_decisions(messages, _llm_config(), image_metadata=meta)
+    assert decisions[img] == RenderTier.FULL

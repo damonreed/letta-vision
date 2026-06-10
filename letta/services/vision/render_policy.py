@@ -84,15 +84,22 @@ def conversation_has_letta_images(messages: List[Message]) -> bool:
     return False
 
 
+def _last_user_message_index(messages: List[Message]) -> Optional[int]:
+    for i in range(len(messages) - 1, -1, -1):
+        role = getattr(messages[i].role, "value", messages[i].role)
+        if role == "user":
+            return i
+    return None
+
+
 def _collect_letta_images(messages: List[Message]) -> List[tuple[str, bool]]:
     """Return (image_id, is_current_turn) newest-first (content + tool returns)."""
     current_turn_ids: Set[str] = set()
-    for msg in reversed(messages):
-        role = getattr(msg.role, "value", msg.role)
-        if role == "user" and msg.content:
-            for fid in _content_letta_image_ids(msg):
-                current_turn_ids.add(fid)
-            break
+    last_user_idx = _last_user_message_index(messages)
+    if last_user_idx is not None:
+        current_turn_ids.update(_content_letta_image_ids(messages[last_user_idx]))
+        for msg in messages[last_user_idx + 1 :]:
+            current_turn_ids.update(_tool_return_letta_image_ids(msg))
 
     found: List[tuple[str, bool]] = []
     seen: Set[str] = set()
