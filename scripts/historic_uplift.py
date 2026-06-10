@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 from letta.server.server import SyncServer
+from letta.services.migration.enrich_pending_images import run_enrich_pending_dry_run, run_enrich_pending_live
 from letta.services.migration.image_base64_conversion import (
     DEFAULT_CHECKPOINT_PATH,
     run_conversion_dry_run,
@@ -55,6 +56,23 @@ async def cmd_convert_dry_run(args: argparse.Namespace) -> int:
             },
         }
         print(json.dumps(payload, indent=2))
+    else:
+        print("\n".join(report.summary_lines()))
+    return 0
+
+
+async def cmd_enrich_pending(args: argparse.Namespace) -> int:
+    actor = await _get_actor()
+    if args.dry_run:
+        report = await run_enrich_pending_dry_run(actor)
+    else:
+        report = await run_enrich_pending_live(
+            actor,
+            limit=args.limit,
+            throttle_seconds=args.throttle,
+        )
+    if args.json:
+        print(json.dumps(report.__dict__, indent=2))
     else:
         print("\n".join(report.summary_lines()))
     return 0
@@ -120,6 +138,11 @@ def main() -> int:
         help="Ignore any existing checkpoint and start from the beginning",
     )
     convert.set_defaults(func=None)
+
+    enrich = sub.add_parser("enrich-pending", help="Part 1: 1MP + captions + pixel embed for pending images")
+    enrich.add_argument("--dry-run", action="store_true", help="Count pending images only; no API calls")
+    enrich.add_argument("--throttle", type=float, default=0.5, help="Seconds between images (rate limit)")
+    enrich.set_defaults(func=cmd_enrich_pending)
 
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
