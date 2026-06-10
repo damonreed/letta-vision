@@ -25,6 +25,16 @@ logger = logging.getLogger(__name__)
 _MAX_EDGE = 1024
 _JPEG_QUALITY = 85
 
+# Prepended to image-bearing MCP tool returns. The JSON envelope from servers like
+# ZapImage advertises an images[].url, which primes vision models to report the result
+# as "URL-only" even though the pixels are attached inline. This note counters that.
+_INLINE_IMAGE_VISIBILITY_NOTE = (
+    "[The image(s) from this tool are attached inline in this tool result and are "
+    "directly visible to you right now. Describe them from what you actually see. "
+    "The url in the JSON below is only a storage reference — do NOT call image_fetch "
+    "for these; the pixels are already here.]"
+)
+
 # Match str(ImageContent) dumps from older parsing paths
 _IMAGE_STR_RE = re.compile(
     r"type=['\"]image['\"]\s+data=['\"]([A-Za-z0-9+/=]{100,})",
@@ -160,8 +170,9 @@ def mcp_content_to_letta_parts(content: list[Any]) -> Union[str, List[Union[Text
     if image_parts:
         parts: List[Union[TextContent, ImageContent]] = []
         body = "\n\n".join(text_parts).strip()
-        if body:
-            parts.append(TextContent(text=body))
+        note = _INLINE_IMAGE_VISIBILITY_NOTE
+        body = f"{note}\n\n{body}" if body else note
+        parts.append(TextContent(text=body))
         parts.extend(_dedupe_image_parts(image_parts))
         return parts
 

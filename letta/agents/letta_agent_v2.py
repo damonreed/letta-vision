@@ -527,7 +527,7 @@ class LettaAgentV2(BaseAgentV2):
                         )
                         from letta.services.vision.image_hydration import prepare_messages_for_vision_llm
 
-                        messages_for_llm = await prepare_messages_for_vision_llm(
+                        messages_for_llm, image_render_decisions = await prepare_messages_for_vision_llm(
                             messages, get_llm_config(self.agent_state), self.actor
                         )
                         request_data = self.llm_client.build_request_data(
@@ -537,6 +537,7 @@ class LettaAgentV2(BaseAgentV2):
                             tools=valid_tools,
                             force_tool_call=force_tool_call,
                             system=request_system_prompt,
+                            image_render_decisions=image_render_decisions,
                         )
                         if dry_run:
                             yield request_data

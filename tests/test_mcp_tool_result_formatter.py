@@ -49,6 +49,18 @@ def test_mcp_content_to_letta_parts_preserves_image():
     assert "example.com" in next(p.text for p in out if isinstance(p, TextContent))
 
 
+def test_mcp_content_to_letta_parts_prepends_inline_visibility_note():
+    payload = {"images": [{"url": "https://example.com/a.png"}]}
+    content = [
+        McpTextContent(type="text", text=json.dumps(payload)),
+        McpImageContent(type="image", data="B" * 1000, mimeType="image/png"),
+    ]
+    out = mcp_content_to_letta_parts(content)
+    text_part = next(p.text for p in out if isinstance(p, TextContent))
+    assert "directly visible to you" in text_part
+    assert text_part.index("directly visible to you") < text_part.index("example.com")
+
+
 def test_format_mcp_result_for_log_omits_base64():
     huge = "B" * 50_000
     content = [

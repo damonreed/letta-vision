@@ -1302,7 +1302,7 @@ class LettaAgentV3(LettaAgentV2):
                         )
                         from letta.services.vision.image_hydration import prepare_messages_for_vision_llm
 
-                        messages_for_llm = await prepare_messages_for_vision_llm(
+                        messages_for_llm, image_render_decisions = await prepare_messages_for_vision_llm(
                             messages, active_llm_config, self.actor
                         )
                         request_data = active_llm_client.build_request_data(
@@ -1314,6 +1314,7 @@ class LettaAgentV3(LettaAgentV2):
                             requires_subsequent_tool_call=self._require_tool_call,
                             tool_return_truncation_chars=self._compute_tool_return_truncation_chars(),
                             system=request_system_prompt,
+                            image_render_decisions=image_render_decisions,
                         )
                         # TODO: Extend to more providers, and also approval tool rules
                         # TODO: this entire code block should be inside of the clients

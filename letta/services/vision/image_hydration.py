@@ -283,11 +283,11 @@ async def prepare_messages_for_vision_llm(
     messages: List[Message],
     llm_config: LLMConfig,
     actor: PydanticUser,
-) -> List[Message]:
-    """Apply render-policy hydration to a message list before build_request_data."""
+) -> tuple[List[Message], Dict[str, RenderTier]]:
+    """Apply render-policy hydration; return messages and render decisions for build_request_data."""
     image_ids = _collect_letta_image_ids(messages)
     if not image_ids:
-        return messages
+        return messages, {}
 
     hydrated = copy.deepcopy(messages)
     _strip_letta_image_bytes(hydrated)
@@ -300,4 +300,4 @@ async def prepare_messages_for_vision_llm(
         await _hydrate_content_letta_images(message, metadata, store, decisions)
         await _hydrate_tool_return_letta_images(message, metadata, store, render_decisions=decisions)
 
-    return hydrated
+    return hydrated, decisions

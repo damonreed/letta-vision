@@ -152,6 +152,37 @@ def test_user_content_to_openai_chat_content_letta_dict():
     assert any(p["type"] == "image_url" and "image/jpeg" in p["image_url"]["url"] for p in parts)
 
 
+def _openai_row_role(message):
+    if isinstance(message, dict):
+        return message.get("role")
+    return getattr(message, "role", None)
+
+
+def test_fill_image_content_in_messages_handles_pydantic_tool_rows():
+    """Tool rows from cast_message_to_subtype must accept multimodal re-fill by tool_call_id."""
+    image = ImageContent(source=Base64Image(media_type="image/png", data="dGVzdA=="))
+    tool_msg = Message(
+        role=MessageRole.tool,
+        tool_returns=[
+            ToolReturn(
+                tool_call_id="call-img",
+                status="success",
+                func_response=[TextContent(text="screenshot"), image],
+            )
+        ],
+    )
+    pydantic_messages = [tool_msg]
+    openai_messages = [
+        cast_message_to_subtype(row)
+        for row in Message.to_openai_dicts_from_list(pydantic_messages)
+    ]
+    filled = fill_image_content_in_messages(openai_messages, pydantic_messages)
+    tool_rows = [m for m in filled if _openai_row_role(m) == "tool"]
+    assert len(tool_rows) == 1
+    content = tool_rows[0]["content"] if isinstance(tool_rows[0], dict) else tool_rows[0].content
+    assert any(part["type"] == "image_url" for part in content)
+
+
 def test_fill_image_content_in_messages_handles_pydantic_openai_rows():
     """openai_message_list entries are ChatMessage pydantic models after cast_message_to_subtype."""
     image = ImageContent(source=Base64Image(media_type="image/png", data="dGVzdA=="))

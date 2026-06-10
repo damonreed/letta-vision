@@ -1123,8 +1123,9 @@ def run_async_task(coro: Coroutine[Any, Any, Any]) -> Any:
     """
     Safely runs an asynchronous coroutine in a synchronous context.
 
-    If an event loop is already running, it uses `asyncio.ensure_future`.
-    Otherwise, it creates a new event loop and runs the coroutine.
+    When no event loop is running, uses ``asyncio.run``. When a loop is already
+    running (e.g. sync code called from async agent code), runs the coroutine in
+    a one-worker thread pool so the caller gets the resolved result, not a Task.
 
     Args:
         coro: The coroutine to execute.
@@ -1133,12 +1134,14 @@ def run_async_task(coro: Coroutine[Any, Any, Any]) -> Any:
         The result of the coroutine.
     """
     try:
-        # If there's already a running event loop, schedule the coroutine
-        loop = asyncio.get_running_loop()
-        return asyncio.run_until_complete(coro) if loop.is_closed() else asyncio.ensure_future(coro)
+        asyncio.get_running_loop()
     except RuntimeError:
-        # If no event loop is running, create a new one
         return asyncio.run(coro)
+
+    import concurrent.futures
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(asyncio.run, coro).result()
 
 
 def log_telemetry(logger: Logger, event: str, **kwargs):

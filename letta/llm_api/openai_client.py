@@ -589,6 +589,7 @@ class OpenAIClient(LLMClientBase):
         requires_subsequent_tool_call: bool = False,
         tool_return_truncation_chars: Optional[int] = None,
         system: Optional[str] = None,
+        image_render_decisions: Optional[dict] = None,
     ) -> dict:
         """
         Constructs a request object in the expected data format for the OpenAI API.
@@ -632,16 +633,17 @@ class OpenAIClient(LLMClientBase):
         from letta.services.vision.image_hydration import load_image_metadata_for_render_walk_sync
         from letta.services.vision.render_policy import compute_image_render_decisions
 
-        image_metadata = None
-        if self.actor:
-            try:
-                image_metadata = load_image_metadata_for_render_walk_sync(request_messages, self.actor)
-            except Exception as exc:
-                logger.warning("Failed to load image metadata for render walk: %s", exc)
+        if image_render_decisions is None:
+            image_metadata = None
+            if self.actor:
+                try:
+                    image_metadata = load_image_metadata_for_render_walk_sync(request_messages, self.actor)
+                except Exception as exc:
+                    logger.warning("Failed to load image metadata for render walk: %s", exc)
 
-        image_render_decisions = compute_image_render_decisions(
-            request_messages, llm_config, image_metadata=image_metadata
-        )
+            image_render_decisions = compute_image_render_decisions(
+                request_messages, llm_config, image_metadata=image_metadata
+            )
 
         openai_message_list = [
             cast_message_to_subtype(m)
@@ -1641,6 +1643,20 @@ def _openai_row_role(message: Any) -> Optional[str]:
     return getattr(message, "role", None)
 
 
+def _openai_row_tool_call_id(message: Any) -> Optional[str]:
+    if isinstance(message, dict):
+        return message.get("tool_call_id")
+    return getattr(message, "tool_call_id", None)
+
+
+def _openai_row_with_content(row: Any, content: list) -> Any:
+    if isinstance(row, dict):
+        return {**row, "content": content}
+    if hasattr(row, "model_copy"):
+        return row.model_copy(update={"content": content})
+    return row
+
+
 def fill_image_content_in_messages(
     openai_message_list: List[dict],
     pydantic_message_list: List[PydanticMessage],
@@ -1653,7 +1669,7 @@ def fill_image_content_in_messages(
     expansion in to_openai_dicts_from_list does not skip image pass-through.
     Re-applies hydrated tool-return multimodal content by tool_call_id.
     """
-    from letta.schemas.message import tool_return_to_openai_chat_content
+    from letta.schemas.message import tool_return_to_openai_chat_content, user_content_to_openai_chat_content
 
     pydantic_users = [m for m in pydantic_message_list if getattr(m, "role", None) == "user"]
     openai_user_indices = [i for i, m in enumerate(openai_message_list) if _openai_row_role(m) == "user"]
@@ -1668,7 +1684,7 @@ def fill_image_content_in_messages(
                 pydantic_message.content, image_render_decisions=image_render_decisions
             )
             if isinstance(multimodal, list):
-                new_message_list[openai_idx] = {"role": "user", "content": multimodal}
+                new_message_list[openai_idx] = _openai_row_with_content(new_message_list[openai_idx], multimodal)
 
     tool_func_by_call_id: dict[str, object] = {}
     for pydantic_message in pydantic_message_list:
@@ -1681,7 +1697,7 @@ def fill_image_content_in_messages(
     for idx, row in enumerate(new_message_list):
         if _openai_row_role(row) != "tool":
             continue
-        tool_call_id = row.get("tool_call_id")
+        tool_call_id = _openai_row_tool_call_id(row)
         if not tool_call_id or tool_call_id not in tool_func_by_call_id:
             continue
         multimodal = tool_return_to_openai_chat_content(
@@ -1689,7 +1705,7 @@ def fill_image_content_in_messages(
             image_render_decisions=image_render_decisions,
         )
         if isinstance(multimodal, list):
-            new_message_list[idx] = {**row, "content": multimodal}
+            new_message_list[idx] = _openai_row_with_content(row, multimodal)
 
     return new_message_list
 
