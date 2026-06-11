@@ -3,7 +3,7 @@
 **To:** Ada  
 **From:** Damon (letta-stack)  
 **Date:** 2026-06-09 (updated 2026-06-11)  
-**Status:** **Ready for GA review** — validated on **sliver** for new data and integration paths; **historic uplift tooling + GA client (§12–§13) shipped**; corpus **execution** (Part 1 → enrich → Part 2) and post-uplift validation remain the server GA gate  
+**Status:** **Ready for GA review** — uplift **executed and validated on sliver**; all recall layers coalescing correctly through `search_all`; post-uplift operational fixes shipped (§ Post-uplift validation)  
 **Baseline:** `v0.5.0` (three-tier filesystem memory)  
 **Specification:** [FR: Unified Embedding Space, Multimodal Image Memory & Unified Recall](FR_letta-vision_Unified-Embedding-Multimodal-Recall_v0.6.0-rc.md) (revision r2)  
 **Uplift specification:** [FR: Historic Embedding Uplift & Corpus Conversion](FR_letta-vision_Historic-Embedding-Uplift_v0.6.0-GA.md)
@@ -24,9 +24,11 @@ We implemented Ades's v0.6 FR through **Phases 1–9** of §14, with one deliber
 - **Vision fixes for MCP `generate_image`** — tool-return images participate in the byte-budget walk; metadata loaded for sizing; `fill_image_content_in_messages` extended to tool rows; TEXT tier injects `images.description`.
 - **GA client (2026-06-11)** — uplift FR §12 Images inspector (list+detail, hybrid search, paginated browse, inline metadata edit, click-to-zoom); §13 shell (Chat default tab, mount-once, windowed history, conversation sidebar N+1 fix, deferred memory load).
 
-**Historic data is still excluded from vector recall until uplift runs:** rows with `NULL` 768 `embedding` or `embedding_space_id = legacy-unknown` are filtered by the space guard. The uplift jobs are resumable, idempotent, and snapshot-gated for mutating steps.
+**Uplift execution (2026-06-11, sliver):** Part 1 → enrich-pending → Part 2 completed across all five vector tables. Deployment embedding moved to GA `openrouter/google/gemini-embedding-2` @768 (space id `6490a4b17e06a258`). Live agent validation (Lyra) confirms all layers perform well individually and fuse correctly through `search_all`; new image ingest/enrichment/search paths solid.
 
-**Recommendation for Ada:** Accept the documented partial gaps below (recall filter params, tool lexical fallback, space-guard logging). **Proceed to execute uplift on sliver** using the shipped CLI and validate recall quality on the full corpus before dropping `embedding_legacy_4096`.
+**Post-uplift fixes (2026-06-11):** archival insert `embedding_space_id` persistence, tool-return serialization for archival insert/search, message uplift monotonic guard, MiniMax duplicate thinking strip, file-delete background recompile (client). See § Post-uplift validation.
+
+**Recommendation for Ada:** Sign off on v0.6.0 GA. Remaining documented gaps (recall filter params, tool lexical fallback, space-guard logging, filename-not-in-passage-embed-text) are v0.6.1 observability/content improvements, not blockers. Legacy column drop (`embedding_legacy_4096`) awaits explicit post-sign-off migration.
 
 ---
 
@@ -49,7 +51,7 @@ We implemented Ades's v0.6 FR through **Phases 1–9** of §14, with one deliber
 
 | # | Criterion | Status | Notes |
 |---|-----------|--------|-------|
-| 1 | Fresh agent embeds all corpus types at 768 with shared `embedding_space_id` | **Pass** (new data) | Requires `LETTA_DEFAULT_EMBEDDING_HANDLE` + `LETTA_EMBED_ALL_MESSAGES=true` on deploy |
+| 1 | Fresh agent embeds all corpus types at 768 with shared `embedding_space_id` | **Pass** | GA handle `gemini-embedding-2`; space id stamped on all create paths post-fix |
 | 2 | No hardcoded embedding model; tpuf not required to boot/search | **Pass** | Tpuf removed; boot and all memory search paths are PG-native |
 | 3 | Vectors 768, unit-length, no `np.pad` on write/query | **Pass** | `prepare_vector_for_write`; passage schema padding validator removed |
 | 4 | Cross-space query returns zero vector hits + logs exclusion | **Partial** | `apply_embedding_space_guard` works; **no exclusion-count debug logging** |
@@ -130,7 +132,7 @@ Rationale: clearer agent routing, smaller tool schemas, and per-layer tuning (e.
 | `letta/constants.py` | `DEPLOYMENT_EMBEDDING_DIM = 768`; `BASE_TOOLS`, `DEPRECATED_LETTA_TOOLS` |
 | `letta/llm_api/openai_client.py` | `dimensions`, `input_type`, query override, image embeddings; tool-row image fill |
 
-**Deploy default:** `openrouter/google/gemini-embedding-2-preview` at 768-dim MRL, L2-normalized.
+**Deploy default:** `openrouter/google/gemini-embedding-2` at 768-dim MRL, L2-normalized (GA; sliver migrated from preview during uplift).
 
 ### Storage (Alembic)
 
@@ -266,7 +268,7 @@ Sliver stack (`docker-compose.yml`):
 
 | Variable | Purpose |
 |----------|---------|
-| `LETTA_DEFAULT_EMBEDDING_HANDLE` | `openrouter/google/gemini-embedding-2-preview` |
+| `LETTA_DEFAULT_EMBEDDING_HANDLE` | `openrouter/google/gemini-embedding-2` |
 | `LETTA_EMBED_ALL_MESSAGES` | `true` — background message embedding |
 | `LETTA_OBJECT_STORE_URI` | `s3://letta-vision/images?endpoint=http://minio:9000` |
 | `LETTA_IMAGE_CAPTION_MODEL_HANDLE` | `openrouter/minimax/minimax-m3` |
@@ -332,6 +334,34 @@ Ports: API **8283**, client **8284**.
 | Tab shell §13 | Chat default; nav order Chat-first; Chat mount-once |
 | Chat perf | History window 50 + load-older; conversation sidebar 1 round-trip; memory on panel open |
 | `ImageViewer` | Click zoomed image or backdrop to dismiss |
+| File delete UX | Background `recompile_conversations_for_folder`; optimistic removal + deleting state on Files page |
+
+### Post-uplift validation & fixes (2026-06-11)
+
+Executed uplift on sliver; validated with Lyra live sessions (archival, file, image layers + `search_all`).
+
+| Issue | Root cause | Fix | Commit |
+|-------|------------|-----|--------|
+| **`archival_memory_search` empty tool result** | Return dict not serialized through tool executor path | Explicit `{message, results}` return | `4a50303b3` |
+| **New archival insert invisible to search** | `create_agent_passage_async` omitted `embedding_space_id` from ORM write despite `_prepare_passage_embedding_fields` | Pass `embedding_space_id` in `common_fields` (agent batch + source create too) | `f6f53581f` |
+| **`archival_memory_insert` silent success** | Tool returned `None` | Return `{message, results: [{id, timestamp, tags}]}` | `f6f53581f` |
+| **Message uplift writes skipped** | Monotonic `embedding_version` guard blocked v2 historic writes | Guard fix for uplift path | `7de811781` |
+| **MiniMax duplicate thinking in UI** | Same analysis in `reasoning_message` and inline think tags in assistant text | `strip_duplicate_thinking_from_assistant_text()` when reasoning extracted separately | `dc6ec9501` |
+| **Reasoner models skip tool calls** | Kimi/MiniMax put tool intent in reasoning, finish without `tool_calls` | Operational: PATCH `enable_reasoner` per agent; documented in uplift FR §14.3 |
+| **`file_contents_search` miss on new file** | Passage embed text had no query token (filename not in embed payload); vector rank low | Not an indexing bug — query/content mismatch; optional follow-up: prepend filename to passage embed text |
+| **File delete hung** | Sync folder recompile blocked HTTP response | Background recompile + client optimistic UX | `d190cd0` (client) |
+
+**Sliver backfill:** one archival passage inserted before `f6f53581f` deploy had `embedding_space_id = NULL`; manually stamped to GA space. Post-deploy inserts stamp correctly.
+
+**Live validation summary:**
+
+| Surface | Result |
+|---------|--------|
+| `search_all` cross-layer fusion | **Pass** — dedup + diversity cap behave as designed |
+| Per-layer hybrid tools | **Pass** — archival, file content, file archives, conversation, image |
+| New image ingest → enrich → search | **Pass** — multiple Lyra image sessions |
+| Archival insert → search | **Pass** — after embedding_space_id fix + backfill |
+| Chat + vision + MCP images | **Pass** — render policy, hydration, tool-return pixels |
 
 ---
 
@@ -344,23 +374,22 @@ Ports: API **8283**, client **8284**.
 3. **Space guard:** Queries only rank rows with matching `embedding_space_id`; uplift is a rolling fill — recall coverage increases monotonically.
 4. **Single deployment model:** All backfill uses `LETTA_DEFAULT_EMBEDDING_HANDLE`.
 5. **Idempotent writes:** Atomic `embedding_version` guard for message re-embed.
+6. **Corpus execution on sliver:** Part 1, enrichment, and Part 2 **complete** under GA space `6490a4b17e06a258`.
+7. **Post-uplift create-path fix:** New archival/source inserts stamp `embedding_space_id` (commit `f6f53581f`).
 
-### What remains (execution, not code)
+### What remains
 
-1. Run Part 1 conversion on sliver corpus (after snapshot).
-2. Run `enrich-pending` to completion.
-3. Run Part 2 re-embed across all four tables.
-4. Optional: `strip-tool-returns` for pre-ref-only history.
-5. Validate HNSW performance and recall quality on full corpus.
-6. Drop `embedding_legacy_4096` columns after validation.
+1. **Drop `embedding_legacy_4096` columns** — after Ada sign-off; snapshot retained.
+2. **Optional v0.6.1 improvements** — see Pre-GA quality gaps below.
 
-### Pre-GA quality gaps (non-blocking for uplift execution)
+### Pre-GA quality gaps (v0.6.1 candidates)
 
 | Gap | Impact | Recommendation |
 |-----|--------|----------------|
 | Recall filter params | Agents cannot narrow by layer/time/source | Small follow-up or document as v0.6.1 |
 | Tool lexical fallback | Tool picker search fails tpuf-less | Small follow-up PR |
 | Space guard logging | Harder to observe mixed-space during uplift | Add debug log with exclusion counts |
+| Filename not in passage embed text | `file_contents_search` may miss filename-only queries | Prepend filename/headline to source passage embed input |
 
 ---
 
@@ -375,10 +404,14 @@ Ports: API **8283**, client **8284**.
 | `image_fetch` in Chat B | **Pass** — UI + LLM receive pixels |
 | Images tab | **Pass** — §12 inspector: search, paginated browse, inline metadata, full meta-grid |
 | Chat tab load | **Pass** — mount-once; windowed history; sidebar without N+1 |
-| Chat with vision model (Kimi K2.6) | **Pass** with render policy + hydration |
-| Historic uplift dry-runs | **Available** — CLI in-tree; full corpus run pending |
+| Chat with vision model (Kimi K2.6, MiniMax M3) | **Pass** with render policy + hydration; reasoner toggle documented for tool reliability |
+| Historic uplift (full corpus) | **Pass** — executed on sliver; GA space `6490a4b17e06a258` |
+| Cross-layer `search_all` post-uplift | **Pass** — all five vector legs + lexical RRF + §6 post-processing |
+| Lyra live sessions (archival + files + images) | **Pass** — end-to-end judged solid (2026-06-11) |
+| `archival_memory_insert` → immediate search | **Pass** — after `embedding_space_id` fix |
+| File delete | **Pass** — background recompile; no UI hang |
 
-Agent `v060 test` on folder `v060-test`; deployment embedding `gemini-embedding-2-preview`.
+Agent `v060 test` on folder `v060-test`; Lyra `agent-35a1c263…` for post-uplift validation. Deployment embedding `openrouter/google/gemini-embedding-2` (GA).
 
 ---
 
@@ -386,27 +419,29 @@ Agent `v060 test` on folder `v060-test`; deployment embedding `gemini-embedding-
 
 | Item | Recommendation |
 |------|----------------|
-| Execute uplift on sliver | **GA gate** — Part 1 → enrich → Part 2 |
-| Drop `embedding_legacy_4096` | After uplift validation |
+| Drop `embedding_legacy_4096` | After Ada GA sign-off |
 | Recall filter params (`layers`, `time_range`, `source`) | v0.6.1 or document as limitation |
 | Tool lexical fallback | §7 r2 — `ILIKE` on name/description when tpuf off |
-| Space guard exclusion logging | Observability for uplift validation |
+| Space guard exclusion logging | Observability |
+| Filename in passage embed text | v0.6.1 content improvement for file search |
 | Virtualized chat scroll | Optional follow-up if load-older is annoying |
+| Reasoner + tool reliability | Document per-agent `enable_reasoner` toggle; v1 PATCH quirk (`reasoning: true` vs `enable_reasoner`) |
 
 ---
 
 ## Recommendation to Ada
 
-**Execute the historic uplift on sliver using the shipped CLI.** The v0.6 implementation delivers Ades's core design for *new* data and provides the full uplift pipeline Ades specified:
+**Sign off on v0.6.0 GA.** The implementation delivers Ades's core design on the full sliver corpus:
 
-- One embedding space (768-dim gemini-embedding-2-preview, deployment-wide)
+- One embedding space (768-dim gemini-embedding-2 GA, deployment-wide, space id `6490a4b17e06a258`)
 - Native pgvector with space guard (no silent cross-model garbage)
 - Images as first-class searchable records with object-store bytes and tiered chat render
-- Per-layer hybrid search + optional `search_all` over passages, files, file reading notes, messages, and images
+- Per-layer hybrid search + optional `search_all` over passages, files, file reading notes, messages, and images — validated live with Lyra across all layers
 - Reference-then-fetch via `image_fetch`; MCP tools deliver inline pixels
-- Resumable Part 1 conversion, enrichment, and Part 2 re-embed with inventory and cost tooling
+- Historic uplift executed: Part 1 conversion, enrichment, Part 2 re-embed
+- Post-uplift operational fixes for archival insert/search, message uplift guard, vision/reasoning UX, and file delete
 
-Remaining gaps (recall filter params, tool fallback, space-guard logging) are UX/observability items, not blockers for uplift execution or GA.
+Remaining gaps (recall filter params, tool fallback, space-guard logging, filename-in-embed-text) are v0.6.1 polish items. **`embedding_legacy_4096` drop** is the only deferred schema step — run after sign-off with snapshot in place.
 
 ---
 
@@ -437,6 +472,10 @@ Remaining gaps (recall filter params, tool fallback, space-guard logging) are UX
 | `letta/schemas/image.py` | `ImageListResponse`, `ImageSearchRequest/Response` |
 | `letta/prompts/system_prompts/letta_v1.py` | Hybrid search + MCP image instructions |
 | `letta/constants.py` | `BASE_TOOLS`, `DEPRECATED_LETTA_TOOLS` |
+| `letta/services/passage_manager.py` | Passage create; `embedding_space_id` on agent/source inserts |
+| `letta/services/tool_executor/core_tool_executor.py` | Archival insert/search tool executors |
+| `letta/llm_api/minimax_openai.py` | Duplicate thinking strip for MiniMax reasoner |
+| `letta/interfaces/openai_streaming_interface.py` | Applies thinking strip when reasoning extracted |
 
 ### Client (`letta-vision-client`)
 
@@ -450,6 +489,8 @@ Remaining gaps (recall filter params, tool fallback, space-guard logging) are UX
 | `backend/routes/images.py` | Images API proxy + search |
 | `backend/routes/messages.py` | Windowed history |
 | `backend/routes/conversations.py` | Sidebar list (no N+1) |
+| `backend/routes/folders.py` | Background recompile after file delete |
+| `frontend/src/routes/Files.svelte` | Optimistic delete UX |
 
 ### Deploy (`letta-vision-deploy`)
 
@@ -476,7 +517,7 @@ Remaining gaps (recall filter params, tool fallback, space-guard logging) are UX
 | `pg_trgm` lexical leg (§12) | **Yes** |
 | RRF fusion (§12) | **Yes** |
 | Per-source diversity + dedup (§12) | **Yes** — `finalize_recall_hits` |
-| Historic uplift (GA FR) | **Yes** — CLI + migration modules |
+| Historic uplift (GA FR) | **Yes** — CLI + migration modules; **executed on sliver** |
 | Images tab §12 inspector (GA FR) | **Yes** — list+detail, search, pagination |
 | Client shell §13 (GA FR) | **Yes** — Chat default, mount-once, chat perf |
 | Deployment-global embedding (Amendment A1) | **Yes** — documented here |

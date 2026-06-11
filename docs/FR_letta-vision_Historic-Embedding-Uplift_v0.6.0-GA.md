@@ -1,6 +1,6 @@
 # FR: Historic Embedding Uplift & Corpus Conversion
 
-Status: **Ready for review** — gate to **v0.6.0 GA** (uplift execution + validation remain the server gate; client §12–§13 shipped in-tree)
+Status: **Ready for GA review** — uplift **executed and validated on sliver** (2026-06-11); client §12–§13 shipped; post-uplift operational fixes landed (see §14)
 Author: Ada (architecture); implementation by Cursor
 Depends on: v0.6.0-rc (shipped & validated on sliver against new data) — see `IMPLEMENTATION_REPORT_v0.6.0_unified-embedding-recall.md`
 Grounded in as-built: five vector tables (`archival_passages`, `source_passages`, `file_archives`, `messages`, `images`); dual-column passages/archives (`embedding_legacy_4096` + `embedding Vector(768)`); deployment-global embedding (`LETTA_DEFAULT_EMBEDDING_HANDLE` = `openrouter/google/gemini-embedding-2` @768); atomic message embed guard (`embeddings/write.py::write_message_embedding_atomic`); content-addressed object store with wire-byte sizing (`object_store/client.py`); `image_ingest.py` sync+background pipeline.
@@ -11,12 +11,12 @@ This FR runs in **two ordered parts**. Part 1 (base64→object conversion) must 
 
 ## 1. Problem / Context
 
-v0.6.0-rc moved all *new* writes into the unified 768 gemini-embedding-2 space and made images first-class object-store records. Two bodies of historic data remain outside that world:
+v0.6.0-rc moved all *new* writes into the unified 768 gemini-embedding-2 space and made images first-class object-store records. Two bodies of historic data remained outside that world until uplift (now **resolved on sliver**, 2026-06-11):
 
-1. **Inline base64 images in `messages.content`.** Pre-rc (v0.3.0 vision) messages still carry image bytes inline as base64 `ImageContent` blocks. These are not `images` records, are not in the object store, are not pixel-embedded (so invisible to recall), and bloat the `messages` table. The rc message-persistence switch only redirected *new* uploads; it did not back-convert history. The report's uplift checklist does not cover this.
-2. **Un-embedded historic rows.** `archival_passages`, `source_passages`, and `file_archives` have `NULL` in the new 768 `embedding` column (their vectors live in `embedding_legacy_4096`, a different/incomparable space). Pre-rc `messages` have no vector at all. These are excluded from the vector leg by the space guard, so historic memory is currently unsearchable by semantics.
+1. **Inline base64 images in `messages.content`.** Pre-rc (v0.3.0 vision) messages carried image bytes inline as base64 `ImageContent` blocks — not `images` records, not in the object store, not pixel-embedded, and bloating the `messages` table. Part 1 converted recoverable blocks to `LettaImage` refs + object-store blobs.
+2. **Un-embedded historic rows.** `archival_passages`, `source_passages`, and `file_archives` had `NULL` in the 768 `embedding` column (vectors in `embedding_legacy_4096`). Pre-rc `messages` had no vector. Part 2 re-embedded the full corpus under GA space id `6490a4b17e06a258`.
 
-Until both are resolved, recall only covers data created since the rc deploy. Resolving them is the GA gate.
+Recall now covers the full migrated corpus. **`embedding_legacy_4096` drop** remains the final schema cleanup step after Ada sign-off.
 
 ## 2. Goals
 
@@ -103,6 +103,30 @@ Implement the two deferred recall post-steps now, because uplift fills the vecto
 - **Dedup/diversity:** verify a chunked file no longer floods top-K and an image+referencing-message appear once.
 - **Then and only then:** drop `embedding_legacy_4096` from `archival_passages`, `source_passages`, `file_archives` (final migration). Keep a snapshot until post-drop validation passes.
 
+### 7.1 Sliver validation results (2026-06-11)
+
+Uplift executed on sliver via `scripts/historic_uplift.py` (Part 1 convert → enrich-pending → Part 2 reembed across `archival_passages`, `source_passages`, `file_archives`, `messages`, `images`). Deployment embedding pinned to GA handle `openrouter/google/gemini-embedding-2` @768; space id `6490a4b17e06a258`.
+
+| Gate | Result | Notes |
+|------|--------|-------|
+| Coverage | **Pass** | All five vector tables filled under the GA space id |
+| Cross-layer recall | **Pass** | `search_all` fuses archival, file content, file archives, messages, and images with dedup + per-source cap |
+| Layer tools | **Pass** | `archival_memory_search`, `file_contents_search`, `file_archives_search`, `conversation_search`, `image_search` each return ranked hits independently |
+| Historic memory | **Pass** | Pre-uplift archival rows searchable after re-embed |
+| Image memory | **Pass** | New Lyra image sessions ingest, enrich, pixel-embed, and surface via `image_search` / `search_all` |
+| `image_fetch` | **Pass** | Multimodal return + hydration in live chat |
+| HNSW latency | **Pass** | Acceptable at personal-corpus scale on sliver |
+| Part 1 size reduction | **Pass** | Inline base64 removed from message content; images in object store |
+| Dedup/diversity | **Pass** | Image+message pairs collapse; chunked files do not flood top-K |
+
+**Empirical agent validation:** Lyra (`agent-35a1c263…`) exercised hybrid search across layers, archival insert/search, file reading notes, and multiple new image generations — system behavior judged solid end-to-end.
+
+**Legacy column drop:** deferred until Ada sign-off; snapshot retained.
+
+**Known content/query caveats (not indexing bugs):**
+- `file_contents_search` embeds passage **text only** — filename tokens (e.g. `ada_attire_notes.txt`) are not in the vector payload; literal-name queries may miss unless the name appears in passage body. Trigram leg can still surface weak matches.
+- Immediate post-insert archival search failed for one live insert because `create_agent_passage_async` omitted `embedding_space_id` on write (§14.1) — fixed; one row backfilled manually on sliver.
+
 ## 8. Non-Goals
 
 - Model change / second embedding space (this uplift is into the *existing* deployment space).
@@ -112,7 +136,7 @@ Implement the two deferred recall post-steps now, because uplift fills the vecto
 
 ## 9. Open Questions (with Defaults)
 
-- **Preview→GA mid-run.** If `gemini-embedding-2` GAs and its handle/space changes during the effort, default: pin the exact preview handle for the duration; a GA move is a new uplift, and the space guard keeps the mixed corpus correct (old-space rows abstain) until then.
+- **Preview→GA mid-run.** **Resolved on sliver:** uplift completed under preview; deployment then moved to GA handle `openrouter/google/gemini-embedding-2` with a full corpus re-embed into space `6490a4b17e06a258`. Future handle changes remain a new uplift per the space-guard model.
 - **Unrecoverable placeholders.** Default: count and report; leave the message text as-is (no synthetic image). These are casualties of the old decay bug and cannot be recovered.
 - **Enrichment cost ceiling.** Captioning every historic image is a VLM cost. Default: caption all; if the historic image volume makes that expensive, allow a flag to pixel-embed first (restores searchability) and backfill captions lazily — embedding is the searchability-critical step, captions are payload.
 - **Provenance of converted images.** Default `uploaded`; preserve `generated` + `generation_prompt` only where the source message is a recoverable tool return.
@@ -138,6 +162,7 @@ Implement the two deferred recall post-steps now, because uplift fills the vecto
 | Dedup/diversity absence surfaces at GA | Land §6 with the uplift, not after |
 | Dropping legacy column too early | Drop only after full validation; keep snapshot through post-drop check |
 | Partial run leaves mixed state | Space guard keeps mixed state *correct* (rolling fill); resume continues from cursor |
+| New insert omits `embedding_space_id` | Fixed §14.1 — all create paths stamp space id; one pre-fix row backfilled on sliver |
 
 ## 12. Images Tab UI (client)
 
@@ -236,3 +261,38 @@ Implement the two deferred recall post-steps now, because uplift fills the vecto
 - **Conversation sidebar:** list endpoint only — no per-conversation `messages.list(limit=1)` preview fetch; sidebar shows name + `last_message_at`; sort by `last_message_at` desc.
 - **History window:** `GET /history` returns `{ messages, has_more }` (default `limit=50`); “Load older messages” at thread top via `before` cursor; `full=true` for system-context modal fallback only.
 - **Deferred memory:** agent blocks/open-files load when the Memory panel opens, not on every agent select.
+
+## 14. Post-uplift operational fixes (2026-06-11)
+
+These landed during live sliver validation after uplift execution. They are part of the GA release, not follow-ups.
+
+### 14.1 Archival insert missing `embedding_space_id`
+
+**Symptom:** `archival_memory_insert` succeeded (embedding present, tags correct) but immediate `archival_memory_search` returned only older memories; timestamps/tags in results looked “wrong” because they belonged to pre-existing hits, not the new passage.
+
+**Root cause:** `_prepare_passage_embedding_fields()` stamped `embedding_space_id` on the data dict, but `create_agent_passage_async` / batch / `create_source_passage_async` did not pass it into ORM `common_fields`. New inserts had `embedding_space_id = NULL` and were excluded from the vector leg by `apply_embedding_space_guard()`. Lexical RRF could surface them weakly or not at all depending on query wording.
+
+**Fix:** Include `embedding_space_id` in `common_fields` for all three create paths (`passage_manager.py`). One sliver row backfilled manually.
+
+### 14.2 Tool return serialization
+
+| Tool | Issue | Fix |
+|------|-------|-----|
+| `archival_memory_search` | Return value not serialized to agent (empty/malformed tool result) | Return `{"message": …, "results": […]}` dict |
+| `archival_memory_insert` | Returned `None` despite docstring promising confirmation + ID | Return `{message, results: [{id, timestamp, tags}]}` |
+
+### 14.3 Reasoning models and tool execution
+
+MiniMax M3 and Kimi K2.6 with `enable_reasoner: true` sometimes express tool intent in reasoning blocks and finish the turn without `tool_calls`. **Mitigation validated on sliver:** explicit agent `llm_config` PATCH — set `enable_reasoner: false` when tool reliability is critical; re-enable with `enable_reasoner: true` only (do not pass `"reasoning": true` on v1 agents — policy forces reasoner off for some providers).
+
+### 14.4 MiniMax duplicate thinking display
+
+When reasoning is extracted separately, MiniMax may echo the same analysis in `reasoning_message` and again as inline redacted_thinking markup in assistant text. **Fix:** `strip_duplicate_thinking_from_assistant_text()` in `minimax_openai.py`, applied in the streaming interface when reasoning was extracted separately.
+
+### 14.5 File delete UX (client)
+
+Deleting a file hung because the backend blocked on `recompile_conversations_for_folder()` synchronously. **Fix:** background recompile + optimistic UI removal on Files page (`letta-vision-client`).
+
+### 14.6 Message uplift monotonic guard
+
+Historic message re-embed writes were blocked when `embedding_version` guard rejected v2 updates. **Fix:** guard adjustment so uplift writes can supersede prior text-only vectors (`embeddings/write.py` path used by historic re-embed).
