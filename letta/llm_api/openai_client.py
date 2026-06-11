@@ -1239,7 +1239,12 @@ class OpenAIClient(LLMClientBase):
 
         kwargs = self._prepare_client_kwargs_embedding(embedding_config)
         client = AsyncOpenAI(**kwargs)
-        create_kwargs = self._embedding_create_kwargs(embedding_config, input_type_override=input_type_override)
+        create_kwargs: dict = {"encoding_format": "float"}
+        if embedding_config.output_dimensionality is not None:
+            create_kwargs["dimensions"] = embedding_config.output_dimensionality
+        # Multimodal image embeddings must not send text input_type (search_document/query).
+        if input_type_override:
+            create_kwargs["extra_body"] = {"input_type": input_type_override}
         api_input = self._openrouter_multimodal_embedding_input(image_inputs)
 
         response = await client.embeddings.create(
@@ -1247,7 +1252,15 @@ class OpenAIClient(LLMClientBase):
             input=api_input,
             **create_kwargs,
         )
-        embeddings = [r.embedding for r in response.data]
+        if not response.data:
+            raise ValueError(
+                f"Embedding API returned no data for model {embedding_config.embedding_model}"
+            )
+        embeddings = [r.embedding for r in response.data if r.embedding is not None]
+        if not embeddings:
+            raise ValueError(
+                f"Embedding API returned empty vectors for model {embedding_config.embedding_model}"
+            )
         return self._finalize_embedding_vectors(embeddings, embedding_config)
 
     async def request_embeddings(

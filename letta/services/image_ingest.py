@@ -528,17 +528,22 @@ async def enrich_image_background(
         if image.object_url_1mp and image.file_size_1mp:
             onemp_key = image.object_url_1mp
             onemp_wire = image.file_size_1mp
+            embed_bytes = await store.get_bytes(onemp_key)
+            embed_media_type = "image/jpeg"
         else:
-            onemp_bytes, onemp_type, onemp_wire = generate_1mp_derivative(raw, image.media_type)
-            onemp_key = await store.put_bytes(image.content_hash, onemp_bytes, suffix="_1mp")
+            embed_bytes, embed_media_type, onemp_wire = generate_1mp_derivative(raw, image.media_type)
+            onemp_key = await store.put_bytes(image.content_hash, embed_bytes, suffix="_1mp")
 
         captions = await _generate_three_tier_captions(raw, image.media_type, actor)
         embedding_config = await resolve_embedding_config_async(actor=actor)
         llm_client = LLMClient.create(embedding_config.embedding_endpoint_type, actor=actor)
-        b64 = base64.standard_b64encode(raw).decode("ascii")
-        image_input = [{"type": "image_url", "image_url": {"url": f"data:{image.media_type};base64,{b64}"}}]
-        vectors = await llm_client.request_image_embeddings(image_input, embedding_config)
-        prepared = prepare_vector_for_write(vectors[0], embedding_config)
+        prepared = await _embed_image_vector(
+            llm_client,
+            embed_bytes,
+            embed_media_type,
+            captions,
+            embedding_config,
+        )
 
         from letta.server.db import db_registry
 
@@ -567,7 +572,7 @@ async def enrich_image_background(
                 embedding_version=2,
             )
     except Exception as e:
-        logger.error("Image enrichment failed for %s: %s", image_id, e)
+        logger.error("Image enrichment failed for %s: %s", image_id, e, exc_info=True)
         await _mark_enrichment_failed(image_id, actor, str(e), message_id=message_id)
 
 
@@ -588,6 +593,36 @@ async def _mark_enrichment_failed(image_id: str, actor: PydanticUser, error: str
         msg_mgr = MessageManager()
         msg = await msg_mgr.get_message_by_id_async(message_id, actor)
         await msg_mgr._embed_messages_background([msg], actor, msg.agent_id, embedding_version=1)
+
+
+async def _embed_image_vector(
+    llm_client: LLMClient,
+    embed_bytes: bytes,
+    embed_media_type: str,
+    captions: dict,
+    embedding_config,
+) -> list:
+    """Pixel embed from 1MP derivative; fall back to caption text if the API rejects image input."""
+    b64 = base64.standard_b64encode(embed_bytes).decode("ascii")
+    image_input = [
+        {"type": "image_url", "image_url": {"url": f"data:{embed_media_type};base64,{b64}"}}
+    ]
+    try:
+        vectors = await llm_client.request_image_embeddings(image_input, embedding_config)
+        return prepare_vector_for_write(vectors[0], embedding_config)
+    except Exception as pixel_err:
+        text = "\n\n".join(
+            part for part in (captions.get("caption"), captions.get("description")) if part
+        )
+        if not text:
+            raise pixel_err
+        logger.warning("Image pixel embed failed, using caption text fallback: %s", pixel_err)
+        vectors = await llm_client.request_embeddings(
+            [text],
+            embedding_config,
+            input_type_override="search_document",
+        )
+        return prepare_vector_for_write(vectors[0], embedding_config)
 
 
 async def _generate_three_tier_captions(raw: bytes, media_type: str, actor: PydanticUser) -> dict:

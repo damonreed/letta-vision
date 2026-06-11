@@ -1,7 +1,8 @@
 from datetime import datetime
-from typing import List, Optional
+from typing import Annotated, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BeforeValidator
 from fastapi.responses import Response
 
 from letta.schemas.image import (
@@ -19,15 +20,18 @@ from letta.services.image_ingest import schedule_image_re_enrichment
 from letta.services.image_manager import ImageManager
 from letta.services.object_store.client import get_object_store_client
 from letta.services.recall.hybrid_search import search_images_hybrid
+from letta.utils.datetime_cursor import parse_cursor_datetime
 
 router = APIRouter(prefix="/images", tags=["images"])
+
+CursorDatetime = Annotated[Optional[datetime], BeforeValidator(parse_cursor_datetime)]
 
 
 @router.get("", response_model=ImageListResponse)
 async def list_images(
     limit: Optional[int] = Query(None, description="Page size; omit for full org corpus"),
     enrichment_status: Optional[str] = None,
-    after_created_at: Optional[datetime] = Query(None, description="Cursor: created_at of last row from prior page"),
+    after_created_at: CursorDatetime = Query(None, description="Cursor: created_at of last row from prior page"),
     after_id: Optional[str] = Query(None, description="Cursor: id tie-breaker when created_at matches"),
     server: SyncServer = Depends(get_letta_server),
     headers: HeaderParams = Depends(get_headers),
