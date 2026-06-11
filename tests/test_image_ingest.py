@@ -212,3 +212,19 @@ def test_parse_caption_json_markdown_fence():
 def test_extract_assistant_text_openai_shape():
     text = _extract_assistant_text({"choices": [{"message": {"content": "OK"}}]})
     assert text == "OK"
+
+
+def test_extract_assistant_text_minimax_reasoning_split_fallback():
+    text = _extract_assistant_text(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": "",
+                        "reasoning_content": '{"caption": "Lantern street", "description": "Night market"}',
+                    }
+                }
+            ]
+        }
+    )
+    assert "Lantern street" in text

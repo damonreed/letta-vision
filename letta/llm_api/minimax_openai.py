@@ -91,6 +91,8 @@ def apply_minimax_openai_request_extras(request_data: dict, llm_config: LLMConfi
     if not is_minimax_openai_compatible(llm_config):
         return
     normalize_minimax_openai_request_images(request_data)
+    if not llm_config.enable_reasoner:
+        return
     extra = dict(request_data.get("extra_body") or {})
     extra["reasoning_split"] = True
     request_data["extra_body"] = extra

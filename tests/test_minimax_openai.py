@@ -43,10 +43,16 @@ def test_minimax_openai_not_detected_for_unrelated_provider():
     )
 
 
-def test_reasoning_split_extra_body():
+def test_reasoning_split_extra_body_when_reasoner_enabled():
     request_data = {"model": "MiniMax-M3", "messages": []}
-    apply_minimax_openai_request_extras(request_data, _llm_config())
+    apply_minimax_openai_request_extras(request_data, _llm_config(enable_reasoner=True))
     assert request_data["extra_body"]["reasoning_split"] is True
+
+
+def test_reasoning_split_skipped_when_reasoner_disabled():
+    request_data = {"model": "MiniMax-M3", "messages": []}
+    apply_minimax_openai_request_extras(request_data, _llm_config(enable_reasoner=False))
+    assert "extra_body" not in request_data
 
 
 def test_minimax_image_detail_maps_auto_to_default():
@@ -101,7 +107,7 @@ def test_apply_minimax_extras_normalizes_images():
             },
         ],
     }
-    apply_minimax_openai_request_extras(request_data, _llm_config())
+    apply_minimax_openai_request_extras(request_data, _llm_config(enable_reasoner=True))
     assert request_data["messages"][0]["content"][0]["image_url"]["detail"] == "default"
     assert request_data["extra_body"]["reasoning_split"] is True
 

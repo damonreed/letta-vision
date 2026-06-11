@@ -61,12 +61,15 @@ def _extract_assistant_text(response: dict) -> str:
         return ""
     msg = choices[0].get("message") or {}
     content = msg.get("content")
+    text = ""
     if isinstance(content, str):
-        return content.strip()
-    if isinstance(content, list):
-        return "".join(
+        text = content.strip()
+    elif isinstance(content, list):
+        text = "".join(
             part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") == "text"
         ).strip()
+    if text:
+        return text
     from letta.llm_api.minimax_openai import extract_reasoning_from_message_data
 
     reasoning = extract_reasoning_from_message_data(msg)
@@ -478,20 +481,27 @@ def schedule_image_enrichment_for_message(
 
 async def schedule_image_re_enrichment(image_id: str, actor: PydanticUser) -> None:
     """Mark pending and queue a forced background re-enrichment run."""
-    await _set_enrichment_pending(image_id, actor)
+    await _set_enrichment_pending(image_id, actor, reset_attempts=True)
     fire_and_forget(
         enrich_image_background(image_id, actor, force=True),
         task_name=f"re_enrich_image_{image_id}",
     )
 
 
-async def _set_enrichment_pending(image_id: str, actor: PydanticUser) -> None:
+async def _set_enrichment_pending(
+    image_id: str,
+    actor: PydanticUser,
+    *,
+    reset_attempts: bool = False,
+) -> None:
     from letta.server.db import db_registry
 
     async with db_registry.async_session() as session:
         row = await ImageRecord.read_async(db_session=session, identifier=image_id, actor=actor)
         row.enrichment_status = "pending"
         row.error_message = None
+        if reset_attempts:
+            row.enrichment_attempts = 0
         await row.update_async(session, actor=actor)
 
 
@@ -512,7 +522,7 @@ async def enrich_image_background(
         if image.enrichment_status == "complete" and not force:
             return
         if force:
-            await _set_enrichment_pending(image_id, actor)
+            await _set_enrichment_pending(image_id, actor, reset_attempts=True)
 
         raw = await store.get_bytes(image.object_url_full)
         if image.object_url_1mp and image.file_size_1mp:
