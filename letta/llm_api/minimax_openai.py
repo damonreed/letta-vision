@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from letta.schemas.llm_config import LLMConfig
+
+# Models that echo thinking in assistant text while also streaming reasoning_content.
+_THINK_TAG = "think"
+_THINKING_BLOCK_PATTERNS = (
+    re.compile(r"<think>.*?</think>\s*", re.DOTALL | re.IGNORECASE),
+    re.compile(rf"<{_THINK_TAG}>.*?</{_THINK_TAG}>\s*", re.DOTALL | re.IGNORECASE),
+)
 
 # MiniMax M3 vision accepts low/default/high — not OpenAI's "auto".
 _MINIMAX_IMAGE_DETAIL_VALUES = frozenset({"low", "default", "high"})
@@ -22,6 +30,16 @@ def is_minimax_openai_compatible(llm_config: LLMConfig) -> bool:
     if "minimax" in handle:
         return True
     return False
+
+
+def strip_duplicate_thinking_from_assistant_text(text: str) -> str:
+    """Remove inline thinking tags when reasoning was already extracted separately."""
+    if not text:
+        return text
+    stripped = text
+    for pattern in _THINKING_BLOCK_PATTERNS:
+        stripped = pattern.sub("", stripped)
+    return stripped
 
 
 def extract_reasoning_from_message_data(message_data: dict) -> str | None:

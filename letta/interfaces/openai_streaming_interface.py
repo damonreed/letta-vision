@@ -40,7 +40,7 @@ from openai.types.responses.response_stream_event import ResponseStreamEvent
 
 from letta.constants import DEFAULT_MESSAGE_TOOL, DEFAULT_MESSAGE_TOOL_KWARG
 from letta.llm_api.error_utils import is_context_window_overflow_message
-from letta.llm_api.minimax_openai import extract_reasoning_from_message_data
+from letta.llm_api.minimax_openai import extract_reasoning_from_message_data, strip_duplicate_thinking_from_assistant_text
 from letta.llm_api.openai_client import is_openai_reasoning_model
 from letta.local_llm.utils import num_tokens_from_functions, num_tokens_from_messages
 from letta.log import get_logger
@@ -674,7 +674,11 @@ class SimpleOpenAIStreamingInterface:
                 merged_messages.append(ReasoningContent(is_native=True, reasoning=combined_reasoning, signature=None))
 
         if concat_content_parts:
-            merged_messages.append(TextContent(text="".join(concat_content_parts)))
+            assistant_text = "".join(concat_content_parts)
+            if reasoning_content:
+                assistant_text = strip_duplicate_thinking_from_assistant_text(assistant_text)
+            if assistant_text:
+                merged_messages.append(TextContent(text=assistant_text))
 
         return merged_messages
 

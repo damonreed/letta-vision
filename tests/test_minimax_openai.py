@@ -7,6 +7,7 @@ from letta.llm_api.minimax_openai import (
     is_minimax_openai_compatible,
     minimax_image_detail_for_request,
     normalize_minimax_openai_request_images,
+    strip_duplicate_thinking_from_assistant_text,
 )
 from letta.llm_api.model_registry import model_supports_vision
 from letta.model_specs.litellm_model_specs import normalize_model_basename
@@ -110,6 +111,25 @@ def test_apply_minimax_extras_normalizes_images():
     apply_minimax_openai_request_extras(request_data, _llm_config(enable_reasoner=True))
     assert request_data["messages"][0]["content"][0]["image_url"]["detail"] == "default"
     assert request_data["extra_body"]["reasoning_split"] is True
+
+
+def test_strip_duplicate_thinking_redacted_block():
+    text = (
+        "<think>\nPlanning the tool call.\n</think>\n\n"
+        "Here is the answer."
+    )
+    assert strip_duplicate_thinking_from_assistant_text(text) == "Here is the answer."
+
+
+def test_strip_duplicate_thinking_think_block():
+    open_tag, close_tag = "<" + "think" + ">", "</" + "think" + ">"
+    text = f"{open_tag}Planning.{close_tag}\n\nVisible reply."
+    assert strip_duplicate_thinking_from_assistant_text(text) == "Visible reply."
+
+
+def test_strip_duplicate_thinking_leaves_text_without_reasoning_channel():
+    text = "No thinking tags here."
+    assert strip_duplicate_thinking_from_assistant_text(text) == text
 
 
 def test_extract_reasoning_details():
