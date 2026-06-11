@@ -331,7 +331,7 @@ class LettaCoreToolExecutor(ToolExecutor):
         top_k: Optional[int] = None,
         start_datetime: Optional[str] = None,
         end_datetime: Optional[str] = None,
-    ) -> Optional[str]:
+    ) -> Optional[dict]:
         try:
             # Use the shared service method to get results
             formatted_results = await self.agent_manager.search_agent_archival_memory_async(
@@ -345,7 +345,12 @@ class LettaCoreToolExecutor(ToolExecutor):
                 end_datetime=end_datetime,
             )
 
-            return formatted_results
+            if not formatted_results:
+                return {"message": "No results found.", "results": []}
+            return {
+                "message": f"Showing {len(formatted_results)} results:",
+                "results": formatted_results,
+            }
 
         except Exception as e:
             raise e
