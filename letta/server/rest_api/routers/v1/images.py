@@ -20,7 +20,7 @@ from letta.services.image_ingest import schedule_image_re_enrichment
 from letta.services.image_manager import ImageManager
 from letta.services.object_store.client import get_object_store_client
 from letta.services.recall.hybrid_search import search_images_hybrid
-from letta.utils.datetime_cursor import parse_cursor_datetime
+from letta.helpers.datetime_helpers import parse_cursor_datetime
 
 router = APIRouter(prefix="/images", tags=["images"])
 

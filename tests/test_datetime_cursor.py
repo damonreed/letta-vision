@@ -1,4 +1,4 @@
-from letta.utils.datetime_cursor import parse_cursor_datetime, repair_iso_datetime_query_cursor
+from letta.helpers.datetime_helpers import parse_cursor_datetime, repair_iso_datetime_query_cursor
 
 
 def test_repair_iso_datetime_query_cursor_plus_decoded_as_space():
