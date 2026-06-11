@@ -505,6 +505,53 @@ async def _set_enrichment_pending(
         await row.update_async(session, actor=actor)
 
 
+def _captions_from_image(image) -> dict:
+    return {
+        "caption": image.caption,
+        "description": image.description,
+        "details": image.details,
+    }
+
+
+async def reembed_image_embedding_only(image_id: str, actor: PydanticUser) -> None:
+    """Re-pixel-embed from stored full-resolution bytes; leave captions and 1MP unchanged.
+
+    Used for embedding-space migration (e.g. preview→GA) when metadata is already complete.
+    """
+    from letta.server.db import db_registry
+
+    manager = ImageManager()
+    store = get_object_store_client()
+    image = await manager.get_by_id_async(image_id, actor)
+    if not image:
+        raise ValueError(f"Image not found: {image_id}")
+    if not image.object_url_full:
+        raise ValueError(f"Image {image_id} has no full object URL")
+
+    raw = await store.get_bytes(image.object_url_full)
+    media_type = image.media_type or "image/jpeg"
+    captions = _captions_from_image(image)
+
+    embedding_config = await resolve_embedding_config_async(actor=actor)
+    llm_client = LLMClient.create(embedding_config.embedding_endpoint_type, actor=actor)
+    prepared = await _embed_image_vector(
+        llm_client,
+        raw,
+        media_type,
+        captions,
+        embedding_config,
+    )
+
+    async with db_registry.async_session() as session:
+        row = await ImageRecord.read_async(db_session=session, identifier=image_id, actor=actor)
+        row.embedding = prepared
+        row.embedding_config = embedding_config.model_dump()
+        row.embedding_space_id = embedding_config.embedding_space_id
+        row.enrichment_status = "complete"
+        row.error_message = None
+        await row.update_async(session, actor=actor)
+
+
 async def enrich_image_background(
     image_id: str,
     actor: PydanticUser,
@@ -608,7 +655,7 @@ async def _embed_image_vector(
     captions: dict,
     embedding_config,
 ) -> list:
-    """Pixel embed from 1MP derivative; fall back to caption text if the API rejects image input."""
+    """Pixel embed from caller-supplied image bytes; fall back to caption text if the API rejects image input."""
     b64 = base64.standard_b64encode(embed_bytes).decode("ascii")
     image_input = [
         {"type": "image_url", "image_url": {"url": f"data:{embed_media_type};base64,{b64}"}}
