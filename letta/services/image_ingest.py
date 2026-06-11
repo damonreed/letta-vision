@@ -537,13 +537,6 @@ async def enrich_image_background(
         captions = await _generate_three_tier_captions(raw, image.media_type, actor)
         embedding_config = await resolve_embedding_config_async(actor=actor)
         llm_client = LLMClient.create(embedding_config.embedding_endpoint_type, actor=actor)
-        prepared = await _embed_image_vector(
-            llm_client,
-            embed_bytes,
-            embed_media_type,
-            captions,
-            embedding_config,
-        )
 
         from letta.server.db import db_registry
 
@@ -554,10 +547,23 @@ async def enrich_image_background(
             row.caption = captions.get("caption")
             row.description = captions.get("description")
             row.details = captions.get("details")
+            await row.update_async(session, actor=actor)
+
+        prepared = await _embed_image_vector(
+            llm_client,
+            embed_bytes,
+            embed_media_type,
+            captions,
+            embedding_config,
+        )
+
+        async with db_registry.async_session() as session:
+            row = await ImageRecord.read_async(db_session=session, identifier=image_id, actor=actor)
             row.embedding = prepared
             row.embedding_config = embedding_config.model_dump()
             row.embedding_space_id = embedding_config.embedding_space_id
             row.enrichment_status = "complete"
+            row.error_message = None
             await row.update_async(session, actor=actor)
 
         if message_id and (captions.get("caption") or captions.get("description")):

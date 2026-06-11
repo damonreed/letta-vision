@@ -203,3 +203,30 @@ async def test_openai_embedding_minimum_chunk_failure(default_user):
 
         with pytest.raises(Exception, match="API error"):
             await client.request_embeddings(test_inputs, embedding_config)
+
+
+def test_embedding_response_error_message_from_openrouter_payload():
+    client = OpenAIClient()
+    response = type(
+        "Resp",
+        (),
+        {
+            "error": {"message": "HTTP 429: billing cap exceeded", "code": 429},
+            "data": None,
+        },
+    )()
+    assert "billing cap exceeded" in client._embedding_response_error_message(response)
+
+
+def test_embedding_vectors_from_response_raises_on_error():
+    client = OpenAIClient()
+    response = type(
+        "Resp",
+        (),
+        {
+            "error": {"message": "provider unavailable"},
+            "data": None,
+        },
+    )()
+    with pytest.raises(ValueError, match="provider unavailable"):
+        client._embedding_vectors_from_response(response, model="test-model")

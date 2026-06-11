@@ -1186,6 +1186,39 @@ class OpenAIClient(LLMClientBase):
         response_stream: AsyncStream[ResponseStreamEvent] = await client.responses.create(**request_data, stream=True)
         return response_stream
 
+    @staticmethod
+    def _embedding_response_error_message(response) -> Optional[str]:
+        """OpenRouter may return HTTP 200 with ``data=null`` and an ``error`` payload."""
+        err = getattr(response, "error", None)
+        if err is None and hasattr(response, "model_dump"):
+            err = response.model_dump().get("error")
+        if not err:
+            return None
+        if isinstance(err, dict):
+            return err.get("message") or str(err)
+        return getattr(err, "message", None) or str(err)
+
+    def _embedding_vectors_from_response(self, response, *, model: str) -> List[List[float]]:
+        err_msg = self._embedding_response_error_message(response)
+        if err_msg:
+            raise ValueError(f"Embedding API error for model {model}: {err_msg}")
+        if not response.data:
+            raise ValueError(f"Embedding API returned no data for model {model}")
+        embeddings = [r.embedding for r in response.data if r.embedding is not None]
+        if not embeddings:
+            raise ValueError(f"Embedding API returned empty vectors for model {model}")
+        return embeddings
+
+    def _extract_embeddings_from_response(
+        self,
+        response,
+        embedding_config: EmbeddingConfig,
+        *,
+        model: str,
+    ) -> List[List[float]]:
+        embeddings = self._embedding_vectors_from_response(response, model=model)
+        return self._finalize_embedding_vectors(embeddings, embedding_config)
+
     @trace_method
     def _embedding_create_kwargs(
         self,
@@ -1252,16 +1285,11 @@ class OpenAIClient(LLMClientBase):
             input=api_input,
             **create_kwargs,
         )
-        if not response.data:
-            raise ValueError(
-                f"Embedding API returned no data for model {embedding_config.embedding_model}"
-            )
-        embeddings = [r.embedding for r in response.data if r.embedding is not None]
-        if not embeddings:
-            raise ValueError(
-                f"Embedding API returned empty vectors for model {embedding_config.embedding_model}"
-            )
-        return self._finalize_embedding_vectors(embeddings, embedding_config)
+        return self._extract_embeddings_from_response(
+            response,
+            embedding_config,
+            model=embedding_config.embedding_model,
+        )
 
     async def request_embeddings(
         self,
@@ -1389,7 +1417,10 @@ class OpenAIClient(LLMClientBase):
                         )
                         raise result
                 else:
-                    embeddings = [r.embedding for r in result.data]
+                    embeddings = self._embedding_vectors_from_response(
+                        result,
+                        model=embedding_config.embedding_model,
+                    )
                     for i, embedding in enumerate(embeddings):
                         results[start_idx + i] = embedding
 
