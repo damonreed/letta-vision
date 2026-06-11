@@ -15,18 +15,30 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-_GEMINI_EMBEDDING_2_HANDLES = frozenset(
+_GEMINI_EMBEDDING_2_PREVIEW_HANDLES = frozenset(
     {
         "openrouter/google/gemini-embedding-2-preview",
         "google/gemini-embedding-2-preview",
+        "gemini-embedding-2-preview",
+    }
+)
+
+_GEMINI_EMBEDDING_2_GA_HANDLES = frozenset(
+    {
+        "openrouter/google/gemini-embedding-2",
+        "google/gemini-embedding-2",
         "gemini-embedding-2",
     }
 )
 
 
-def _gemini_embedding_2_config(handle: Optional[str] = None) -> EmbeddingConfig:
+def _openrouter_gemini_embedding_2_config(
+    *,
+    embedding_model: str,
+    handle: str,
+) -> EmbeddingConfig:
     return EmbeddingConfig(
-        embedding_model="google/gemini-embedding-2-preview",
+        embedding_model=embedding_model,
         embedding_endpoint_type="openrouter",
         embedding_endpoint="https://openrouter.ai/api/v1",
         embedding_dim=DEPLOYMENT_EMBEDDING_DIM,
@@ -34,14 +46,36 @@ def _gemini_embedding_2_config(handle: Optional[str] = None) -> EmbeddingConfig:
         input_type="search_document",
         normalize=True,
         embedding_chunk_size=DEFAULT_EMBEDDING_CHUNK_SIZE,
-        handle=handle or "openrouter/google/gemini-embedding-2-preview",
+        handle=handle,
     )
+
+
+def _is_gemini_embedding_2_preview_handle(handle: str) -> bool:
+    lowered = handle.lower()
+    if lowered in _GEMINI_EMBEDDING_2_PREVIEW_HANDLES:
+        return True
+    return "gemini-embedding-2" in lowered and "preview" in lowered
+
+
+def _is_gemini_embedding_2_ga_handle(handle: str) -> bool:
+    lowered = handle.lower()
+    if lowered in _GEMINI_EMBEDDING_2_GA_HANDLES:
+        return True
+    return "gemini-embedding-2" in lowered and "preview" not in lowered
 
 
 def _config_from_deployment_handle(handle: str) -> Optional[EmbeddingConfig]:
     """Build a known deployment handle without DB lookup."""
-    if handle in _GEMINI_EMBEDDING_2_HANDLES or "gemini-embedding-2" in handle:
-        return _gemini_embedding_2_config(handle=handle)
+    if _is_gemini_embedding_2_preview_handle(handle):
+        return _openrouter_gemini_embedding_2_config(
+            embedding_model="google/gemini-embedding-2-preview",
+            handle=handle,
+        )
+    if _is_gemini_embedding_2_ga_handle(handle):
+        return _openrouter_gemini_embedding_2_config(
+            embedding_model="google/gemini-embedding-2",
+            handle=handle,
+        )
     return None
 
 
@@ -119,7 +153,7 @@ def validate_native_pg_embedding_config(config: EmbeddingConfig) -> None:
             f"Deployment embedding '{handle}' produces {config.embedding_dim}-dim vectors; "
             f"native passage storage requires {DEPLOYMENT_EMBEDDING_DIM}-dim. "
             "Set LETTA_DEFAULT_EMBEDDING_HANDLE to the deployment unified model "
-            "(e.g. openrouter/google/gemini-embedding-2-preview)."
+            "(e.g. openrouter/google/gemini-embedding-2)."
         )
 
 

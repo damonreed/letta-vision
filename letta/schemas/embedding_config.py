@@ -79,9 +79,13 @@ class EmbeddingConfig(BaseModel):
     def default_config(cls, model_name: Optional[str] = None, provider: Optional[str] = None):
         if model_name in (
             "google/gemini-embedding-2-preview",
-            "gemini-embedding-2",
-            "google/gemini-embedding-2",
-        ) or (provider == "openrouter" and model_name and "gemini-embedding-2" in model_name):
+            "gemini-embedding-2-preview",
+        ) or (
+            provider == "openrouter"
+            and model_name
+            and "gemini-embedding-2" in model_name
+            and "preview" in model_name
+        ):
             return cls(
                 embedding_model="google/gemini-embedding-2-preview",
                 embedding_endpoint_type="openrouter",
@@ -92,6 +96,26 @@ class EmbeddingConfig(BaseModel):
                 normalize=True,
                 embedding_chunk_size=DEFAULT_EMBEDDING_CHUNK_SIZE,
                 handle="openrouter/google/gemini-embedding-2-preview",
+            )
+        if model_name in (
+            "google/gemini-embedding-2",
+            "gemini-embedding-2",
+        ) or (
+            provider == "openrouter"
+            and model_name
+            and "gemini-embedding-2" in model_name
+            and "preview" not in model_name
+        ):
+            return cls(
+                embedding_model="google/gemini-embedding-2",
+                embedding_endpoint_type="openrouter",
+                embedding_endpoint="https://openrouter.ai/api/v1",
+                embedding_dim=DEPLOYMENT_EMBEDDING_DIM,
+                output_dimensionality=DEPLOYMENT_EMBEDDING_DIM,
+                input_type="search_document",
+                normalize=True,
+                embedding_chunk_size=DEFAULT_EMBEDDING_CHUNK_SIZE,
+                handle="openrouter/google/gemini-embedding-2",
             )
         if model_name == "text-embedding-ada-002" and provider == "openai":
             return cls(

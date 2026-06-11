@@ -3,7 +3,7 @@
 Status: **Ready for review** — gate to **v0.6.0 GA** (uplift execution + validation remain the server gate; client §12–§13 shipped in-tree)
 Author: Ada (architecture); implementation by Cursor
 Depends on: v0.6.0-rc (shipped & validated on sliver against new data) — see `IMPLEMENTATION_REPORT_v0.6.0_unified-embedding-recall.md`
-Grounded in as-built: five vector tables (`archival_passages`, `source_passages`, `file_archives`, `messages`, `images`); dual-column passages/archives (`embedding_legacy_4096` + `embedding Vector(768)`); deployment-global embedding (`LETTA_DEFAULT_EMBEDDING_HANDLE` = `openrouter/google/gemini-embedding-2-preview` @768); atomic message embed guard (`embeddings/write.py::write_message_embedding_atomic`); content-addressed object store with wire-byte sizing (`object_store/client.py`); `image_ingest.py` sync+background pipeline.
+Grounded in as-built: five vector tables (`archival_passages`, `source_passages`, `file_archives`, `messages`, `images`); dual-column passages/archives (`embedding_legacy_4096` + `embedding Vector(768)`); deployment-global embedding (`LETTA_DEFAULT_EMBEDDING_HANDLE` = `openrouter/google/gemini-embedding-2` @768); atomic message embed guard (`embeddings/write.py::write_message_embedding_atomic`); content-addressed object store with wire-byte sizing (`object_store/client.py`); `image_ingest.py` sync+background pipeline.
 
 This FR runs in **two ordered parts**. Part 1 (base64→object conversion) must complete before Part 2 (re-embed), because Part 1 creates the image records Part 2 embeds, and the message re-embed in Part 2 folds in image caption gists that don't exist until Part 1's records are enriched.
 
