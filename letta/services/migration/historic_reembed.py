@@ -30,6 +30,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_PART2_CHECKPOINT_PATH = Path.home() / ".letta" / "uplift_part2_checkpoint.json"
 
 MESSAGE_EMBED_VERSION = 2
+# Preview-era rc embeds stamped version 2; GA space migration must supersede with a higher version.
+UPLIFT_MESSAGE_EMBED_VERSION = 3
 
 REEMBED_TABLES = ("archival_passages", "source_passages", "file_archives", "messages")
 ALL_REEMBED_TABLES = REEMBED_TABLES
@@ -336,7 +338,7 @@ async def _write_message_embedding(
         organization_id=org_id,
         embedding=prepared,
         embedding_config=config,
-        embedding_version=MESSAGE_EMBED_VERSION,
+        embedding_version=UPLIFT_MESSAGE_EMBED_VERSION,
     )
 
 
@@ -459,18 +461,28 @@ async def _reembed_table_live(
                             await _write_file_archive_embedding(
                                 session, row_id=row.id, org_id=org_id, embedding=vec, config=doc_config
                             )
+                            succeeded += 1
+                            logger.info("Re-embedded %s %s", table_name, row.id)
                         elif table_name == "messages":
                             applied = await _write_message_embedding(
                                 row_id=row.id, org_id=org_id, embedding=vec, config=doc_config
                             )
                             if not applied:
-                                logger.debug("Monotonic guard skipped %s %s", table_name, row.id)
+                                failed += 1
+                                logger.warning(
+                                    "Monotonic guard skipped %s %s (embedding not updated)",
+                                    table_name,
+                                    row.id,
+                                )
+                            else:
+                                succeeded += 1
+                                logger.info("Re-embedded %s %s", table_name, row.id)
                         else:
                             await _write_passage_embedding(
                                 session, row_id=row.id, org_id=org_id, embedding=vec, config=doc_config, model=model
                             )
-                        succeeded += 1
-                        logger.info("Re-embedded %s %s", table_name, row.id)
+                            succeeded += 1
+                            logger.info("Re-embedded %s %s", table_name, row.id)
                     except Exception as e:
                         failed += 1
                         logger.error("Write failed for %s %s: %s", table_name, row.id, e)
