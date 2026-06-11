@@ -27,6 +27,12 @@ def supports_image_blocks_in_history(llm_config: LLMConfig) -> bool:
     return model_supports_vision(llm_config.model, handle=llm_config.handle)
 
 
+def _max_image_parts_for_model(llm_config: LLMConfig) -> Optional[int]:
+    from letta.llm_api.model_registry import model_max_image_parts
+
+    return model_max_image_parts(llm_config.model, handle=llm_config.handle)
+
+
 def _letta_file_id_from_image_block(block) -> Optional[str]:
     if isinstance(block, ImageContent) and isinstance(block.source, LettaImage):
         return block.source.file_id
@@ -100,6 +106,15 @@ def _collect_letta_images(messages: List[Message]) -> List[tuple[str, bool]]:
     return found
 
 
+def _letta_image_part_counts(messages: List[Message]) -> Dict[str, int]:
+    """Total image-part occurrences per image id (one image can appear in several messages)."""
+    counts: Dict[str, int] = {}
+    for msg in messages:
+        for fid in _tool_return_letta_image_ids(msg) + _content_letta_image_ids(msg):
+            counts[fid] = counts.get(fid, 0) + 1
+    return counts
+
+
 def find_image_needing_1mp_now(
     messages: List[Message],
     llm_config: LLMConfig,
@@ -116,10 +131,21 @@ def find_image_needing_1mp_now(
     remaining = cap
     demoted = False
     meta = image_metadata or {}
+    parts_cap = _max_image_parts_for_model(llm_config)
+    part_counts = _letta_image_part_counts(messages) if parts_cap is not None else {}
+    parts_remaining = parts_cap
 
     for img_id, is_current in _collect_letta_images(messages):
         if demoted:
             return None
+
+        if parts_remaining is not None:
+            needed_parts = part_counts.get(img_id, 1)
+            if needed_parts > parts_remaining:
+                # Count-capped: this image and everything older render as text, no bake needed.
+                return None
+        else:
+            needed_parts = 0
 
         info = meta.get(img_id, {})
         full_size = info.get("file_size_full") or 0
@@ -128,16 +154,22 @@ def find_image_needing_1mp_now(
         if is_current:
             if full_size <= remaining:
                 remaining -= full_size
+                if parts_remaining is not None:
+                    parts_remaining -= needed_parts
                 continue
             if onemp_size is None and not info.get("object_url_1mp"):
                 return img_id
             if onemp_size and onemp_size <= remaining:
                 remaining -= onemp_size
+                if parts_remaining is not None:
+                    parts_remaining -= needed_parts
             else:
                 demoted = True
         else:
             if onemp_size and onemp_size <= remaining:
                 remaining -= onemp_size
+                if parts_remaining is not None:
+                    parts_remaining -= needed_parts
             else:
                 demoted = True
 
@@ -162,11 +194,26 @@ def compute_image_render_decisions(
     demoted = False
     decisions: Dict[str, RenderTier] = {}
     meta = image_metadata or {}
+    # Some providers silently drop image parts beyond a per-request cap (keeping the
+    # OLDEST parts), which would make the newest images invisible. Enforce the cap
+    # ourselves newest-first so older images demote to text instead.
+    parts_cap = _max_image_parts_for_model(llm_config)
+    part_counts = _letta_image_part_counts(messages) if parts_cap is not None else {}
+    parts_remaining = parts_cap
 
     for img_id, is_current in _collect_letta_images(messages):
         if demoted:
             decisions[img_id] = RenderTier.TEXT
             continue
+
+        if parts_remaining is not None:
+            needed_parts = part_counts.get(img_id, 1)
+            if needed_parts > parts_remaining:
+                decisions[img_id] = RenderTier.TEXT
+                demoted = True
+                continue
+        else:
+            needed_parts = 0
 
         info = meta.get(img_id, {})
         full_size = info.get("file_size_full") or 0
@@ -176,6 +223,8 @@ def compute_image_render_decisions(
             if full_size <= remaining:
                 decisions[img_id] = RenderTier.FULL
                 remaining -= full_size
+                if parts_remaining is not None:
+                    parts_remaining -= needed_parts
             else:
                 if onemp_size is None:
                     decisions[img_id] = RenderTier.TEXT
@@ -184,6 +233,8 @@ def compute_image_render_decisions(
                 if onemp_size <= remaining:
                     decisions[img_id] = RenderTier.ONE_MP
                     remaining -= onemp_size
+                    if parts_remaining is not None:
+                        parts_remaining -= needed_parts
                 else:
                     decisions[img_id] = RenderTier.TEXT
                     demoted = True
@@ -191,6 +242,8 @@ def compute_image_render_decisions(
             if onemp_size and onemp_size <= remaining:
                 decisions[img_id] = RenderTier.ONE_MP
                 remaining -= onemp_size
+                if parts_remaining is not None:
+                    parts_remaining -= needed_parts
             else:
                 decisions[img_id] = RenderTier.TEXT
                 demoted = True

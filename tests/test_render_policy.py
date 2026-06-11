@@ -119,6 +119,93 @@ def _tool_return_generate_image_message(image_id: str) -> Message:
     )
 
 
+def _kimi_config() -> LLMConfig:
+    return LLMConfig(
+        model="moonshotai/kimi-k2.6",
+        model_endpoint_type="openai",
+        model_endpoint="https://openrouter.ai/api/v1",
+        context_window=256000,
+        handle="openrouter/moonshotai/kimi-k2.6",
+    )
+
+
+def _small_meta(image_ids: list[str]) -> dict:
+    return {
+        img: {
+            "file_size_full": 200_000,
+            "file_size_1mp": 150_000,
+            "object_url_full": f"sha256/{img}",
+            "object_url_1mp": f"sha256/{img}_1mp",
+        }
+        for img in image_ids
+    }
+
+
+def test_model_max_image_parts_registry():
+    from letta.llm_api.model_registry import model_max_image_parts
+
+    assert model_max_image_parts("moonshotai/kimi-k2.6", handle="openrouter/moonshotai/kimi-k2.6") == 8
+    assert model_max_image_parts("kimi-k2.5") == 8
+    assert model_max_image_parts("openai/gpt-4o", handle="openai/gpt-4o") is None
+
+
+def test_compute_render_decisions_part_count_cap_demotes_oldest():
+    """kimi providers silently drop image parts after the first 8; newest must win."""
+    image_ids = [f"img-{i}" for i in range(1, 11)]  # img-1 oldest .. img-10 newest
+    messages = [Message(role=MessageRole.user, content=[TextContent(text="go")])]
+    for img in image_ids:
+        messages.append(_tool_return_generate_image_message(img))
+
+    decisions = compute_image_render_decisions(messages, _kimi_config(), image_metadata=_small_meta(image_ids))
+
+    for img in image_ids[2:]:  # newest 8
+        assert decisions[img] != RenderTier.TEXT, img
+    for img in image_ids[:2]:  # oldest 2
+        assert decisions[img] == RenderTier.TEXT, img
+
+
+def test_compute_render_decisions_part_count_cap_counts_duplicate_parts():
+    """An image referenced from two tool returns consumes two parts of the cap."""
+    image_ids = [f"img-{i}" for i in range(1, 10)]  # 9 ids; img-9 newest appears twice
+    messages = [Message(role=MessageRole.user, content=[TextContent(text="go")])]
+    for img in image_ids:
+        messages.append(_tool_return_generate_image_message(img))
+    messages.append(_tool_return_generate_image_message("img-9"))  # e.g. image_fetch of same id
+
+    decisions = compute_image_render_decisions(messages, _kimi_config(), image_metadata=_small_meta(image_ids))
+
+    # 10 parts total; img-9 takes 2, img-8..img-3 take 6 -> img-2 and img-1 demote
+    assert decisions["img-9"] != RenderTier.TEXT
+    for img in [f"img-{i}" for i in range(3, 9)]:
+        assert decisions[img] != RenderTier.TEXT, img
+    assert decisions["img-2"] == RenderTier.TEXT
+    assert decisions["img-1"] == RenderTier.TEXT
+
+
+def test_compute_render_decisions_no_part_cap_for_uncapped_models():
+    image_ids = [f"img-{i}" for i in range(1, 13)]
+    messages = [Message(role=MessageRole.user, content=[TextContent(text="go")])]
+    for img in image_ids:
+        messages.append(_tool_return_generate_image_message(img))
+
+    decisions = compute_image_render_decisions(messages, _llm_config(), image_metadata=_small_meta(image_ids))
+    assert all(tier != RenderTier.TEXT for tier in decisions.values())
+
+
+def test_find_image_needing_1mp_now_respects_part_count_cap():
+    """No 1MP bake for images that the count cap will demote to text anyway."""
+    cap = settings.vision_context_byte_cap
+    image_ids = [f"img-{i}" for i in range(1, 10)]  # 9 ids, img-9 newest
+    messages = [Message(role=MessageRole.user, content=[TextContent(text="go")])]
+    for img in image_ids:
+        messages.append(_tool_return_generate_image_message(img))
+
+    # Oldest image is current-turn-sized over budget but count-capped out -> no bake.
+    meta = _small_meta(image_ids)
+    meta["img-1"] = {"file_size_full": cap + 1, "file_size_1mp": None, "object_url_1mp": None}
+    assert find_image_needing_1mp_now(messages, _kimi_config(), image_metadata=meta) is None
+
+
 def test_compute_render_decisions_tool_return_image_in_walk_on_later_turn():
     img = "img-gen-persist"
     meta = {

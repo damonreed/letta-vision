@@ -55,6 +55,28 @@ VISION_CAPABLE_MODELS: list[tuple[str, str]] = [
     ("MiniMax", "minimax-m3*"),
 ]
 
+# (provider label, model id or pattern, max image parts per request)
+# Empirically measured serving-side caps: these providers silently drop image parts
+# beyond the cap instead of erroring. kimi-k2.6 via OpenRouter (Parasail and Novita,
+# probed 2026-06-11 with 12 numbered images) keeps only the FIRST 8 parts, so the
+# newest images vanish unless we demote older ones first. k2.5 shares the serving
+# stack and is assumed to have the same cap.
+MODEL_MAX_IMAGE_PARTS: list[tuple[str, str, int]] = [
+    ("OpenRouter", "moonshotai/kimi-k2*", 8),
+    ("Moonshot", "kimi-k2*", 8),
+]
+
+
+def model_max_image_parts(model: str, handle: str | None = None) -> int | None:
+    """Max image parts the model reliably receives per request (None = no known cap)."""
+    for ident in _model_identifiers(model, handle):
+        ident_lower = ident.lower()
+        for _, pattern, cap in MODEL_MAX_IMAGE_PARTS:
+            if _matches_pattern(ident_lower, pattern):
+                return cap
+    return None
+
+
 _EXTRA_VISION_MODELS: set[str] | None = None
 _BRIDGE_VISION_OVERRIDES: dict[str, bool] | None = None
 _BRIDGE_OVERRIDES_MTIME: float | None = None
