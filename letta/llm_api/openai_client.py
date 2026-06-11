@@ -1198,6 +1198,15 @@ class OpenAIClient(LLMClientBase):
             return err.get("message") or str(err)
         return getattr(err, "message", None) or str(err)
 
+    @staticmethod
+    def _embedding_api_batch_size(embedding_config: EmbeddingConfig) -> int:
+        """Max texts per embeddings.create call for this model."""
+        model = (embedding_config.embedding_model or "").lower()
+        # GA gemini-embedding-2 on Vertex (via OpenRouter) rejects array inputs.
+        if model == "google/gemini-embedding-2":
+            return 1
+        return 2048
+
     def _embedding_vectors_from_response(self, response, *, model: str) -> List[List[float]]:
         err_msg = self._embedding_response_error_message(response)
         if err_msg:
@@ -1342,7 +1351,7 @@ class OpenAIClient(LLMClientBase):
 
         # track results by original index to maintain order
         results = [None] * len(inputs)
-        initial_batch_size = 2048
+        initial_batch_size = self._embedding_api_batch_size(embedding_config)
         chunks_to_process = [(i, inputs[i : i + initial_batch_size], initial_batch_size) for i in range(0, len(inputs), initial_batch_size)]
         min_chunk_size = 128
 
@@ -1417,10 +1426,25 @@ class OpenAIClient(LLMClientBase):
                         )
                         raise result
                 else:
-                    embeddings = self._embedding_vectors_from_response(
-                        result,
-                        model=embedding_config.embedding_model,
-                    )
+                    try:
+                        embeddings = self._embedding_vectors_from_response(
+                            result,
+                            model=embedding_config.embedding_model,
+                        )
+                    except ValueError as exc:
+                        if len(chunk_inputs) > 1:
+                            new_batch_size = max(1, current_batch_size // 2)
+                            logger.warning(
+                                f"Embeddings response error for batch starting at {start_idx}: {exc}. "
+                                f"Reducing batch size from {current_batch_size} to {new_batch_size} and retrying."
+                            )
+                            mid = max(1, len(chunk_inputs) // 2)
+                            if chunk_inputs[:mid]:
+                                failed_chunks.append((start_idx, chunk_inputs[:mid], new_batch_size))
+                            if chunk_inputs[mid:]:
+                                failed_chunks.append((start_idx + mid, chunk_inputs[mid:], new_batch_size))
+                            continue
+                        raise
                     for i, embedding in enumerate(embeddings):
                         results[start_idx + i] = embedding
 
