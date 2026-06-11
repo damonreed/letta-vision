@@ -47,6 +47,26 @@ class ImageMetadataUpdate(BaseModel):
     details: Optional[str] = Field(default=None, description="Thorough literal description, 1000 words.")
 
 
+class ImageListResponse(BaseModel):
+    images: list[PydanticImage]
+    has_more: bool = False
+
+
+class ImageSearchRequest(BaseModel):
+    query: str
+    limit: int = Field(default=10, ge=1)
+
+
+class ImageSearchHit(BaseModel):
+    handle: str
+    description: Optional[str] = None
+    score: float
+
+
+class ImageSearchResponse(BaseModel):
+    results: list[ImageSearchHit]
+
+
 class ImageCreate(BaseModel):
     """Payload for synchronous image ingest."""
 

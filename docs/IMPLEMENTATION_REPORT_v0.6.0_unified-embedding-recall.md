@@ -2,8 +2,8 @@
 
 **To:** Ada  
 **From:** Damon (letta-stack)  
-**Date:** 2026-06-09 (updated 2026-06-10)  
-**Status:** GA-candidate — validated on **sliver** for new data and integration paths; **historic uplift tooling is shipped**; corpus **execution** (Part 1 → enrich → Part 2) is the GA gate  
+**Date:** 2026-06-09 (updated 2026-06-11)  
+**Status:** **Ready for GA review** — validated on **sliver** for new data and integration paths; **historic uplift tooling + GA client (§12–§13) shipped**; corpus **execution** (Part 1 → enrich → Part 2) and post-uplift validation remain the server GA gate  
 **Baseline:** `v0.5.0` (three-tier filesystem memory)  
 **Specification:** [FR: Unified Embedding Space, Multimodal Image Memory & Unified Recall](FR_letta-vision_Unified-Embedding-Multimodal-Recall_v0.6.0-rc.md) (revision r2)  
 **Uplift specification:** [FR: Historic Embedding Uplift & Corpus Conversion](FR_letta-vision_Historic-Embedding-Uplift_v0.6.0-GA.md)
@@ -22,6 +22,7 @@ We implemented Ades's v0.6 FR through **Phases 1–9** of §14, with one deliber
 - **Ref-only tool-return persistence** — new tool returns store `LettaImage` refs without inline bytes; historic strip job for pre-change rows.
 - **Recall FR §6 post-processing** — image/message dedup and per-source diversity cap in `finalize_recall_hits`.
 - **Vision fixes for MCP `generate_image`** — tool-return images participate in the byte-budget walk; metadata loaded for sizing; `fill_image_content_in_messages` extended to tool rows; TEXT tier injects `images.description`.
+- **GA client (2026-06-11)** — uplift FR §12 Images inspector (list+detail, hybrid search, paginated browse, inline metadata edit, click-to-zoom); §13 shell (Chat default tab, mount-once, windowed history, conversation sidebar N+1 fix, deferred memory load).
 
 **Historic data is still excluded from vector recall until uplift runs:** rows with `NULL` 768 `embedding` or `embedding_space_id = legacy-unknown` are filtered by the space guard. The uplift jobs are resumable, idempotent, and snapshot-gated for mutating steps.
 
@@ -40,7 +41,8 @@ We implemented Ades's v0.6 FR through **Phases 1–9** of §14, with one deliber
 | **Phase 5** — Ingest pipeline | Sync store, background 1MP + VLM captions + pixel embed, two-embed dance, retries | **Done** |
 | **Phase 6** — Chat render policy | `LettaImage` refs, render walk, on-demand 1MP, serializer integration | **Done** — TEXT tier uses `images.description` + handle hint |
 | **Phase 7** — Recall tool | Vector + lexical + RRF; `image_fetch` multimodal return | **Partial** — diversity cap + dedup done; `layers` / `time_range` / `source` filters still missing |
-| **Phase 8** — Client Images tab | Server REST, client proxy, `Images.svelte` | **Done** |
+| **Phase 8** — Client Images tab | Server REST, client proxy, `Images.svelte` | **Done** — §12 inspector (2026-06-11): list+detail, search, pagination, inline edit |
+| **Phase 8b** — Client shell polish | Tab order, Chat perf, mount-once | **Done** — §13 (2026-06-11) |
 | **Phase 9** — Base instructions | `search_all` / `image_fetch` / layer tools in `letta_v1.py` | **Done** |
 
 ### Acceptance criteria (§15)
@@ -56,7 +58,7 @@ We implemented Ades's v0.6 FR through **Phases 1–9** of §14, with one deliber
 | 7 | Long image-heavy chat: tiered render within wire-byte cap | **Pass** | Render walk + on-demand 1MP; TEXT tier uses description from DB |
 | 8 | `search_all` fused deduped source-capped list | **Pass** | RRF fusion + `finalize_recall_hits` (dedup + per-source cap) |
 | 9 | Enrichment failure: renderable image + text-only message embed | **Pass** | Failure path re-embeds message text |
-| 10 | Client Images tab with metadata/actions | **Pass** | view-full, edit metadata, re-enrich, delete |
+| 10 | Client Images tab with metadata/actions | **Pass** | §12 inspector: 1MP rail+pane, hybrid search, inline caption/description/details, re-enrich, delete, click-to-zoom |
 | 11 | HNSW + pg_trgm; dual-column passages/archives | **Pass** | `v060` + `v061` migrations |
 
 Automated coverage includes: `test_render_policy.py`, `test_image_ingest.py`, `test_recall_service.py`, `test_fetch_image_and_recall_archives.py`, `test_openai_provider_embeddings.py`, embedding resolver tests, hybrid search tests.
@@ -243,14 +245,18 @@ Messages re-embed at **`embedding_version = 2`** using `build_message_embed_text
 
 | Surface | Purpose |
 |---------|---------|
-| **`Images.svelte`** | Grid/list, thumbnails, view full, edit caption/description/details, re-enrich, delete |
-| **`backend/routes/images.py`** | Proxy to server `/v1/images/*` + content stream |
-| **`App.svelte` / `stores.js`** | Images tab nav |
+| **`App.svelte` / `stores.js`** | Tab order **Chat → Images → Files → Agents → MCP → Providers**; Chat default on load; Chat mount-once |
+| **`Images.svelte`** | §12 inspector: 280px thumbnail rail (browse scroll-load or search hits w/ score overlay), 50/50 detail (preview+`meta-grid` \| inline editors), click-to-zoom |
+| **`Chat.svelte`** | Windowed history (`limit=50`, load-older), deferred memory panel fetch |
+| **`ConversationList.svelte`** | Sidebar from single `conversations.list` (no N+1 preview fetch) |
+| **`backend/routes/images.py`** | Proxy `/v1/images/*`, `POST /search`, paginated list, content stream |
+| **`backend/routes/messages.py`** | Windowed `GET /history` → `{ messages, has_more }`; `full=true` escape hatch |
+| **`backend/routes/conversations.py`** | List w/o per-row message preview; `order_by=last_message_at` |
 | **`Files.svelte`** | Folder upload; embedding picker **removed**; improved API error parsing |
 | **`Agents.svelte`** | Embedding picker **removed** |
 | **`frontend/src/lib/tools.js`** | Base tool list uses `search_all`, `image_fetch`, `image_search` |
 | **`frontend/src/lib/toolResultImages.js`** | Tool-result image dedupe by `file_id`; content-proxy URLs |
-| **`api.js`** | `parseApiError()` for FastAPI nested errors |
+| **`api.js`** | `parseApiError()`, `listImages({ limit, after… })`, `searchImages`, windowed `getHistory` |
 
 ---
 
@@ -318,6 +324,15 @@ Ports: API **8283**, client **8284**.
 | **`generate_image` invisible to model** | Tool-return images excluded from render walk; no metadata for sizing; `fill_image_content` skipped tool rows | Current-turn tool returns in walk; load image metadata for budget; extend fill to tool rows by `tool_call_id`; pass render decisions through tool-return serialization |
 | **Redundant `image_fetch` after generate** | Model saw TEXT placeholders instead of pixels | Unified vision model registry; hydration under standard byte cap (not always-FULL bypass) |
 
+### GA client polish (2026-06-11)
+
+| Change | Notes |
+|--------|-------|
+| Images §12 inspector | `Images.svelte` list+detail; `POST /v1/images/search`; paginated `GET /v1/images` (`after_created_at` + `after_id`); 1MP rail+pane; score overlays; inline metadata PATCH |
+| Tab shell §13 | Chat default; nav order Chat-first; Chat mount-once |
+| Chat perf | History window 50 + load-older; conversation sidebar 1 round-trip; memory on panel open |
+| `ImageViewer` | Click zoomed image or backdrop to dismiss |
+
 ---
 
 ## Historic embedding uplift — GA gate
@@ -358,7 +373,8 @@ Ports: API **8283**, client **8284**.
 | Search output clarity | **Pass** — `file` + `filename=` formatting |
 | `write_file_archive` on `villains.txt` | **Pass** |
 | `image_fetch` in Chat B | **Pass** — UI + LLM receive pixels |
-| Images tab | **Pass** — list, thumbnails, metadata edit |
+| Images tab | **Pass** — §12 inspector: search, paginated browse, inline metadata, full meta-grid |
+| Chat tab load | **Pass** — mount-once; windowed history; sidebar without N+1 |
 | Chat with vision model (Kimi K2.6) | **Pass** with render policy + hydration |
 | Historic uplift dry-runs | **Available** — CLI in-tree; full corpus run pending |
 
@@ -375,7 +391,7 @@ Agent `v060 test` on folder `v060-test`; deployment embedding `gemini-embedding-
 | Recall filter params (`layers`, `time_range`, `source`) | v0.6.1 or document as limitation |
 | Tool lexical fallback | §7 r2 — `ILIKE` on name/description when tpuf off |
 | Space guard exclusion logging | Observability for uplift validation |
-| `content_hash` / `embedding_space_id` in Images UI | Cosmetic |
+| Virtualized chat scroll | Optional follow-up if load-older is annoying |
 
 ---
 
@@ -417,6 +433,8 @@ Remaining gaps (recall filter params, tool fallback, space-guard logging) are UX
 | `letta/services/vision/image_hydration.py` | LLM message hydration |
 | `letta/services/vision/tool_return_storage.py` | Ref-only tool-return persistence |
 | `letta/functions/function_sets/search_tools.py` | `search_all`, `image_fetch`, `image_search` |
+| `letta/server/rest_api/routers/v1/images.py` | List w/ cursor, `POST /search`, content variants |
+| `letta/schemas/image.py` | `ImageListResponse`, `ImageSearchRequest/Response` |
 | `letta/prompts/system_prompts/letta_v1.py` | Hybrid search + MCP image instructions |
 | `letta/constants.py` | `BASE_TOOLS`, `DEPRECATED_LETTA_TOOLS` |
 
@@ -424,10 +442,14 @@ Remaining gaps (recall filter params, tool fallback, space-guard logging) are UX
 
 | Path | Role |
 |------|------|
-| `frontend/src/routes/Images.svelte` | Images tab |
+| `frontend/src/App.svelte` | Tab order; Chat default; mount-once |
+| `frontend/src/routes/Images.svelte` | §12 Images inspector |
+| `frontend/src/routes/Chat.svelte` | Windowed history; deferred memory |
 | `frontend/src/lib/tools.js` | Base tool names |
 | `frontend/src/lib/toolResultImages.js` | Tool-result image display + dedupe |
-| `backend/routes/images.py` | Images API proxy |
+| `backend/routes/images.py` | Images API proxy + search |
+| `backend/routes/messages.py` | Windowed history |
+| `backend/routes/conversations.py` | Sidebar list (no N+1) |
 
 ### Deploy (`letta-vision-deploy`)
 
@@ -455,6 +477,8 @@ Remaining gaps (recall filter params, tool fallback, space-guard logging) are UX
 | RRF fusion (§12) | **Yes** |
 | Per-source diversity + dedup (§12) | **Yes** — `finalize_recall_hits` |
 | Historic uplift (GA FR) | **Yes** — CLI + migration modules |
+| Images tab §12 inspector (GA FR) | **Yes** — list+detail, search, pagination |
+| Client shell §13 (GA FR) | **Yes** — Chat default, mount-once, chat perf |
 | Deployment-global embedding (Amendment A1) | **Yes** — documented here |
 | Recall `file` + `filename=` output (A2) | **Yes** — documented here |
 | Layer hybrid tools + `search_all` (A4) | **Yes** — documented here |

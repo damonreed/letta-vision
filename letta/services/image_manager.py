@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import uuid
-from typing import List, Optional
+from datetime import datetime
+from typing import List, Optional, Tuple
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 
 from letta.log import get_logger
 from letta.orm.image import ImageRecord
@@ -47,19 +48,33 @@ class ImageManager:
         *,
         limit: Optional[int] = None,
         enrichment_status: Optional[str] = None,
-    ) -> List[PydanticImage]:
+        after_created_at: Optional[datetime] = None,
+        after_id: Optional[str] = None,
+    ) -> Tuple[List[PydanticImage], bool]:
         async with db_registry.async_session() as session:
             q = (
                 select(ImageRecord)
                 .where(ImageRecord.organization_id == actor.organization_id, ImageRecord.is_deleted == False)  # noqa: E712
-                .order_by(ImageRecord.created_at.desc())
+                .order_by(ImageRecord.created_at.desc(), ImageRecord.id.desc())
             )
-            if limit is not None:
-                q = q.limit(limit)
             if enrichment_status:
                 q = q.where(ImageRecord.enrichment_status == enrichment_status)
+            if after_created_at is not None and after_id:
+                q = q.where(
+                    or_(
+                        ImageRecord.created_at < after_created_at,
+                        and_(ImageRecord.created_at == after_created_at, ImageRecord.id < after_id),
+                    )
+                )
+            if limit is not None:
+                q = q.limit(limit + 1)
             result = await session.execute(q)
-            return [r.to_pydantic() for r in result.scalars().all()]
+            rows = list(result.scalars().all())
+            has_more = False
+            if limit is not None:
+                has_more = len(rows) > limit
+                rows = rows[:limit]
+            return [r.to_pydantic() for r in rows], has_more
 
     @enforce_types
     @trace_method

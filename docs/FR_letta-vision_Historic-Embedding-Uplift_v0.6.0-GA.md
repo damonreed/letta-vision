@@ -1,6 +1,6 @@
 # FR: Historic Embedding Uplift & Corpus Conversion
 
-Status: Draft — gate to **v0.6.0 GA**
+Status: **Ready for review** — gate to **v0.6.0 GA** (uplift execution + validation remain the server gate; client §12–§13 shipped in-tree)
 Author: Ada (architecture); implementation by Cursor
 Depends on: v0.6.0-rc (shipped & validated on sliver against new data) — see `IMPLEMENTATION_REPORT_v0.6.0_unified-embedding-recall.md`
 Grounded in as-built: five vector tables (`archival_passages`, `source_passages`, `file_archives`, `messages`, `images`); dual-column passages/archives (`embedding_legacy_4096` + `embedding Vector(768)`); deployment-global embedding (`LETTA_DEFAULT_EMBEDDING_HANDLE` = `openrouter/google/gemini-embedding-2-preview` @768); atomic message embed guard (`embeddings/write.py::write_message_embedding_atomic`); content-addressed object store with wire-byte sizing (`object_store/client.py`); `image_ingest.py` sync+background pipeline.
@@ -23,6 +23,8 @@ Until both are resolved, recall only covers data created since the rc deploy. Re
 - **Part 1:** Convert every recoverable inline base64 image in `messages.content` into an `images` record + object-store blob + lightweight `LettaImage` reference, rewriting the message content to the reference form. Deduplicate by content hash against the existing `images` table. Idempotent and resumable. Net effect: large `messages` size reduction and historic images become enrichable/searchable.
 - **Part 2:** Roll-fill the 768 `embedding` column across all five vector tables from retained source text/pixels, under the single deployment space id, resumably and idempotently, then validate recall quality and HNSW performance on the full corpus, then drop `embedding_legacy_4096`.
 - Land the two recall post-processing gaps (per-source diversity cap + image/message dedup) **with** this uplift, since uplift is what fills the vector leg and makes their absence visible.
+- **Images tab UI** (client): replace the current card grid with the same list + detail shell used by Agents / Providers / Files / MCP — thumbnail rail on the left, selected-image workspace on the right. See §12.
+- **Client shell** (client): Chat-first nav, mount-once Chat, windowed history, conversation sidebar without N+1. See §13.
 - No model change. The space id is the existing deployment config's `compute_space_id()`. (If gemini-embedding-2 leaves preview mid-effort, that is a *different* space and a *different* uplift — see §9.)
 
 ## 3. Conceptual Model
@@ -123,6 +125,7 @@ Implement the two deferred recall post-steps now, because uplift fills the vecto
 - Run order in one orchestrated command: Part 1 convert → image enrich pass → {passages/archives in parallel} + message re-embed (after image enrich) → validate → (manual gate) → drop legacy.
 - Land the diversity cap + dedup (§6) in the same release; add space-guard exclusion logging early so the backfill is observable.
 - `estimate_embeddings_size` extension prints the cost report and is also the dry-run for Part 2.
+- Images tab (§12–§13): `Images.svelte` list+detail inspector, `POST /v1/images/search`, paginated `GET /v1/images`, Chat default tab + mount-once + history window — see implementation report GA client section.
 
 ## 11. Risk Register
 
@@ -135,3 +138,101 @@ Implement the two deferred recall post-steps now, because uplift fills the vecto
 | Dedup/diversity absence surfaces at GA | Land §6 with the uplift, not after |
 | Dropping legacy column too early | Drop only after full validation; keep snapshot through post-drop check |
 | Partial run leaves mixed state | Space guard keeps mixed state *correct* (rolling fill); resume continues from cursor |
+
+## 12. Images Tab UI (client)
+
+**Why now.** Part 1 will convert historic inline images into first-class `images` records; Part 2 enriches them with the three text tiers (`caption`, `description`, `details`). The current `Images.svelte` card grid does not scale to a full corpus and buries the editable metadata behind a modal. GA should ship an inspector that matches the rest of the admin shell and makes caption review/editing a first-class workflow.
+
+**Layout.** Reuse the `*-layout` / `aside.list` + `section.detail` pattern from `Agents.svelte`, `Files.svelte`, `Mcp.svelte` (`grid-template-columns: 280px 1fr`; full viewport height below the tab bar).
+
+```
+┌──────────────────────────────────────────────────────────────────────────────────────────┐
+│  Images (142)  [ search query…………………………… ] [10 ▾] [Search] [Clear]     [Refresh]      │
+├──────────────┬───────────────────────────────────────────────────────────────────────────┤
+│              │                                                                           │
+│  ┌────────┐  │  ┌─────────────────────────────┬─────────────────────────────────────────┐ │
+│  │ 1MP    │◀─│  │                             │  Caption                                │ │
+│  │ 0.87   │  │  │                             │  ┌───────────────────────────────────┐  │ │
+│  └────────┘  │  │   [ 1MP preview — click ]   │  │ Short label (20–50 words)         │  │ │
+│  ┌────────┐  │  │   zoom → full on click      │  └───────────────────────────────────┘  │ │
+│  │ 1MP    │  │  │   click again → dismiss     │                                         │ │
+│  │ 0.72   │  │  │                             │  Description                            │ │
+│  └────────┘  │  │  ID        image-abc…        │  ┌───────────────────────────────────┐  │ │
+│  ┌────────┐  │  │  Hash      sha256:9f3a…     │  │ Search-oriented summary           │  │ │
+│  │ 1MP    │  │  │  Size      1.2 MB (384 KB)  │  │ (100–200 words)                   │  │ │
+│  │ 0.65   │  │  │  Dims      2048 × 1536      │  │                                   │  │ │
+│  └────────┘  │  │  Type      image/jpeg       │  └───────────────────────────────────┘  │ │
+│  ┌────────┐  │  │  Provenance uploaded        │                                         │ │
+│  │ 1MP    │  │  │  Enrichment  complete ✓     │  Details                                │ │
+│  │ 0.58   │  │  │  Space id  gemini-emb…@768  │  ┌───────────────────────────────────┐  │ │
+│  └────────┘  │  │  Created   2025-11-04 14:22 │  │ Extended literal description      │  │ │
+│      ⋮       │  │  Updated   2025-11-04 14:23 │  │ (up to ~1000 words)                │  │ │
+│  (scroll)    │  │                             │  │                                   │  │ │
+│              │  │  [Re-enrich]  [Delete]      │  └───────────────────────────────────┘  │ │
+│              │  └─────────────────────────────┴─────────────────────────────────────────┘ │
+│   ~280px     │                        detail pane: 50% preview+meta | 50% editors          │
+└──────────────┴───────────────────────────────────────────────────────────────────────────┘
+     score overlay on thumbs when search active
+```
+
+**Image variants (rail + pane)**
+- **Always prefer 1MP** for rail thumbnails and the detail-pane preview via `imageThumbnailPath` / `imageContentPath(id, { variant: "1mp" })` when `object_url_1mp` exists; fall back to full variant otherwise.
+- **No separate “View full” control.** Click the pane preview to open a full-resolution overlay (reuse `ImageViewer.svelte` with `variant=full`). Click the zoomed image or backdrop again to dismiss. `Escape` also dismisses.
+
+**Header — search**
+- Inline search bar immediately after the “Images” title (same header row as Refresh).
+- Controls in order: **query input** → **result-limit dropdown** (`5` / `10` / `20` / `50`, default `10`) → **Search** button → **Clear** button.
+- **Enter** in the query field triggers Search (same as clicking Search).
+- **Search** calls the same hybrid path as the `image_search` agent tool: `search_images_hybrid` in `letta/services/recall/hybrid_search.py` (vector + lexical RRF fuse). Wire a new REST endpoint `POST /v1/images/search` `{ query, limit? }` returning `{ results: [{ handle, description, score }] }` — mirror of `core_tool_executor.image_search` — plus a client proxy `POST /api/images/search`.
+- **Clear** empties the query, exits search mode, and restores the default browse list (paginated scroll-load).
+- While a search is active, the left rail shows **ranked hits only** (not the browse list). Each thumb gets a **score badge overlay** (two decimal places, e.g. `0.87`). Preserve rank order from the API.
+- `limit` dropdown values (`5`, `10`, `20`, `50`) pass through to the search call; default `10`.
+- Empty search results: “No matches” in the rail; detail pane shows the standard empty placeholder.
+
+**Left rail — browse mode (default)**
+- Thumbnail only (no id/caption text in the rail). Square crop, `object-fit: cover`, selected state highlight matching `.list li button.selected`.
+- **Lazy dynamic load:** do not fetch the full org list up front. Load pages as the user scrolls (IntersectionObserver sentinel at list bottom). Thumbnails use `loading="lazy"` + 1MP-preferred path above.
+- Empty state: “No images yet” placeholder in the detail pane (same as MCP/Files).
+
+**Detail pane — 50 / 50 split**
+- **Left half (preview + read-only metadata):**
+  - Primary preview: 1MP (full fallback), click-to-zoom as above.
+  - `dl.meta-grid` fields: id, content_hash (truncated, copy affordance), `file_size_full` / `file_size_1mp`, width×height, `media_type`, `provenance`, `generation_prompt` (if generated), `enrichment_status`, `enrichment_attempts`, `error_message` (if failed), `embedding_space_id`, `created_at`, `updated_at`.
+  - Actions in header or footer: Re-enrich, Delete (with confirm).
+- **Right half (inline editors):**
+  - Always-visible fields for `caption`, `description`, `details` — same hints/word-tier copy as today’s edit modal.
+  - Save / Cancel (or debounced auto-save — default: explicit Save to match Agents inline-edit pattern).
+  - PATCH via existing `api.updateImage`; on save, update list item in place (no full reload).
+
+**Non-goals for this UI pass**
+- Upload / ingest from the Images tab (images still enter via chat/tool returns).
+- Bulk edit or tagging.
+- Embedding vector inspection.
+- Agent-scoped search (`agent_id` filter on `image_search`) — tab search is org-wide, matching admin inspection use.
+
+**Acceptance**
+- Layout matches Agents/Files/MCP list+detail shell; no card grid remains.
+- Rail and pane both use 1MP with full fallback; no “View full” button.
+- Click pane preview → full-res zoom; click zoomed image or backdrop → dismiss.
+- Search bar with limit dropdown, Search/Clear buttons; Enter triggers search.
+- Active search replaces browse rail with ranked results and per-thumb score overlays.
+- Selecting an image in a 100+ image browse corpus does not require loading all thumbnails before interaction (paginated/incremental list).
+- Caption/description/details editable inline without a modal; save round-trips through PATCH.
+- All metadata fields from `PydanticImage` that are user-meaningful are visible on the preview half.
+
+**Implementation notes**
+- Refactor `letta-vision-client/frontend/src/routes/Images.svelte`; extract subcomponents if needed (`ImageListRail`, `ImageDetailPane`, `ImageSearchBar`) but keep one route file unless it grows past ~400 lines.
+- Reuse shared CSS tokens from `Mcp.svelte` / `Files.svelte` (`.list`, `.detail`, `.meta-grid`, `.detail-header`).
+- **New API:** `POST /v1/images/search` in `letta/server/rest_api/routers/v1/images.py` delegating to `search_images_hybrid`; client `backend/routes/images.py` + `api.searchImages` in `api.js`.
+- **Browse pagination:** `GET /v1/images` returns `{ images, has_more }` with `limit`, `after_created_at`, and `after_id` cursor params (`ImageManager.list_async`). Client browse uses page size 50 + IntersectionObserver sentinel.
+
+## 13. Client shell (GA polish)
+
+**Tab order & default.** Nav order: **Chat → Images → Files → Agents → MCP → Providers**. **Chat** is the default tab on load (`currentTab` default + `initFromHash` fallback). Hash routing unchanged per tab (`#chat`, `#images`, etc.).
+
+**Chat mount-once.** `App.svelte` mounts Chat on first visit and keeps it alive (hidden via CSS) so tab switches do not abort streams, lose drafts, or re-fetch history.
+
+**Chat performance (shipped with GA client).**
+- **Conversation sidebar:** list endpoint only — no per-conversation `messages.list(limit=1)` preview fetch; sidebar shows name + `last_message_at`; sort by `last_message_at` desc.
+- **History window:** `GET /history` returns `{ messages, has_more }` (default `limit=50`); “Load older messages” at thread top via `before` cursor; `full=true` for system-context modal fallback only.
+- **Deferred memory:** agent blocks/open-files load when the Memory panel opens, not on every agent select.

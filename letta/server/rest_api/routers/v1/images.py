@@ -1,29 +1,67 @@
+from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 
-from letta.schemas.image import ImageMetadataUpdate, PydanticImage
+from letta.schemas.image import (
+    ImageListResponse,
+    ImageMetadataUpdate,
+    ImageSearchHit,
+    ImageSearchRequest,
+    ImageSearchResponse,
+    PydanticImage,
+)
 from letta.schemas.user import User as PydanticUser
 from letta.server.rest_api.dependencies import HeaderParams, get_headers, get_letta_server
 from letta.server.server import SyncServer
 from letta.services.image_ingest import schedule_image_re_enrichment
 from letta.services.image_manager import ImageManager
 from letta.services.object_store.client import get_object_store_client
+from letta.services.recall.hybrid_search import search_images_hybrid
 
 router = APIRouter(prefix="/images", tags=["images"])
 
 
-@router.get("", response_model=List[PydanticImage])
+@router.get("", response_model=ImageListResponse)
 async def list_images(
-    limit: Optional[int] = Query(None, description="Max images to return; omit for full org corpus"),
+    limit: Optional[int] = Query(None, description="Page size; omit for full org corpus"),
     enrichment_status: Optional[str] = None,
+    after_created_at: Optional[datetime] = Query(None, description="Cursor: created_at of last row from prior page"),
+    after_id: Optional[str] = Query(None, description="Cursor: id tie-breaker when created_at matches"),
     server: SyncServer = Depends(get_letta_server),
     headers: HeaderParams = Depends(get_headers),
 ):
     actor = await server.user_manager.get_actor_or_default_async(actor_id=headers.actor_id)
     mgr = ImageManager()
-    return await mgr.list_async(actor, limit=limit, enrichment_status=enrichment_status)
+    images, has_more = await mgr.list_async(
+        actor,
+        limit=limit,
+        enrichment_status=enrichment_status,
+        after_created_at=after_created_at,
+        after_id=after_id,
+    )
+    return ImageListResponse(images=images, has_more=has_more)
+
+
+@router.post("/search", response_model=ImageSearchResponse)
+async def search_images(
+    body: ImageSearchRequest,
+    server: SyncServer = Depends(get_letta_server),
+    headers: HeaderParams = Depends(get_headers),
+):
+    actor = await server.user_manager.get_actor_or_default_async(actor_id=headers.actor_id)
+    hits = await search_images_hybrid(body.query, actor, limit=body.limit)
+    return ImageSearchResponse(
+        results=[
+            ImageSearchHit(
+                handle=h.handle,
+                description=h.description or h.snippet,
+                score=h.score,
+            )
+            for h in hits
+        ]
+    )
 
 
 @router.get("/{image_id}", response_model=PydanticImage)
