@@ -357,15 +357,30 @@ class LettaCoreToolExecutor(ToolExecutor):
 
     async def archival_memory_insert(
         self, agent_state: AgentState, actor: User, content: str, tags: Optional[list[str]] = None
-    ) -> Optional[str]:
-        await self.passage_manager.insert_passage(
+    ) -> Optional[dict]:
+        passages = await self.passage_manager.insert_passage(
             agent_state=agent_state,
             text=content,
             actor=actor,
             tags=tags,
         )
         await self.agent_manager.rebuild_system_prompt_async(agent_id=agent_state.id, actor=actor, force=True)
-        return None
+        if not passages:
+            return {"message": "No memory inserted.", "results": []}
+        inserted = []
+        for passage in passages:
+            timestamp = passage.created_at.isoformat() if passage.created_at else "Unknown"
+            inserted.append(
+                {
+                    "id": passage.id,
+                    "timestamp": timestamp,
+                    "tags": passage.tags or [],
+                }
+            )
+        return {
+            "message": f"Inserted {len(inserted)} memor{'y' if len(inserted) == 1 else 'ies'}.",
+            "results": inserted,
+        }
 
     async def core_memory_append(self, agent_state: AgentState, actor: User, label: str, content: str) -> str:
         if agent_state.memory.get_block(label).read_only:
