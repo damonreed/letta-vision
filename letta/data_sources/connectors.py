@@ -104,8 +104,8 @@ async def load_data(connector: DataConnector, source: Source, passage_manager: P
                     passages.append(passage)
                     embedding_to_document_name[hashable_embedding] = file_name
 
-                # insert passages into passage store
-                await passage_manager.create_many_passages_async(passages, actor)
+                # insert passages into passage store (fixed batch path stamps embedding_space_id)
+                await passage_manager.create_many_source_passages_async(passages, file_metadata, actor)
                 passage_count += len(passages)
 
                 # Reset for next batch
@@ -139,7 +139,7 @@ async def load_data(connector: DataConnector, source: Source, passage_manager: P
                 passages.append(passage)
                 embedding_to_document_name[hashable_embedding] = file_name
 
-            await passage_manager.create_many_passages_async(passages, actor)
+            await passage_manager.create_many_source_passages_async(passages, file_metadata, actor)
             passage_count += len(passages)
 
     return passage_count, file_count

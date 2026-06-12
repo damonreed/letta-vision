@@ -15,7 +15,6 @@ _DEFAULT_VLM_CAPTION_COST_PER_CALL = 0.002
 class TableUpliftCounts:
     needs_uplift: int = 0
     legacy_unknown_space: int = 0
-    legacy_4096_only: int = 0
     total_rows: int = 0
 
 

@@ -1,9 +1,9 @@
 # FR: Historic Embedding Uplift & Corpus Conversion
 
-Status: **Ready for GA review** — uplift **executed and validated on sliver** (2026-06-11); client §12–§13 shipped; post-uplift operational fixes landed (see §14)
+Status: **GA signed off** (2026-06-12) — uplift **executed and validated on sliver** (2026-06-11); client §12–§13 shipped; post-uplift operational fixes landed (see §14); `embedding_legacy_4096` dropped (alembic `v062` + ORM)
 Author: Ada (architecture); implementation by Cursor
 Depends on: v0.6.0-rc (shipped & validated on sliver against new data) — see `IMPLEMENTATION_REPORT_v0.6.0_unified-embedding-recall.md`
-Grounded in as-built: five vector tables (`archival_passages`, `source_passages`, `file_archives`, `messages`, `images`); dual-column passages/archives (`embedding_legacy_4096` + `embedding Vector(768)`); deployment-global embedding (`LETTA_DEFAULT_EMBEDDING_HANDLE` = `openrouter/google/gemini-embedding-2` @768); atomic message embed guard (`embeddings/write.py::write_message_embedding_atomic`); content-addressed object store with wire-byte sizing (`object_store/client.py`); `image_ingest.py` sync+background pipeline.
+Grounded in as-built: five vector tables (`archival_passages`, `source_passages`, `file_archives`, `messages`, `images`); single 768-dim `embedding` column on passages/archives (legacy 4096 column dropped at GA); deployment-global embedding (`LETTA_DEFAULT_EMBEDDING_HANDLE` = `openrouter/google/gemini-embedding-2` @768); atomic message embed guard (`embeddings/write.py::write_message_embedding_atomic`); content-addressed object store with wire-byte sizing (`object_store/client.py`); `image_ingest.py` sync+background pipeline.
 
 This FR runs in **two ordered parts**. Part 1 (base64→object conversion) must complete before Part 2 (re-embed), because Part 1 creates the image records Part 2 embeds, and the message re-embed in Part 2 folds in image caption gists that don't exist until Part 1's records are enriched.
 
@@ -14,14 +14,14 @@ This FR runs in **two ordered parts**. Part 1 (base64→object conversion) must 
 v0.6.0-rc moved all *new* writes into the unified 768 gemini-embedding-2 space and made images first-class object-store records. Two bodies of historic data remained outside that world until uplift (now **resolved on sliver**, 2026-06-11):
 
 1. **Inline base64 images in `messages.content`.** Pre-rc (v0.3.0 vision) messages carried image bytes inline as base64 `ImageContent` blocks — not `images` records, not in the object store, not pixel-embedded, and bloating the `messages` table. Part 1 converted recoverable blocks to `LettaImage` refs + object-store blobs.
-2. **Un-embedded historic rows.** `archival_passages`, `source_passages`, and `file_archives` had `NULL` in the 768 `embedding` column (vectors in `embedding_legacy_4096`). Pre-rc `messages` had no vector. Part 2 re-embedded the full corpus under GA space id `6490a4b17e06a258`.
+2. **Un-embedded historic rows.** `archival_passages`, `source_passages`, and `file_archives` had `NULL` in the 768 `embedding` column (historic vectors previously in a padded 4096 column, since dropped). Pre-rc `messages` had no vector. Part 2 re-embedded the full corpus under GA space id `6490a4b17e06a258`.
 
-Recall now covers the full migrated corpus. **`embedding_legacy_4096` drop** remains the final schema cleanup step after Ada sign-off.
+Recall now covers the full migrated corpus. **`embedding_legacy_4096` dropped** at GA (alembic `v062_drop_legacy_emb` ships with ORM mapping removal).
 
 ## 2. Goals
 
 - **Part 1:** Convert every recoverable inline base64 image in `messages.content` into an `images` record + object-store blob + lightweight `LettaImage` reference, rewriting the message content to the reference form. Deduplicate by content hash against the existing `images` table. Idempotent and resumable. Net effect: large `messages` size reduction and historic images become enrichable/searchable.
-- **Part 2:** Roll-fill the 768 `embedding` column across all five vector tables from retained source text/pixels, under the single deployment space id, resumably and idempotently, then validate recall quality and HNSW performance on the full corpus, then drop `embedding_legacy_4096`.
+- **Part 2:** Roll-fill the 768 `embedding` column across all five vector tables from retained source text/pixels, under the single deployment space id, resumably and idempotently, then validate recall quality and HNSW performance on the full corpus, then drop the legacy 4096 column (shipped at GA).
 - Land the two recall post-processing gaps (per-source diversity cap + image/message dedup) **with** this uplift, since uplift is what fills the vector leg and makes their absence visible.
 - **Images tab UI** (client): replace the current card grid with the same list + detail shell used by Agents / Providers / Files / MCP — thumbnail rail on the left, selected-image workspace on the right. See §12.
 - **Client shell** (client): Chat-first nav, mount-once Chat, windowed history, conversation sidebar without N+1. See §13.
@@ -101,7 +101,7 @@ Implement the two deferred recall post-steps now, because uplift fills the vecto
 - **HNSW:** index built/usable on the full corpus; spot-check latency vs the prior flat scan.
 - **Part 1 size:** report `messages` table size before/after.
 - **Dedup/diversity:** verify a chunked file no longer floods top-K and an image+referencing-message appear once.
-- **Then and only then:** drop `embedding_legacy_4096` from `archival_passages`, `source_passages`, `file_archives` (final migration). Keep a snapshot until post-drop validation passes.
+- **Then and only then:** drop the legacy 4096 column from `archival_passages`, `source_passages`, `file_archives` (final migration, shipped `v062`). Keep a snapshot until post-drop validation passes.
 
 ### 7.1 Sliver validation results (2026-06-11)
 
@@ -121,7 +121,7 @@ Uplift executed on sliver via `scripts/historic_uplift.py` (Part 1 convert → e
 
 **Empirical agent validation:** Lyra (`agent-35a1c263…`) exercised hybrid search across layers, archival insert/search, file reading notes, and multiple new image generations — system behavior judged solid end-to-end.
 
-**Legacy column drop:** deferred until Ada sign-off; snapshot retained.
+**Legacy column drop:** shipped at GA (`v062_drop_legacy_emb` + ORM); snapshot retained through post-drop validation.
 
 **Known content/query caveats (not indexing bugs):**
 - `file_contents_search` embeds passage **text only** — filename tokens (e.g. `ada_attire_notes.txt`) are not in the vector payload; literal-name queries may miss unless the name appears in passage body. Trigram leg can still surface weak matches.
@@ -144,12 +144,18 @@ Uplift executed on sliver via `scripts/historic_uplift.py` (Part 1 convert → e
 ## 10. Cursor Implementation Notes
 
 - Reuse `image_ingest.py` sync primitive and `object_store/client.py` in Part 1 — the only net-new code is the message scan/classify and the in-place content rewrite.
-- Both parts are management jobs (CLI/manage command), resumable, `--dry-run` first, with per-table `(created_at, id)` checkpoints. Not alembic — alembic only does the final `embedding_legacy_4096` drop.
-- The idempotency predicates (`embedding IS NULL OR embedding_space_id IS DISTINCT FROM :target`) are the resume mechanism; trust them over external state.
-- Run order in one orchestrated command: Part 1 convert → image enrich pass → {passages/archives in parallel} + message re-embed (after image enrich) → validate → (manual gate) → drop legacy.
+- Both parts are management jobs (CLI/manage command), resumable, `--dry-run` first, with per-table `(created_at, id)` checkpoints. Not alembic — alembic only does the final legacy 4096 column drop (shipped as `v062`).
+- The idempotency predicates (`embedding IS NULL OR embedding_space_id IS DISTINCT FROM :target`) are the resume mechanism; trust them over external state **except for Part 2 live runs with `--resume` (default)** — see runbook notes below.
+- Run order in one orchestrated command: Part 1 convert → image enrich pass → {passages/archives in parallel} + message re-embed (after image enrich) → validate → (manual gate) → drop legacy column.
 - Land the diversity cap + dedup (§6) in the same release; add space-guard exclusion logging early so the backfill is observable.
 - `estimate_embeddings_size` extension prints the cost report and is also the dry-run for Part 2.
 - Images tab (§12–§13): `Images.svelte` list+detail inspector, `POST /v1/images/search`, paginated `GET /v1/images`, Chat default tab + mount-once + history window — see implementation report GA client section.
+
+### 10.1 Operations runbook
+
+**Message uplift version constant.** `UPLIFT_MESSAGE_EMBED_VERSION` in `historic_reembed.py` is a fixed write target (currently `3`) while the selection predicate uses `embedding_version < MESSAGE_EMBED_VERSION` (`2`). Consequences: (a) a future space migration re-running this job without bumping the constant will have the monotonic guard reject every row already at v3 (`3 < 3` is false → counted as failed); (b) any steady-state re-run re-embeds every live v1 message unnecessarily (cost, not correctness). **Before each uplift:** bump `UPLIFT_MESSAGE_EMBED_VERSION` to `max(existing)+1` (or at least above the prior uplift's target).
+
+**Part 2 checkpoint vs idempotency.** Part 2's checkpoint cursor takes precedence over the idempotency predicates when `--resume` is set (default). The Part 2 checkpoint is **not** deleted on completion (Part 1's is). A batch embed failure advances the cursor past the failed batch before raising — failed rows are never retried under default `resume=True`. The zero-NULLs coverage gate catches this, but if `failed > 0` after a run: re-run with `--no-resume`, then delete `~/.letta/uplift_part2_checkpoint.json` after a clean run.
 
 ## 11. Risk Register
 
@@ -163,6 +169,7 @@ Uplift executed on sliver via `scripts/historic_uplift.py` (Part 1 convert → e
 | Dropping legacy column too early | Drop only after full validation; keep snapshot through post-drop check |
 | Partial run leaves mixed state | Space guard keeps mixed state *correct* (rolling fill); resume continues from cursor |
 | New insert omits `embedding_space_id` | Fixed §14.1 — all create paths stamp space id; one pre-fix row backfilled on sliver |
+| Legacy `POST /v1/sources/{id}/upload` path | Fixed §14.1 — `DirectoryConnector` now uses `create_many_source_passages_async` |
 
 ## 12. Images Tab UI (client)
 
@@ -274,6 +281,8 @@ These landed during live sliver validation after uplift execution. They are part
 
 **Fix:** Include `embedding_space_id` in `common_fields` for all three create paths (`passage_manager.py`). One sliver row backfilled manually.
 
+**Same bug class on legacy source upload.** The deprecated `POST /v1/sources/{id}/upload` → `load_file_to_source` → `DirectoryConnector` → `create_many_passages_async` path bypassed `_prepare_passage_embedding_fields` (no `embedding_space_id`, no `prepare_vector_for_write`). The live folders route uses `FileProcessor` → `create_many_source_passages_async` (fixed), so sliver validation never exercised it. **Fix:** `connectors.load_data` now calls `create_many_source_passages_async` with `file_metadata`.
+
 ### 14.2 Tool return serialization
 
 | Tool | Issue | Fix |
@@ -296,3 +305,9 @@ Deleting a file hung because the backend blocked on `recompile_conversations_for
 ### 14.6 Message uplift monotonic guard
 
 Historic message re-embed writes were blocked when `embedding_version` guard rejected v2 updates. **Fix:** guard adjustment so uplift writes can supersede prior text-only vectors (`embeddings/write.py` path used by historic re-embed).
+
+### 14.7 Historic tool-return byte strip
+
+**Problem:** Historic `messages.tool_returns` could retain persisted base64 image bytes from `fetch_image` and similar tools, bloating the messages table after Part 1 converted inline content images.
+
+**Fix:** `letta/services/migration/tool_return_byte_strip.py` — resumable CLI subcommand `strip-tool-returns` (see `scripts/historic_uplift.py`). Rewrites tool returns to lightweight refs; idempotent with checkpoint at `~/.letta/uplift_tool_return_strip_checkpoint.json`.

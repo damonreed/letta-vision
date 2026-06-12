@@ -55,7 +55,6 @@ async def _count_table(
     org_id: str,
     target_space_id: str,
     *,
-    has_legacy_column: bool = False,
     extra_needs_uplift: Optional[Any] = None,
 ) -> TableUpliftCounts:
     needs_uplift = or_(
@@ -78,21 +77,9 @@ async def _count_table(
     needs_count = int((await session.execute(needs_q)).scalar_one() or 0)
     legacy_unknown = int((await session.execute(legacy_unknown_q)).scalar_one() or 0)
 
-    legacy_4096_only = 0
-    if has_legacy_column:
-        legacy_q = (
-            select(func.count())
-            .select_from(model)
-            .where(model.organization_id == org_id)
-            .where(model.embedding_legacy_4096.isnot(None))
-            .where(model.embedding.is_(None))
-        )
-        legacy_4096_only = int((await session.execute(legacy_q)).scalar_one() or 0)
-
     return TableUpliftCounts(
         needs_uplift=needs_count,
         legacy_unknown_space=legacy_unknown,
-        legacy_4096_only=legacy_4096_only,
         total_rows=total_rows,
     )
 
@@ -102,9 +89,9 @@ async def collect_part2_inventory(actor: PydanticUser, target_space_id: str, dep
     image_extra = or_(ImageRecord.enrichment_status == "failed", ImageRecord.enrichment_status == "pending")
 
     async with db_registry.async_session() as session:
-        archival = await _count_table(session, ArchivalPassage, org_id, target_space_id, has_legacy_column=True)
-        source = await _count_table(session, SourcePassage, org_id, target_space_id, has_legacy_column=True)
-        archives = await _count_table(session, FileArchive, org_id, target_space_id, has_legacy_column=True)
+        archival = await _count_table(session, ArchivalPassage, org_id, target_space_id)
+        source = await _count_table(session, SourcePassage, org_id, target_space_id)
+        archives = await _count_table(session, FileArchive, org_id, target_space_id)
         messages = await _count_table(
             session,
             MessageModel,
@@ -212,11 +199,11 @@ def format_inventory_report(report: UpliftInventoryReport) -> str:
         "",
         "--- Part 2: re-embed backlog ---",
         f"archival_passages needs uplift: {p2.archival_passages.needs_uplift} / {p2.archival_passages.total_rows}"
-        f" (legacy-unknown: {p2.archival_passages.legacy_unknown_space}, legacy-4096-only: {p2.archival_passages.legacy_4096_only})",
+        f" (legacy-unknown: {p2.archival_passages.legacy_unknown_space})",
         f"source_passages needs uplift: {p2.source_passages.needs_uplift} / {p2.source_passages.total_rows}"
-        f" (legacy-unknown: {p2.source_passages.legacy_unknown_space}, legacy-4096-only: {p2.source_passages.legacy_4096_only})",
+        f" (legacy-unknown: {p2.source_passages.legacy_unknown_space})",
         f"file_archives needs uplift: {p2.file_archives.needs_uplift} / {p2.file_archives.total_rows}"
-        f" (legacy-unknown: {p2.file_archives.legacy_unknown_space}, legacy-4096-only: {p2.file_archives.legacy_4096_only})",
+        f" (legacy-unknown: {p2.file_archives.legacy_unknown_space})",
         f"messages needs uplift: {p2.messages.needs_uplift} / {p2.messages.total_rows}",
         f"images needs uplift: {p2.images.needs_uplift} / {p2.images.total_rows}",
         f"images pending/failed enrichment: {p2.images_pending_or_failed}",

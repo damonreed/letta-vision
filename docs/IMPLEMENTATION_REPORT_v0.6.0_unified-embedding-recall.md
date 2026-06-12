@@ -2,8 +2,8 @@
 
 **To:** Ada  
 **From:** Damon (letta-stack)  
-**Date:** 2026-06-09 (updated 2026-06-11)  
-**Status:** **Ready for GA review** — uplift **executed and validated on sliver**; all recall layers coalescing correctly through `search_all`; post-uplift operational fixes shipped (§ Post-uplift validation)  
+**Date:** 2026-06-09 (updated 2026-06-12)  
+**Status:** **GA signed off** — uplift **executed and validated on sliver**; all recall layers coalescing correctly through `search_all`; post-uplift operational fixes shipped; `embedding_legacy_4096` dropped (`v062` + ORM)  
 **Baseline:** `v0.5.0` (three-tier filesystem memory)  
 **Specification:** [FR: Unified Embedding Space, Multimodal Image Memory & Unified Recall](FR_letta-vision_Unified-Embedding-Multimodal-Recall_v0.6.0-rc.md) (revision r2)  
 **Uplift specification:** [FR: Historic Embedding Uplift & Corpus Conversion](FR_letta-vision_Historic-Embedding-Uplift_v0.6.0-GA.md)
@@ -28,7 +28,7 @@ We implemented Ades's v0.6 FR through **Phases 1–9** of §14, with one deliber
 
 **Post-uplift fixes (2026-06-11):** archival insert `embedding_space_id` persistence, tool-return serialization for archival insert/search, message uplift monotonic guard, MiniMax duplicate thinking strip, file-delete background recompile (client). See § Post-uplift validation.
 
-**Recommendation for Ada:** Sign off on v0.6.0 GA. Remaining documented gaps (recall filter params, tool lexical fallback, space-guard logging, filename-not-in-passage-embed-text) are v0.6.1 observability/content improvements, not blockers. Legacy column drop (`embedding_legacy_4096`) awaits explicit post-sign-off migration.
+**Recommendation for Ada:** v0.6.0 GA signed off (2026-06-12). Remaining documented gaps (recall filter params, tool lexical fallback, space-guard logging, filename-not-in-passage-embed-text) are v0.6.1 observability/content improvements, not blockers. Legacy column drop shipped with ORM mapping removal (`v062_drop_legacy_emb`).
 
 ---
 
@@ -239,7 +239,7 @@ Messages re-embed at **`embedding_version = 2`** using `build_message_embed_text
 3. `enrich-pending` — until pending/failed image count is zero
 4. `reembed --dry-run` → `reembed` (all tables or per-table)
 5. `strip-tool-returns` — if historic tool returns still carry inline bytes
-6. Validate recall quality + HNSW performance → drop `embedding_legacy_4096`
+6. Validate recall quality + HNSW performance → drop legacy 4096 column (shipped `v062`)
 
 ---
 
@@ -346,10 +346,12 @@ Executed uplift on sliver; validated with Lyra live sessions (archival, file, im
 | **New archival insert invisible to search** | `create_agent_passage_async` omitted `embedding_space_id` from ORM write despite `_prepare_passage_embedding_fields` | Pass `embedding_space_id` in `common_fields` (agent batch + source create too) | `f6f53581f` |
 | **`archival_memory_insert` silent success** | Tool returned `None` | Return `{message, results: [{id, timestamp, tags}]}` | `f6f53581f` |
 | **Message uplift writes skipped** | Monotonic `embedding_version` guard blocked v2 historic writes | Guard fix for uplift path | `7de811781` |
+| **Legacy source upload invisible rows** | `DirectoryConnector` → deprecated `create_many_passages_async` skipped `_prepare_passage_embedding_fields` | Route through `create_many_source_passages_async` in `connectors.py` | GA sign-off fix |
 | **MiniMax duplicate thinking in UI** | Same analysis in `reasoning_message` and inline think tags in assistant text | `strip_duplicate_thinking_from_assistant_text()` when reasoning extracted separately | `dc6ec9501` |
 | **Reasoner models skip tool calls** | Kimi/MiniMax put tool intent in reasoning, finish without `tool_calls` | Operational: PATCH `enable_reasoner` per agent; documented in uplift FR §14.3 |
 | **`file_contents_search` miss on new file** | Passage embed text had no query token (filename not in embed payload); vector rank low | Not an indexing bug — query/content mismatch; optional follow-up: prepend filename to passage embed text |
 | **File delete hung** | Sync folder recompile blocked HTTP response | Background recompile + client optimistic UX | `d190cd0` (client) |
+| **Historic tool-return base64 bloat** | `fetch_image` tool returns persisted raw bytes in `messages.tool_returns` | `tool_return_byte_strip.py` + `strip-tool-returns` CLI subcommand | uplift tooling |
 
 **Sliver backfill:** one archival passage inserted before `f6f53581f` deploy had `embedding_space_id = NULL`; manually stamped to GA space. Post-deploy inserts stamp correctly.
 
@@ -379,8 +381,12 @@ Executed uplift on sliver; validated with Lyra live sessions (archival, file, im
 
 ### What remains
 
-1. **Drop `embedding_legacy_4096` columns** — after Ada sign-off; snapshot retained.
-2. **Optional v0.6.1 improvements** — see Pre-GA quality gaps below.
+1. **Optional v0.6.1 improvements** — see Pre-GA quality gaps below.
+
+### Uplift operations runbook (§10.1)
+
+- **Message uplift version:** Bump `UPLIFT_MESSAGE_EMBED_VERSION` before each space migration (currently `3`; predicate uses `MESSAGE_EMBED_VERSION = 2`). Without a bump, rows already at v3 fail the monotonic guard on re-run; steady-state re-runs unnecessarily re-embed v1 messages.
+- **Part 2 checkpoint:** With default `--resume`, the checkpoint cursor overrides idempotency predicates; checkpoint is retained after completion; batch failures advance the cursor past failed rows. If `failed > 0`: re-run with `--no-resume`, delete `~/.letta/uplift_part2_checkpoint.json` after a clean run.
 
 ### Pre-GA quality gaps (v0.6.1 candidates)
 
@@ -419,7 +425,6 @@ Agent `v060 test` on folder `v060-test`; Lyra `agent-35a1c263…` for post-uplif
 
 | Item | Recommendation |
 |------|----------------|
-| Drop `embedding_legacy_4096` | After Ada GA sign-off |
 | Recall filter params (`layers`, `time_range`, `source`) | v0.6.1 or document as limitation |
 | Tool lexical fallback | §7 r2 — `ILIKE` on name/description when tpuf off |
 | Space guard exclusion logging | Observability |
@@ -431,7 +436,7 @@ Agent `v060 test` on folder `v060-test`; Lyra `agent-35a1c263…` for post-uplif
 
 ## Recommendation to Ada
 
-**Sign off on v0.6.0 GA.** The implementation delivers Ades's core design on the full sliver corpus:
+**v0.6.0 GA signed off (2026-06-12).** The implementation delivers Ades's core design on the full sliver corpus:
 
 - One embedding space (768-dim gemini-embedding-2 GA, deployment-wide, space id `6490a4b17e06a258`)
 - Native pgvector with space guard (no silent cross-model garbage)
@@ -441,7 +446,7 @@ Agent `v060 test` on folder `v060-test`; Lyra `agent-35a1c263…` for post-uplif
 - Historic uplift executed: Part 1 conversion, enrichment, Part 2 re-embed
 - Post-uplift operational fixes for archival insert/search, message uplift guard, vision/reasoning UX, and file delete
 
-Remaining gaps (recall filter params, tool fallback, space-guard logging, filename-in-embed-text) are v0.6.1 polish items. **`embedding_legacy_4096` drop** is the only deferred schema step — run after sign-off with snapshot in place.
+Remaining gaps (recall filter params, tool fallback, space-guard logging, filename-in-embed-text) are v0.6.1 polish items. Legacy 4096 column drop shipped at GA (`v062_drop_legacy_emb` + ORM).
 
 ---
 

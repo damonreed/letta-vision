@@ -4,7 +4,7 @@ from sqlalchemy import JSON, Column, Index
 from sqlalchemy.orm import Mapped, declared_attr, mapped_column, relationship
 
 from letta.config import LettaConfig
-from letta.constants import DEPLOYMENT_EMBEDDING_DIM, MAX_EMBEDDING_DIM
+from letta.constants import DEPLOYMENT_EMBEDDING_DIM
 from letta.orm.custom_columns import CommonVector, EmbeddingConfigColumn
 from letta.orm.mixins import ArchiveMixin, FileMixin, OrganizationMixin, SourceMixin
 from letta.orm.sqlalchemy_base import SqlalchemyBase
@@ -32,18 +32,13 @@ class BasePassage(SqlalchemyBase, OrganizationMixin):
     # dual storage: json column for fast retrieval, junction table for efficient queries
     tags: Mapped[Optional[List[str]]] = mapped_column(JSON, nullable=True, doc="Tags associated with this passage")
 
-    # v0.6.0: 768-dim embedding for new writes; legacy 4096 column retained for historic rows
     if settings.database_engine is DatabaseChoice.POSTGRES:
         from pgvector.sqlalchemy import Vector
 
-        embedding_legacy_4096: Mapped[Optional[list]] = mapped_column(
-            Vector(MAX_EMBEDDING_DIM), nullable=True, doc="Historic padded vectors (migration FR)"
-        )
         embedding: Mapped[Optional[list]] = mapped_column(
             Vector(DEPLOYMENT_EMBEDDING_DIM), nullable=True, doc="Native-dim embedding for vector search"
         )
     else:
-        embedding_legacy_4096 = Column(CommonVector, nullable=True)
         embedding = Column(CommonVector, nullable=True)
 
     @declared_attr
