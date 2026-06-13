@@ -3,7 +3,7 @@
 **To:** Ada  
 **From:** Damon (letta-stack)  
 **Date:** 2026-06-09 (updated 2026-06-12)  
-**Status:** **GA signed off** — uplift **executed and validated on sliver**; all recall layers coalescing correctly through `search_all`; post-uplift operational fixes shipped; `embedding_legacy_4096` dropped (`v062` + ORM)  
+**Status:** **GA signed off** — uplift **executed and validated on sliver**; all recall layers coalescing correctly through `search_all`; post-uplift operational fixes shipped; `embedding_legacy_4096` dropped (`v062` + ORM); **v0.6.0 tagged** with OpenRouter `input_modalities` vision detection (`v063`)  
 **Baseline:** `v0.5.0` (three-tier filesystem memory)  
 **Specification:** [FR: Unified Embedding Space, Multimodal Image Memory & Unified Recall](FR_letta-vision_Unified-Embedding-Multimodal-Recall_v0.6.0-rc.md) (revision r2)  
 **Uplift specification:** [FR: Historic Embedding Uplift & Corpus Conversion](FR_letta-vision_Historic-Embedding-Uplift_v0.6.0-GA.md)
@@ -352,6 +352,7 @@ Executed uplift on sliver; validated with Lyra live sessions (archival, file, im
 | **`file_contents_search` miss on new file** | Passage embed text had no query token (filename not in embed payload); vector rank low | Not an indexing bug — query/content mismatch; optional follow-up: prepend filename to passage embed text |
 | **File delete hung** | Sync folder recompile blocked HTTP response | Background recompile + client optimistic UX | `d190cd0` (client) |
 | **Historic tool-return base64 bloat** | `fetch_image` tool returns persisted raw bytes in `messages.tool_returns` | `tool_return_byte_strip.py` + `strip-tool-returns` CLI subcommand | uplift tooling |
+| **OpenRouter vision false positives** | Registry globs flagged text-only OR models (e.g. deepseek-v4-pro) as vision-capable | `architecture.input_modalities` cache for `openrouter/*`; persisted `provider_models.supports_vision` (`v063`); manual override still wins | `fb03b28ac`, `d63337558` |
 
 **Sliver backfill:** one archival passage inserted before `f6f53581f` deploy had `embedding_space_id = NULL`; manually stamped to GA space. Post-deploy inserts stamp correctly.
 
@@ -445,6 +446,7 @@ Agent `v060 test` on folder `v060-test`; Lyra `agent-35a1c263…` for post-uplif
 - Reference-then-fetch via `image_fetch`; MCP tools deliver inline pixels
 - Historic uplift executed: Part 1 conversion, enrichment, Part 2 re-embed
 - Post-uplift operational fixes for archival insert/search, message uplift guard, vision/reasoning UX, and file delete
+- OpenRouter vision detection from `input_modalities` for `openrouter/*` (registry retained for BYOK); migration `v063_provider_models_vision`
 
 Remaining gaps (recall filter params, tool fallback, space-guard logging, filename-in-embed-text) are v0.6.1 polish items. Legacy 4096 column drop shipped at GA (`v062_drop_legacy_emb` + ORM).
 
@@ -464,6 +466,10 @@ Remaining gaps (recall filter params, tool fallback, space-guard logging, filena
 | `letta/services/migration/uplift_inventory.py` | Inventory + cost inputs |
 | `alembic/versions/v060_unified_embedding_multimodal_recall.py` | Core schema migration |
 | `alembic/versions/v061_file_archive_unified_embedding.py` | File archive embedding parity |
+| `alembic/versions/v062_drop_embedding_legacy_4096.py` | Legacy 4096 column drop |
+| `alembic/versions/v063_provider_models_supports_vision.py` | Persist OpenRouter vision flags at sync |
+| `letta/llm_api/model_registry.py` | Vision resolution: override → OR cache → registry |
+| `letta/schemas/providers/openrouter.py` | `model_has_image_input()` from `input_modalities` |
 | `letta/embeddings/message_embed_text.py` | Message embed v2 + caption gists |
 | `letta/services/image_ingest.py` | Ingest + enrichment + historic convert |
 | `letta/services/image_fetch.py` | `image_fetch` tool |

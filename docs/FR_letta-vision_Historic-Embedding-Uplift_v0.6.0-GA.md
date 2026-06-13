@@ -1,6 +1,6 @@
 # FR: Historic Embedding Uplift & Corpus Conversion
 
-Status: **GA signed off** (2026-06-12) — uplift **executed and validated on sliver** (2026-06-11); client §12–§13 shipped; post-uplift operational fixes landed (see §14); `embedding_legacy_4096` dropped (alembic `v062` + ORM)
+Status: **GA signed off** (2026-06-12) — uplift **executed and validated on sliver** (2026-06-11); client §12–§13 shipped; post-uplift operational fixes landed (see §14); `embedding_legacy_4096` dropped (alembic `v062` + ORM); **v0.6.0 tagged** with OpenRouter `input_modalities` vision detection (`v063`, §14.8)
 Author: Ada (architecture); implementation by Cursor
 Depends on: v0.6.0-rc (shipped & validated on sliver against new data) — see `IMPLEMENTATION_REPORT_v0.6.0_unified-embedding-recall.md`
 Grounded in as-built: five vector tables (`archival_passages`, `source_passages`, `file_archives`, `messages`, `images`); single 768-dim `embedding` column on passages/archives (legacy 4096 column dropped at GA); deployment-global embedding (`LETTA_DEFAULT_EMBEDDING_HANDLE` = `openrouter/google/gemini-embedding-2` @768); atomic message embed guard (`embeddings/write.py::write_message_embedding_atomic`); content-addressed object store with wire-byte sizing (`object_store/client.py`); `image_ingest.py` sync+background pipeline.
@@ -311,3 +311,14 @@ Historic message re-embed writes were blocked when `embedding_version` guard rej
 **Problem:** Historic `messages.tool_returns` could retain persisted base64 image bytes from `fetch_image` and similar tools, bloating the messages table after Part 1 converted inline content images.
 
 **Fix:** `letta/services/migration/tool_return_byte_strip.py` — resumable CLI subcommand `strip-tool-returns` (see `scripts/historic_uplift.py`). Rewrites tool returns to lightweight refs; idempotent with checkpoint at `~/.letta/uplift_tool_return_strip_checkpoint.json`.
+
+### 14.8 OpenRouter vision detection (v0.6.0 release)
+
+**Problem:** `supports_vision` for `openrouter/*` models came only from a curated server registry. Registry globs could false-positive text-only routed models (e.g. `openrouter/deepseek/deepseek-v4-pro` lists `input_modalities: ["text"]` on OpenRouter but matched a broad pattern). Operators could not trust `/v1/models` or the Providers UI attach gate without manual overrides.
+
+**Fix (shipped at v0.6.0 tag):** OpenRouter `GET /v1/models` → `architecture.input_modalities` is the authoritative signal for `openrouter/*` handles. Resolution order: `model_overrides.json` (manual) → OpenRouter catalog cache → registry globs for BYOK / non-OpenRouter paths. Flags are stamped at provider sync on `provider_models.supports_vision` (alembic `v063_provider_models_vision`) and warmed into an in-memory cache at startup so `render_policy`, message validation, and `/v1/models` stay consistent without per-request OR calls.
+
+**Operator notes:**
+- After upgrade, restart the server once so startup sync repopulates cache + DB column.
+- Remove erroneous manual overrides for text-only OR models (e.g. deepseek-v4-pro) — auto detection should show Vision **No**.
+- BYOK and `openai-proxy/*` handles still use the curated registry + `LETTA_VISION_MODELS_EXTRA`.

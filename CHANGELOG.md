@@ -9,6 +9,38 @@ Fork releases use `v0.x.y` tags (diverged from upstream Letta `0.16.x` at v0.2.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-13
+
+### Added
+
+- Unified 768-dim embedding space with deployment-global resolver (`LETTA_DEFAULT_EMBEDDING_HANDLE`).
+- `images` table, object-store client, ingest/enrichment pipeline, pixel embed path.
+- Message vectors with atomic version guard; caption-gist injection at embed v2+.
+- Hybrid per-layer search (vector + lexical + RRF) and fused `search_all` recall tool.
+- `image_fetch` / `image_search` tools; ref-only tool-return image persistence.
+- Tiered vision render policy (FULL / 1MP / TEXT) with wire-byte cap.
+- Historic uplift CLI (`scripts/historic_uplift.py`) — Part 1 conversion, enrichment, Part 2 re-embed, tool-return byte strip.
+- Images REST API: paginated list, hybrid search, content variants, inline metadata PATCH.
+- OpenRouter vision detection from `architecture.input_modalities`; `provider_models.supports_vision` (`v063`).
+- Alembic `v060`–`v063` migrations (unified embedding, file archive parity, legacy column drop, vision flags).
+
+### Changed
+
+- Turbopuffer client and dual-write paths removed; all memory search is pgvector + `pg_trgm`.
+- Deployment embedding moved to `openrouter/google/gemini-embedding-2` GA @768.
+- `recall` renamed to `search_all`; `fetch_image` renamed to `image_fetch` (deprecated aliases retained).
+- Archival/file recall tool output labels folder hits as `file` with `filename=`.
+- `model_supports_vision()` precedence: manual override → OpenRouter cache → registry (non-OR only).
+
+### Fixed
+
+- Archival insert missing `embedding_space_id`; legacy source upload path stamping.
+- Message uplift monotonic guard blocking v2 historic writes.
+- MiniMax duplicate thinking in assistant text when reasoning extracted separately.
+- Vision agents: `generate_image` / tool-return images in byte-budget walk and hydration.
+- `list_llm_models` validation when `supports_vision` is null on DB rows.
+- GitHub MCP `get_file_contents` EmbeddedResource text extraction.
+
 ## [0.5.0] - 2026-06-01
 
 ### Added
@@ -71,7 +103,8 @@ Fork releases use `v0.x.y` tags (diverged from upstream Letta `0.16.x` at v0.2.0
 
 Pre-vision baseline: multimodal content blocks validated via K2.6 smoke test; partial timeout wiring.
 
-[Unreleased]: https://github.com/damonreed/letta-vision/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/damonreed/letta-vision/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/damonreed/letta-vision/releases/tag/v0.6.0
 [0.5.0]: https://github.com/damonreed/letta-vision/releases/tag/v0.5.0
 [0.4.0]: https://github.com/damonreed/letta-vision/releases/tag/v0.4.0
 [0.3.0]: https://github.com/damonreed/letta-vision/releases/tag/v0.3.0
