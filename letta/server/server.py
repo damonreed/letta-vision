@@ -1329,7 +1329,7 @@ class SyncServer(object):
                     provider_name=provider.name,
                     provider_category=provider.provider_category,
                     max_tokens=max_tokens,
-                    supports_vision=model.supports_vision,
+                    supports_vision=model.supports_vision if model.supports_vision is not None else False,
                 )
                 llm_models.append(llm_config)
 
