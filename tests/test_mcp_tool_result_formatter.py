@@ -89,3 +89,39 @@ def test_tool_return_to_openai_chat_content_includes_data_url():
     assert openai_content[0]["type"] == "text"
     assert openai_content[1]["type"] == "image_url"
     assert huge in openai_content[1]["image_url"]["url"]
+
+
+def test_mcp_content_to_letta_parts_extracts_embedded_text_resource():
+    """GitHub MCP get_file_contents returns TextContent + EmbeddedResource(TextResourceContents)."""
+    content = [
+        McpTextContent(type="text", text="successfully downloaded text file (SHA: abc)"),
+        McpEmbeddedResource(
+            type="resource",
+            resource=TextResourceContents(
+                uri="repo://damonreed/letta-vision/sha/abc/contents/README.md",
+                mimeType="text/plain; charset=utf-8",
+                text="# Hello\n\nVision support section.",
+            ),
+        ),
+    ]
+    out = mcp_content_to_letta_parts(content)
+    assert isinstance(out, str)
+    assert "successfully downloaded text file" in out
+    assert "# Hello" in out
+    assert "Vision support section" in out
+    assert "omitted non-text MCP content" not in out
+
+
+def test_mcp_content_to_letta_parts_small_embedded_resource_not_omitted():
+    content = [
+        McpEmbeddedResource(
+            type="resource",
+            resource=TextResourceContents(
+                uri="repo://damonreed/letta-vision/sha/abc/contents/.python-version",
+                mimeType="text/plain; charset=utf-8",
+                text="3.12\n",
+            ),
+        ),
+    ]
+    out = mcp_content_to_letta_parts(content)
+    assert out == "3.12"

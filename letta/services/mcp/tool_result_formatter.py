@@ -15,8 +15,10 @@ import logging
 import re
 from typing import Any, List, Union
 
+from mcp.types import EmbeddedResource as McpEmbeddedResource
 from mcp.types import ImageContent as McpImageContent
 from mcp.types import TextContent as McpTextContent
+from mcp.types import TextResourceContents
 
 from letta.schemas.letta_message_content import Base64Image, ImageContent, TextContent
 
@@ -122,6 +124,71 @@ def _strip_embedded_base64_from_text(text: str) -> str:
     return redact_base64_in_text(text)
 
 
+def _resource_field(resource: Any, *names: str) -> Any:
+    for name in names:
+        if isinstance(resource, dict) and name in resource:
+            return resource[name]
+        if hasattr(resource, name):
+            return getattr(resource, name)
+    return None
+
+
+def _mime_type_is_text(mime_type: str | None) -> bool:
+    if not mime_type:
+        return False
+    base = mime_type.split(";", 1)[0].strip().lower()
+    return base.startswith("text/") or base in {"application/json", "application/xml", "application/yaml", "application/x-yaml"}
+
+
+def _resource_contents_to_text(resource: Any) -> str | None:
+    """Extract readable text from MCP TextResourceContents or text-like BlobResourceContents."""
+    if resource is None:
+        return None
+
+    text = _resource_field(resource, "text")
+    if isinstance(text, str) and text:
+        return text
+
+    mime_type = _resource_field(resource, "mimeType", "mime_type")
+    blob = _resource_field(resource, "blob")
+    if isinstance(blob, str) and blob and _mime_type_is_text(mime_type):
+        try:
+            return base64.b64decode(blob).decode("utf-8")
+        except Exception:
+            return None
+
+    return None
+
+
+def _embedded_resource_to_text(piece: Any) -> str | None:
+    if isinstance(piece, McpEmbeddedResource):
+        resource = piece.resource
+    elif isinstance(piece, dict) and piece.get("type") == "resource":
+        resource = piece.get("resource")
+    else:
+        return None
+
+    text = _resource_contents_to_text(resource)
+    if text:
+        return text
+
+    mime_type = _resource_field(resource, "mimeType", "mime_type")
+    uri = _resource_field(resource, "uri")
+    blob = _resource_field(resource, "blob")
+    if blob:
+        size = len(blob) * 3 // 4
+        return f"[binary MCP resource omitted: {mime_type or 'application/octet-stream'}, ~{size} bytes, uri={uri}]"
+    if uri:
+        return f"[MCP resource omitted: {mime_type or 'unknown type'}, uri={uri}]"
+    return None
+
+
+def _append_mcp_text(text_parts: list[str], text: str, *, strip_base64: bool = True) -> None:
+    if not text:
+        return
+    text_parts.append(_strip_embedded_base64_from_text(text) if strip_base64 else text)
+
+
 def _dedupe_image_parts(images: list[ImageContent]) -> list[ImageContent]:
     seen: set[str] = set()
     unique: list[ImageContent] = []
@@ -146,10 +213,11 @@ def mcp_content_to_letta_parts(content: list[Any]) -> Union[str, List[Union[Text
 
     for piece in content or []:
         if isinstance(piece, McpTextContent):
-            if piece.text:
-                text_parts.append(_strip_embedded_base64_from_text(piece.text))
-        elif hasattr(piece, "text") and getattr(piece, "text", None):
-            text_parts.append(_strip_embedded_base64_from_text(piece.text))
+            _append_mcp_text(text_parts, piece.text or "")
+        elif (embedded_text := _embedded_resource_to_text(piece)) is not None:
+            _append_mcp_text(text_parts, embedded_text)
+        elif hasattr(piece, "text") and getattr(piece, "text", None) and not hasattr(piece, "resource"):
+            _append_mcp_text(text_parts, piece.text)
         elif _is_image_content(piece):
             letta_image = _mcp_image_to_letta(piece)
             if letta_image:
@@ -217,10 +285,11 @@ def format_mcp_tool_content(content: list[Any]) -> str:
 
     for piece in content or []:
         if isinstance(piece, McpTextContent):
-            if piece.text:
-                text_parts.append(piece.text)
-        elif hasattr(piece, "text") and getattr(piece, "text", None):
-            text_parts.append(piece.text)
+            _append_mcp_text(text_parts, piece.text or "", strip_base64=False)
+        elif (embedded_text := _embedded_resource_to_text(piece)) is not None:
+            _append_mcp_text(text_parts, embedded_text, strip_base64=False)
+        elif hasattr(piece, "text") and getattr(piece, "text", None) and not hasattr(piece, "resource"):
+            _append_mcp_text(text_parts, piece.text, strip_base64=False)
         elif _is_image_content(piece):
             image_count += 1
             image_bytes += _image_byte_estimate(piece)
