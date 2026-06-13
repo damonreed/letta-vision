@@ -1,16 +1,15 @@
 """
-Curated vision-capability registry for LLM models.
+Vision-capability resolution for LLM models.
 
-Single source of truth for supports_vision flags and README documentation.
+Precedence (see model_supports_vision):
+1. Manual override (model_overrides.json from letta-vision-client)
+2. OpenRouter catalog cache (architecture.input_modalities) for openrouter/* handles
+3. Curated registry globs + LETTA_VISION_MODELS_EXTRA for BYOK / non-OpenRouter paths
 
-There are 12 registry rows (FR §3.1). A live catalog may show ~30 entries with
-supports_vision=true because dated variants expand via globs (e.g. six gpt-4o*
-snapshots). Over-inclusion is worse than under-inclusion: a false positive lets
-the client attach images and the provider may silently degrade.
-
-Patterns are intentionally conservative:
-- o3-mini* is excluded (text/reasoning-only on the API; o3 and o3-pro have vision)
-- gpt-4 / claude-3 / llama must not match (see tests/test_vision_capability.py)
+The curated registry (FR §3.1) remains authoritative for openai-proxy, Moonshot BYOK,
+Ollama, etc. OpenRouter base-provider handles use the OpenRouter /v1/models catalog
+at sync time — over-inclusion is worse than under-inclusion for those paths too, but
+the upstream catalog is the practical source of truth for hundreds of routed models.
 """
 
 from __future__ import annotations
@@ -80,6 +79,7 @@ def model_max_image_parts(model: str, handle: str | None = None) -> int | None:
 _EXTRA_VISION_MODELS: set[str] | None = None
 _BRIDGE_VISION_OVERRIDES: dict[str, bool] | None = None
 _BRIDGE_OVERRIDES_MTIME: float | None = None
+_OPENROUTER_VISION_BY_MODEL_ID: dict[str, bool] = {}
 
 
 def _normalize_model_basename(model_id: str) -> str:
@@ -167,13 +167,47 @@ def _matches_pattern(model_id: str, pattern: str) -> bool:
     return model_id_lower == pattern_lower
 
 
-def model_supports_vision(model: str, handle: str | None = None) -> bool:
-    """Return True if the model is flagged as vision-capable in the registry."""
-    identifiers = _model_identifiers(model, handle)
-    bridge_override = _bridge_override_for_identifiers(identifiers, _load_bridge_vision_overrides())
-    if bridge_override is not None:
-        return bridge_override
+def _is_openrouter_handle(handle: str | None) -> bool:
+    if not handle:
+        return False
+    return handle.lower().startswith("openrouter/")
 
+
+def refresh_openrouter_vision_cache(models: list[dict]) -> None:
+    """Rebuild in-memory OpenRouter vision cache from a /v1/models list response."""
+    from letta.schemas.providers.openrouter import OpenRouterProvider
+
+    global _OPENROUTER_VISION_BY_MODEL_ID
+    updated: dict[str, bool] = {}
+    for model in models:
+        model_id = model.get("id")
+        if not isinstance(model_id, str) or not model_id.strip():
+            continue
+        updated[model_id] = OpenRouterProvider.model_has_image_input(model)
+    _OPENROUTER_VISION_BY_MODEL_ID = updated
+
+
+def warm_openrouter_vision_cache_from_db(model_id: str, supports_vision: bool | None) -> None:
+    """Seed or update one OpenRouter model id in the vision cache (e.g. after DB sync)."""
+    if not model_id or supports_vision is None:
+        return
+    _OPENROUTER_VISION_BY_MODEL_ID[model_id] = bool(supports_vision)
+
+
+def warm_openrouter_vision_cache_from_db_rows(rows: list[tuple[str, bool | None]]) -> None:
+    """Bulk-load persisted OpenRouter vision flags (e.g. after startup DB sync)."""
+    for model_id, supports_vision in rows:
+        warm_openrouter_vision_cache_from_db(model_id, supports_vision)
+
+
+def openrouter_model_supports_vision(model_id: str) -> bool | None:
+    """Return cached OpenRouter vision flag for a model id, or None if unknown."""
+    if model_id in _OPENROUTER_VISION_BY_MODEL_ID:
+        return _OPENROUTER_VISION_BY_MODEL_ID[model_id]
+    return None
+
+
+def _registry_supports_vision(identifiers: list[str]) -> bool:
     extra = {x.lower() for x in _load_extra_vision_models()}
     for ident in identifiers:
         if ident.lower() in extra:
@@ -183,6 +217,32 @@ def model_supports_vision(model: str, handle: str | None = None) -> bool:
             if _matches_pattern(ident_lower, pattern):
                 return True
     return False
+
+
+def _openrouter_cache_supports_vision(model: str, handle: str | None, identifiers: list[str]) -> bool | None:
+    if not any(_is_openrouter_handle(ident) for ident in identifiers):
+        return None
+    for ident in identifiers:
+        if ident in _OPENROUTER_VISION_BY_MODEL_ID:
+            return _OPENROUTER_VISION_BY_MODEL_ID[ident]
+    cached = openrouter_model_supports_vision(model)
+    if cached is not None:
+        return cached
+    return False
+
+
+def model_supports_vision(model: str, handle: str | None = None) -> bool:
+    """Return True if the model accepts image content blocks for the configured handle."""
+    identifiers = _model_identifiers(model, handle)
+    bridge_override = _bridge_override_for_identifiers(identifiers, _load_bridge_vision_overrides())
+    if bridge_override is not None:
+        return bridge_override
+
+    openrouter_cached = _openrouter_cache_supports_vision(model, handle, identifiers)
+    if openrouter_cached is not None:
+        return openrouter_cached
+
+    return _registry_supports_vision(identifiers)
 
 
 def registry_table_rows() -> list[tuple[str, str]]:

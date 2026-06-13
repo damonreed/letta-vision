@@ -501,6 +501,12 @@ class SyncServer(object):
             except Exception as e:
                 logger.error(f"Failed to sync models for provider {persisted_provider.name}: {e}", exc_info=True)
 
+        try:
+            await self.provider_manager.warm_openrouter_vision_cache_async(actor=self.default_user)
+            logger.info("Warmed OpenRouter vision cache from provider_models")
+        except Exception as e:
+            logger.error(f"Failed to warm OpenRouter vision cache: {e}", exc_info=True)
+
     async def init_mcp_clients(self):
         # TODO: remove this
         mcp_server_configs = self.get_mcp_servers()
@@ -1323,6 +1329,7 @@ class SyncServer(object):
                     provider_name=provider.name,
                     provider_category=provider.provider_category,
                     max_tokens=max_tokens,
+                    supports_vision=model.supports_vision,
                 )
                 llm_models.append(llm_config)
 

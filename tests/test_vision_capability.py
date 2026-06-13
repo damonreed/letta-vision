@@ -6,7 +6,7 @@ import pytest
 
 from letta.errors import LettaInvalidArgumentError, LettaMessageTooLargeError, LettaVisionCapabilityError
 from letta.helpers.message_helper import validate_message_creates_for_vision
-from letta.llm_api.model_registry import model_supports_vision
+from letta.llm_api.model_registry import model_supports_vision, refresh_openrouter_vision_cache
 from letta.schemas.letta_message_content import Base64Image, ImageContent, TextContent
 from letta.schemas.llm_config import LLMConfig
 from letta.helpers.vision_context_hint import (
@@ -26,6 +26,14 @@ def _llm_config(model: str, handle: str | None = None) -> LLMConfig:
         handle=handle or f"openrouter/{model}",
         provider_name="openrouter",
     )
+
+
+@pytest.fixture(autouse=True)
+def _warm_openrouter_kimi_in_cache():
+    refresh_openrouter_vision_cache(
+        [{"id": "moonshotai/kimi-k2.6", "architecture": {"input_modalities": ["text", "image"]}}]
+    )
+    yield
 
 
 def test_registry_kimi_k26():

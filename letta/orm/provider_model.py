@@ -68,6 +68,7 @@ class ProviderModel(SqlalchemyBase):
     max_context_window: Mapped[int] = mapped_column(nullable=True, doc="Context window size for the model")
     supports_token_streaming: Mapped[bool] = mapped_column(Boolean, nullable=True, doc="Whether streaming is supported")
     supports_tool_calling: Mapped[bool] = mapped_column(Boolean, nullable=True, doc="Whether tool calling is supported")
+    supports_vision: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True, doc="Whether vision/image input is supported")
     embedding_dim: Mapped[Optional[int]] = mapped_column(nullable=True, doc="Embedding dimension for embedding models")
 
     # relationships

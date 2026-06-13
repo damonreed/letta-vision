@@ -115,6 +115,10 @@ class OpenRouterProvider(OpenAIProvider):
         )
 
         data = response.get("data", response)
+        if isinstance(data, list):
+            from letta.llm_api.model_registry import refresh_openrouter_vision_cache
+
+            refresh_openrouter_vision_cache(data)
 
         configs = []
         for model in data:
@@ -131,6 +135,7 @@ class OpenRouterProvider(OpenAIProvider):
                 context_window_size = self.get_model_context_window_size(model_name)
                 logger.debug(f"Model {model_name} missing context_length, using default: {context_window_size}")
 
+            supports_vision = self.model_has_image_input(model)
             configs.append(
                 LLMConfig(
                     model=model_name,
@@ -141,10 +146,24 @@ class OpenRouterProvider(OpenAIProvider):
                     max_tokens=self.get_default_max_output_tokens(model_name),
                     provider_name=self.name,
                     provider_category=self.provider_category,
+                    supports_vision=supports_vision,
                 )
             )
 
         return configs
+
+    @staticmethod
+    def model_has_image_input(model: dict) -> bool:
+        """True when OpenRouter architecture lists image among input modalities."""
+        architecture = model.get("architecture")
+        if isinstance(architecture, dict):
+            input_modalities = architecture.get("input_modalities") or []
+            if any(str(m).lower() == "image" for m in input_modalities):
+                return True
+            modality = str(architecture.get("modality") or "").lower()
+            if "image" in modality:
+                return True
+        return False
 
     @staticmethod
     def _model_has_embedding_output(model: dict) -> bool:

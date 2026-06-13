@@ -656,6 +656,7 @@ class ProviderManager:
         max_context_window: Optional[int] = None,
         supports_token_streaming: Optional[bool] = None,
         supports_tool_calling: Optional[bool] = None,
+        supports_vision: Optional[bool] = None,
         embedding_dim: Optional[int] = None,
     ) -> None:
         """Create or update a synced model row; revive soft-deleted rows on handle rename."""
@@ -681,6 +682,7 @@ class ProviderManager:
                 row.max_context_window = max_context_window
                 row.supports_token_streaming = supports_token_streaming
                 row.supports_tool_calling = supports_tool_calling
+                row.supports_vision = supports_vision
             else:
                 row.embedding_dim = embedding_dim
             await row.update_async(session)
@@ -699,6 +701,7 @@ class ProviderManager:
             max_context_window=max_context_window,
             supports_token_streaming=supports_token_streaming,
             supports_tool_calling=supports_tool_calling,
+            supports_vision=supports_vision,
             embedding_dim=embedding_dim,
         )
         logger.info(f"    Creating new {model_type} model {handle}")
@@ -728,6 +731,7 @@ class ProviderManager:
                 row.max_context_window = max_context_window
                 row.supports_token_streaming = supports_token_streaming
                 row.supports_tool_calling = supports_tool_calling
+                row.supports_vision = supports_vision
             else:
                 row.embedding_dim = embedding_dim
             await row.update_async(session)
@@ -817,6 +821,7 @@ class ProviderManager:
                     supports_token_streaming=llm_config.model_endpoint_type
                     in ["openai", "anthropic", "deepseek", "openrouter"],
                     supports_tool_calling=True,
+                    supports_vision=llm_config.supports_vision,
                 )
 
             # Process embedding models - add new ones
@@ -836,6 +841,20 @@ class ProviderManager:
                     if hasattr(embedding_config, "embedding_dim")
                     else None,
                 )
+
+    @enforce_types
+    @trace_method
+    async def warm_openrouter_vision_cache_async(self, actor: PydanticUser) -> None:
+        """Load persisted OpenRouter supports_vision flags into the in-memory resolver cache."""
+        from letta.llm_api.model_registry import warm_openrouter_vision_cache_from_db_rows
+
+        models = await self.list_models_async(actor=actor, model_type="llm", enabled=True)
+        rows = [
+            (model.name, model.supports_vision)
+            for model in models
+            if model.model_endpoint_type == "openrouter" and model.supports_vision is not None
+        ]
+        warm_openrouter_vision_cache_from_db_rows(rows)
 
     @enforce_types
     @trace_method

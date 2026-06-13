@@ -47,6 +47,7 @@ class ProviderModel(ProviderModelBase):
     max_context_window: Optional[int] = Field(None, description="Context window size for the model")
     supports_token_streaming: Optional[bool] = Field(None, description="Whether token streaming is supported")
     supports_tool_calling: Optional[bool] = Field(None, description="Whether tool calling is supported")
+    supports_vision: Optional[bool] = Field(None, description="Whether vision/image input is supported")
     embedding_dim: Optional[int] = Field(None, description="Embedding dimension for embedding models")
 
 

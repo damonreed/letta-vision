@@ -36,7 +36,10 @@ Upstream Letta already carried multimodal content blocks; this release adds the 
 New module: `letta/llm_api/model_registry.py`
 
 - Curated list `VISION_CAPABLE_MODELS` (provider label + model id or glob pattern).
-- `model_supports_vision(model, handle)` checks identifiers, globs, and `LETTA_VISION_MODELS_EXTRA` (comma-separated operator override).
+- `model_supports_vision(model, handle)` resolution order:
+  1. Manual override (`model_overrides.json` from letta-vision-client)
+  2. OpenRouter catalog cache (`architecture.input_modalities` from `GET /v1/models`, persisted on `provider_models.supports_vision`) for `openrouter/*` handles
+  3. Registry globs + `LETTA_VISION_MODELS_EXTRA` for BYOK and non-OpenRouter paths
 - `merge_provider_preferences()` passes OpenRouter routing hints from `LLMConfig.provider_preferences` into the OpenAI-compatible client `extra_body`.
 
 Wired into:
