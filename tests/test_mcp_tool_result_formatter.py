@@ -112,6 +112,36 @@ def test_mcp_content_to_letta_parts_extracts_embedded_text_resource():
     assert "omitted non-text MCP content" not in out
 
 
+def test_mcp_content_to_letta_parts_preserves_multiple_images_with_shared_prefix():
+    """Batch generate_image JPEGs often share identical header bytes in base64."""
+    shared_prefix = "A" * 128
+    img_a = shared_prefix + "111"
+    img_b = shared_prefix + "222"
+    content = [
+        McpTextContent(type="text", text='{"status": "success", "count": 2}'),
+        McpImageContent(type="image", data=img_a, mimeType="image/jpeg"),
+        McpImageContent(type="image", data=img_b, mimeType="image/jpeg"),
+    ]
+    out = mcp_content_to_letta_parts(content)
+    assert isinstance(out, list)
+    image_parts = [p for p in out if isinstance(p, ImageContent)]
+    assert len(image_parts) == 2
+    assert image_parts[0].source.data == img_a
+    assert image_parts[1].source.data == img_b
+
+
+def test_mcp_content_to_letta_parts_dedupes_exact_duplicate_images():
+    img = "B" * 200
+    content = [
+        McpTextContent(type="text", text='{"status": "success", "count": 2}'),
+        McpImageContent(type="image", data=img, mimeType="image/png"),
+        McpImageContent(type="image", data=img, mimeType="image/png"),
+    ]
+    out = mcp_content_to_letta_parts(content)
+    image_parts = [p for p in out if isinstance(p, ImageContent)]
+    assert len(image_parts) == 1
+
+
 def test_mcp_content_to_letta_parts_small_embedded_resource_not_omitted():
     content = [
         McpEmbeddedResource(

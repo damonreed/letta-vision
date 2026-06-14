@@ -67,6 +67,50 @@ async def test_ingest_images_in_tool_return_uses_generated_provenance(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_ingest_images_in_tool_return_ingests_all_images(monkeypatch):
+    call_count = 0
+
+    async def fake_ingest(data, media_type, actor, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        return f"image-test-{call_count}"
+
+    monkeypatch.setattr("letta.services.image_ingest.ingest_image_sync", fake_ingest)
+
+    shared_prefix = "A" * 128
+    msg = Message(
+        role=MessageRole.tool,
+        content=[TextContent(text="generated images")],
+        tool_returns=[
+            ToolReturn(
+                status="success",
+                func_response=[
+                    TextContent(text="two renders"),
+                    ImageContent(
+                        source=Base64Image(
+                            media_type="image/jpeg",
+                            data=shared_prefix + "111",
+                        )
+                    ),
+                    ImageContent(
+                        source=Base64Image(
+                            media_type="image/jpeg",
+                            data=shared_prefix + "222",
+                        )
+                    ),
+                ],
+            )
+        ],
+    )
+    image_ids = await ingest_images_in_message(msg, actor=None)
+
+    assert image_ids == ["image-test-1", "image-test-2"]
+    func_response = msg.tool_returns[0].func_response
+    assert func_response[1].source.file_id == "image-test-1"
+    assert func_response[2].source.file_id == "image-test-2"
+
+
+@pytest.mark.asyncio
 async def test_ingest_images_skips_fetch_image_tool_returns(monkeypatch):
     ingest_called = False
 

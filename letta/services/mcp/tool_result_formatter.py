@@ -9,6 +9,7 @@ next LLM call in the same turn; text metadata is kept compact for logs/limits.
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import json
 import logging
@@ -189,12 +190,19 @@ def _append_mcp_text(text_parts: list[str], text: str, *, strip_base64: bool = T
     text_parts.append(_strip_embedded_base64_from_text(text) if strip_base64 else text)
 
 
+def _image_payload_key(img: ImageContent) -> str:
+    """Full-content key — batch JPEGs often share identical header prefixes."""
+    data = getattr(getattr(img, "source", None), "data", None) or ""
+    media_type = getattr(getattr(img, "source", None), "media_type", None) or "image/png"
+    digest = hashlib.sha256(data.encode("ascii")).hexdigest()
+    return f"{media_type}:{digest}"
+
+
 def _dedupe_image_parts(images: list[ImageContent]) -> list[ImageContent]:
     seen: set[str] = set()
     unique: list[ImageContent] = []
     for img in images:
-        data = getattr(getattr(img, "source", None), "data", None) or ""
-        key = data[:128] if data else str(id(img))
+        key = _image_payload_key(img)
         if key in seen:
             continue
         seen.add(key)
