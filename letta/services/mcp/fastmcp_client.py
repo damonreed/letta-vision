@@ -9,6 +9,7 @@ implementations that used the lower-level MCP SDK directly.
 """
 
 from contextlib import AsyncExitStack
+from datetime import timedelta
 from typing import List, Optional, Tuple
 
 import httpx
@@ -19,9 +20,14 @@ from mcp import Tool as MCPTool
 from letta.errors import LettaMCPConnectionError
 from letta.functions.mcp_client.types import SSEServerConfig, StreamableHTTPServerConfig
 from letta.log import get_logger
-from letta.services.mcp.base_client import _log_mcp_tool_error
+from letta.services.mcp.base_client import (
+    _log_mcp_tool_error,
+    run_with_mcp_timeout,
+    unwrap_exception_group,
+)
 from letta.services.mcp.tool_result_formatter import mcp_content_to_letta_parts
 from letta.services.mcp.server_side_oauth import ServerSideOAuth
+from letta.settings import tool_settings
 
 logger = get_logger(__name__)
 
@@ -76,8 +82,14 @@ class AsyncFastMCPSSEClient:
             )
 
             self.client = Client(transport)
-            await self.client._connect()
+            await run_with_mcp_timeout(
+                self.client._connect(),
+                timeout_seconds=tool_settings.mcp_connect_to_server_timeout,
+                operation="server connection",
+            )
             self.initialized = True
+        except TimeoutError as e:
+            raise LettaMCPConnectionError(message=str(e), server_name=self.server_config.server_name) from e
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 401:
                 raise LettaMCPConnectionError(message="401 Unauthorized", server_name=self.server_config.server_name) from e
@@ -112,7 +124,11 @@ class AsyncFastMCPSSEClient:
             RuntimeError: If client has not been initialized
         """
         self._check_initialized()
-        tools = await self.client.list_tools()
+        tools = await run_with_mcp_timeout(
+            self.client.list_tools(),
+            timeout_seconds=tool_settings.mcp_list_tools_timeout,
+            operation="tool listing",
+        )
         if serialize:
             serializable_tools = []
             for tool in tools:
@@ -142,11 +158,14 @@ class AsyncFastMCPSSEClient:
         """
         self._check_initialized()
         try:
-            result = await self.client.call_tool(tool_name, tool_args)
+            result = await run_with_mcp_timeout(
+                self.client.call_tool(tool_name, tool_args),
+                timeout_seconds=tool_settings.mcp_execute_tool_timeout,
+                operation="tool execution",
+                tool_name=tool_name,
+            )
         except Exception as e:
-            exception_to_check = e
-            if hasattr(e, "exceptions") and e.exceptions and len(e.exceptions) == 1:
-                exception_to_check = e.exceptions[0]
+            exception_to_check = unwrap_exception_group(e)
             _log_mcp_tool_error(logger, tool_name, exception_to_check)
             return str(exception_to_check), False
 
@@ -216,11 +235,18 @@ class AsyncFastMCPStreamableHTTPClient:
                 url=self.server_config.server_url,
                 headers=headers if headers else None,
                 auth=self.oauth,  # Pass ServerSideOAuth instance (or None)
+                sse_read_timeout=timedelta(seconds=tool_settings.mcp_execute_tool_timeout),
             )
 
             self.client = Client(transport)
-            await self.client._connect()
+            await run_with_mcp_timeout(
+                self.client._connect(),
+                timeout_seconds=tool_settings.mcp_connect_to_server_timeout,
+                operation="server connection",
+            )
             self.initialized = True
+        except TimeoutError as e:
+            raise LettaMCPConnectionError(message=str(e), server_name=self.server_config.server_name) from e
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 401:
                 raise LettaMCPConnectionError(message="401 Unauthorized", server_name=self.server_config.server_name) from e
@@ -255,7 +281,11 @@ class AsyncFastMCPStreamableHTTPClient:
             RuntimeError: If client has not been initialized
         """
         self._check_initialized()
-        tools = await self.client.list_tools()
+        tools = await run_with_mcp_timeout(
+            self.client.list_tools(),
+            timeout_seconds=tool_settings.mcp_list_tools_timeout,
+            operation="tool listing",
+        )
         if serialize:
             serializable_tools = []
             for tool in tools:
@@ -285,11 +315,14 @@ class AsyncFastMCPStreamableHTTPClient:
         """
         self._check_initialized()
         try:
-            result = await self.client.call_tool(tool_name, tool_args)
+            result = await run_with_mcp_timeout(
+                self.client.call_tool(tool_name, tool_args),
+                timeout_seconds=tool_settings.mcp_execute_tool_timeout,
+                operation="tool execution",
+                tool_name=tool_name,
+            )
         except Exception as e:
-            exception_to_check = e
-            if hasattr(e, "exceptions") and e.exceptions and len(e.exceptions) == 1:
-                exception_to_check = e.exceptions[0]
+            exception_to_check = unwrap_exception_group(e)
             _log_mcp_tool_error(logger, tool_name, exception_to_check)
             return str(exception_to_check), False
 

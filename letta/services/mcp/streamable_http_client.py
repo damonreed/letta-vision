@@ -40,8 +40,9 @@ class AsyncStreamableHTTPMCPClient(AsyncBaseMCPClient):
                 headers[self.AGENT_ID_HEADER] = self.agent_id
 
             # Use OAuth provider if available, otherwise use regular headers
-            # Pass timeout to prevent httpx.ReadTimeout errors on slow connections
-            timeout = timedelta(seconds=tool_settings.mcp_connect_to_server_timeout)
+            # Pass timeout to prevent httpx.ReadTimeout errors on slow connections.
+            # Use the execute-tool budget so streamable HTTP reads can outlive connect.
+            timeout = timedelta(seconds=max(tool_settings.mcp_connect_to_server_timeout, tool_settings.mcp_execute_tool_timeout))
             if self.oauth_provider:
                 streamable_http_cm = streamablehttp_client(
                     server_config.server_url, headers=headers if headers else None, auth=self.oauth_provider, timeout=timeout
