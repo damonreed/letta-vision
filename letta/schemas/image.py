@@ -27,7 +27,10 @@ class PydanticImage(OrmMetadataBase):
     generation_prompt: Optional[str] = None
     caption: Optional[str] = Field(default=None, description="Short label, 20-50 words.")
     description: Optional[str] = Field(default=None, description="Search-oriented summary, 100-200 words.")
-    details: Optional[str] = Field(default=None, description="Thorough literal description, 1000 words.")
+    details: Optional[str] = Field(
+        default=None,
+        description="Prompt-ready literal description, 1500-2000 words with structured section headings.",
+    )
     embedding: Optional[list[float]] = None
     embedding_config: Optional[EmbeddingConfig] = None
     embedding_space_id: Optional[str] = None
@@ -40,11 +43,14 @@ class PydanticImage(OrmMetadataBase):
 
 
 class ImageMetadataUpdate(BaseModel):
-    """User-editable image text tiers: caption (20-50 words), description (100-200 words), details (1000 words)."""
+    """User-editable image text tiers: caption (20-50 words), description (100-200 words), details (1500-2000 words)."""
 
     caption: Optional[str] = Field(default=None, description="Short label, 20-50 words.")
     description: Optional[str] = Field(default=None, description="Search-oriented summary, 100-200 words.")
-    details: Optional[str] = Field(default=None, description="Thorough literal description, 1000 words.")
+    details: Optional[str] = Field(
+        default=None,
+        description="Prompt-ready literal description, 1500-2000 words with structured section headings.",
+    )
 
 
 class ImageListResponse(BaseModel):

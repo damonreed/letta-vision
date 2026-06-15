@@ -44,10 +44,32 @@ _CAPTION_FALLBACK = {
 _CAPTION_PROMPT = (
     "Describe this image. Respond with a single JSON object only (no markdown fences) "
     "with exactly these keys:\n"
-    '- "caption": 20-50 words, concise label\n'
-    '- "description": 100-200 words, literal content nouns for search indexing\n'
-    '- "details": 1000 words, thorough literal description\n'
-    "Base every field on pixels only, not assumptions."
+    '- "caption": 20-50 words, concise label.\n'
+    '- "description": 100-200 words, literal content nouns for search indexing.\n'
+    '- "details": 1500-2000 words, thorough literal description structured as a prompt-ready '
+    "image-generation spec.\n"
+    "\n"
+    'Inside the "details" string value only, include these exact section headings in order:\n'
+    "MEDIUM_AND_STYLE: rendering medium and style (oil painting, digital painting, photorealistic, "
+    "screenshot, etc.); brushwork, surface quality, photographic characteristics; painterly, "
+    "naturalistic, cinematic, glamour, or stylized.\n"
+    "ASPECT_RATIO_AND_FRAMING: aspect ratio, camera angle, shot distance, orientation, subject placement.\n"
+    "SUBJECT: every person or creature — apparent age, pose, posture, gesture, expression, gaze, body "
+    "orientation, proportions, clothing, accessories, hair, skin texture, hands, feet, held or worn items; "
+    "exact colors and materials; age, wear, asymmetry, awkwardness, imperfection.\n"
+    "LIGHTING_AND_COLOR: light direction and quality, time of day, shadows, highlights, palette, contrast; "
+    "painterly, natural, cinematic, glamour, or high-contrast.\n"
+    "ENVIRONMENT_AND_PROPS: objects, architecture, plants, furniture, background; placement, materials, colors.\n"
+    "SPATIAL_LAYOUT: spatial relations (left/right, foreground/background, above/below, near/far); enough "
+    "geometry to reconstruct the scene.\n"
+    "TEXT_AND_SYMBOLS: visible text, symbols, logos, UI, watermarks, emblems; reproduce text exactly.\n"
+    "PRESERVE: unusual, awkward, asymmetrical, worn, handmade, aged, or non-standard choices a model might "
+    "normalize away; what must NOT change; anti-normalization (no de-aging, skin smoothing, idealized "
+    "proportions, added glamour/cinematic styling, converting worn/handmade items into new/fashion versions).\n"
+    "\n"
+    "Base every field on pixels only, not assumptions. Do not infer story, identity, emotion, or off-screen "
+    "content. Describe exactly what is visible. The details field must be prompt-ready and preserve the "
+    "image's specific imperfections and choices."
 )
 
 
@@ -679,7 +701,7 @@ async def _embed_image_vector(
 
 
 async def _generate_three_tier_captions(raw: bytes, media_type: str, actor: PydanticUser) -> dict:
-    """Single structured VLM call for caption (20-50 words), description (100-200 words), details (1000 words)."""
+    """Single structured VLM call for caption (20-50 words), description (100-200 words), details (1500-2000 words)."""
     handle = settings.image_caption_model_handle or settings.default_llm_handle
     if not handle:
         return _fallback_captions()
@@ -715,7 +737,7 @@ async def _generate_three_tier_captions(raw: bytes, media_type: str, actor: Pyda
         tools=[],
         system=None,
     )
-    # Details tier targets ~1000 words; allow ample completion budget.
+    # Details tier targets 1500-2000 words; allow ample completion budget.
     request_data["max_tokens"] = 8192
 
     response = await client.request_async(request_data, caption_config)
