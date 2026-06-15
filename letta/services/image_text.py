@@ -27,6 +27,30 @@ def _field_value(image: PydanticImage, field: ImageTextField) -> str:
     return getattr(image, field) or ""
 
 
+def format_image_llm_reference(
+    file_id: str,
+    *,
+    caption: Optional[str] = None,
+    description: Optional[str] = None,
+) -> str:
+    """Companion text for hydrated images: handle plus optional caption/description tiers."""
+    image_id = normalize_image_handle(file_id)
+    lines = [f"Image ID: {image_id} (image_fetch, image_get_text, image_edit_text)"]
+    if caption and str(caption).strip():
+        lines.append(f"Caption: {str(caption).strip()}")
+    if description and str(description).strip():
+        lines.append(f"Description: {str(description).strip()}")
+    return "\n".join(lines)
+
+
+def format_image_llm_reference_from_metadata(file_id: str, info: dict) -> str:
+    return format_image_llm_reference(
+        file_id,
+        caption=info.get("caption"),
+        description=info.get("description"),
+    )
+
+
 def format_image_text_block(image: PydanticImage) -> str:
     """Human-readable summary of all three text tiers plus file metadata."""
     media_type = image.media_type or "image/jpeg"

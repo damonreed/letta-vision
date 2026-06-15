@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import base64
 import copy
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 from letta.log import get_logger
 from letta.schemas.letta_message_content import ImageContent, LettaImage, TextContent
@@ -12,8 +12,7 @@ from letta.schemas.llm_config import LLMConfig
 from letta.schemas.message import Message
 from letta.schemas.user import User as PydanticUser
 from letta.services.image_manager import ImageManager
-from letta.services.object_store.client import get_object_store_client
-from letta.services.vision.image_derivative import generate_1mp_now
+from letta.services.image_text import format_image_llm_reference_from_metadata, normalize_image_handle
 from letta.services.vision.render_policy import (
     RenderTier,
     compute_image_render_decisions,
@@ -21,6 +20,8 @@ from letta.services.vision.render_policy import (
 )
 
 logger = get_logger(__name__)
+
+ImagePart = Union[ImageContent, dict]
 
 
 async def _load_image_metadata(image_ids: set[str], actor: PydanticUser) -> Dict[str, dict]:
@@ -60,9 +61,36 @@ def _collect_tool_return_letta_image_ids(message: Message) -> set[str]:
     return set(_tool_return_letta_image_ids(message))
 
 
-def _text_for_demoted_image(file_id: str, info: dict) -> str:
-    description = (info.get("description") or "").strip() or f"Image {file_id}"
-    return f"{description} [{file_id} — use image_fetch to view pixels]"
+def _part_text(part) -> str:
+    if isinstance(part, TextContent):
+        return part.text or ""
+    if isinstance(part, dict) and part.get("type") == "text":
+        return part.get("text") or ""
+    return ""
+
+
+def _preceding_part_has_image_id(parts: list, file_id: str) -> bool:
+    """Skip duplicate reference text when the prior block already names this image."""
+    if not parts:
+        return False
+    text = _part_text(parts[-1])
+    if not text:
+        return False
+    normalized = normalize_image_handle(file_id)
+    return normalized in text or file_id in text
+
+
+def _reference_text_part(file_id: str, info: dict, *, as_dict: bool):
+    text = format_image_llm_reference_from_metadata(file_id, info)
+    if as_dict:
+        return {"type": "text", "text": text}
+    return TextContent(text=text)
+
+
+def _maybe_prepend_reference(parts: list, file_id: str, info: dict, *, as_dict: bool) -> None:
+    if _preceding_part_has_image_id(parts, file_id):
+        return
+    parts.append(_reference_text_part(file_id, info, as_dict=as_dict))
 
 
 async def _hydrate_letta_image_bytes(
@@ -84,6 +112,47 @@ async def _hydrate_letta_image_bytes(
     raw = await store.get_bytes(key)
     media_type = info.get("media_type") or "image/png"
     return base64.standard_b64encode(raw).decode("ascii"), media_type
+
+
+async def _apply_letta_image_hydration(
+    *,
+    file_id: str,
+    info: dict,
+    tier: RenderTier,
+    store,
+    updated_parts: list,
+    image_part: ImagePart,
+    as_dict: bool,
+) -> None:
+    if tier == RenderTier.TEXT:
+        if not _preceding_part_has_image_id(updated_parts, file_id):
+            updated_parts.append(_reference_text_part(file_id, info, as_dict=as_dict))
+        return
+
+    _maybe_prepend_reference(updated_parts, file_id, info, as_dict=as_dict)
+
+    if isinstance(image_part, ImageContent) and isinstance(image_part.source, LettaImage):
+        media_type = image_part.source.media_type or info.get("media_type") or "image/png"
+        try:
+            data, hydrated_type = await _hydrate_letta_image_bytes(file_id, tier, info, store)
+            if data:
+                image_part.source.data = data
+                image_part.source.media_type = hydrated_type or media_type
+        except Exception as exc:
+            logger.warning("Failed to hydrate image %s: %s", file_id, exc)
+        updated_parts.append(image_part)
+        return
+
+    source = dict(image_part.get("source") or {})
+    try:
+        data, hydrated_type = await _hydrate_letta_image_bytes(file_id, tier, info, store)
+        if data:
+            source["data"] = data
+            source["media_type"] = source.get("media_type") or hydrated_type or info.get("media_type")
+            image_part = {**image_part, "source": source}
+    except Exception as exc:
+        logger.warning("Failed to hydrate image %s: %s", file_id, exc)
+    updated_parts.append(image_part)
 
 
 async def _hydrate_tool_return_letta_images(
@@ -111,17 +180,15 @@ async def _hydrate_tool_return_letta_images(
                     continue
                 info = metadata.get(file_id, {})
                 tier = render_decisions.get(file_id, RenderTier.FULL) if render_decisions else RenderTier.FULL
-                if tier == RenderTier.TEXT:
-                    updated_parts.append(TextContent(text=_text_for_demoted_image(file_id, info)))
-                    continue
-                try:
-                    data, media_type = await _hydrate_letta_image_bytes(file_id, tier, info, store)
-                    if data:
-                        part.source.data = data
-                        part.source.media_type = part.source.media_type or media_type
-                except Exception as exc:
-                    logger.warning("Failed to hydrate tool-return image %s: %s", file_id, exc)
-                updated_parts.append(part)
+                await _apply_letta_image_hydration(
+                    file_id=file_id,
+                    info=info,
+                    tier=tier,
+                    store=store,
+                    updated_parts=updated_parts,
+                    image_part=part,
+                    as_dict=False,
+                )
             elif isinstance(part, dict) and part.get("type") == "image":
                 source = part.get("source") or {}
                 file_id = source.get("file_id")
@@ -130,19 +197,15 @@ async def _hydrate_tool_return_letta_images(
                     continue
                 info = metadata.get(file_id, {})
                 tier = render_decisions.get(file_id, RenderTier.FULL) if render_decisions else RenderTier.FULL
-                if tier == RenderTier.TEXT:
-                    updated_parts.append({"type": "text", "text": _text_for_demoted_image(file_id, info)})
-                    continue
-                try:
-                    data, media_type = await _hydrate_letta_image_bytes(file_id, tier, info, store)
-                    if data:
-                        source = dict(source)
-                        source["data"] = data
-                        source["media_type"] = source.get("media_type") or media_type
-                        part = {**part, "source": source}
-                except Exception as exc:
-                    logger.warning("Failed to hydrate tool-return image %s: %s", file_id, exc)
-                updated_parts.append(part)
+                await _apply_letta_image_hydration(
+                    file_id=file_id,
+                    info=info,
+                    tier=tier,
+                    store=store,
+                    updated_parts=updated_parts,
+                    image_part=part,
+                    as_dict=True,
+                )
             else:
                 updated_parts.append(part)
 
@@ -161,6 +224,8 @@ async def hydrate_tool_return_images_in_messages(
         return
 
     metadata = await _load_image_metadata(image_ids, actor)
+    from letta.services.object_store.client import get_object_store_client
+
     store = get_object_store_client()
     for message in messages:
         await _hydrate_tool_return_letta_images(message, metadata, store, render_decisions=None)
@@ -173,7 +238,8 @@ def _metadata_entry_from_record(record) -> dict:
         "object_url_full": record.object_url_full,
         "object_url_1mp": record.object_url_1mp,
         "media_type": record.media_type,
-        "description": record.description or record.caption,
+        "caption": record.caption,
+        "description": record.description,
     }
 
 
@@ -184,6 +250,8 @@ async def _ensure_1mp_derivatives_for_render(
     actor: PydanticUser,
 ) -> Dict[str, dict]:
     """Bake and persist any 1MP derivatives required by the render-policy walk."""
+    from letta.services.vision.image_derivative import generate_1mp_now
+
     updated = dict(metadata)
     manager = ImageManager()
     max_passes = len(_collect_letta_image_ids(messages)) + 1
@@ -240,18 +308,15 @@ async def _hydrate_content_letta_images(
                 continue
             tier = decisions.get(file_id, RenderTier.TEXT)
             info = metadata.get(file_id, {})
-            if tier == RenderTier.TEXT:
-                updated_parts.append(TextContent(text=_text_for_demoted_image(file_id, info)))
-                continue
-            media_type = block.source.media_type or info.get("media_type") or "image/png"
-            try:
-                data, hydrated_type = await _hydrate_letta_image_bytes(file_id, tier, info, store)
-                if data:
-                    block.source.data = data
-                    block.source.media_type = hydrated_type or media_type
-            except Exception as exc:
-                logger.warning("Failed to hydrate image %s for LLM request: %s", file_id, exc)
-            updated_parts.append(block)
+            await _apply_letta_image_hydration(
+                file_id=file_id,
+                info=info,
+                tier=tier,
+                store=store,
+                updated_parts=updated_parts,
+                image_part=block,
+                as_dict=False,
+            )
         elif isinstance(block, dict) and block.get("type") == "image":
             source = block.get("source") or {}
             file_id = source.get("file_id")
@@ -260,19 +325,15 @@ async def _hydrate_content_letta_images(
                 continue
             tier = decisions.get(file_id, RenderTier.TEXT)
             info = metadata.get(file_id, {})
-            if tier == RenderTier.TEXT:
-                updated_parts.append({"type": "text", "text": _text_for_demoted_image(file_id, info)})
-                continue
-            try:
-                data, hydrated_type = await _hydrate_letta_image_bytes(file_id, tier, info, store)
-                if data:
-                    source = dict(source)
-                    source["data"] = data
-                    source["media_type"] = source.get("media_type") or hydrated_type or info.get("media_type")
-                    block = {**block, "source": source}
-            except Exception as exc:
-                logger.warning("Failed to hydrate image %s for LLM request: %s", file_id, exc)
-            updated_parts.append(block)
+            await _apply_letta_image_hydration(
+                file_id=file_id,
+                info=info,
+                tier=tier,
+                store=store,
+                updated_parts=updated_parts,
+                image_part=block,
+                as_dict=True,
+            )
         else:
             updated_parts.append(block)
 
@@ -294,6 +355,8 @@ async def prepare_messages_for_vision_llm(
     metadata = await _load_image_metadata(image_ids, actor)
     metadata = await _ensure_1mp_derivatives_for_render(hydrated, metadata, llm_config, actor)
     decisions = compute_image_render_decisions(hydrated, llm_config, image_metadata=metadata)
+    from letta.services.object_store.client import get_object_store_client
+
     store = get_object_store_client()
 
     for message in hydrated:

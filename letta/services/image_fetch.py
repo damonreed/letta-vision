@@ -7,7 +7,7 @@ from typing import List, Union
 from letta.schemas.letta_message_content import ImageContent, LettaImage, TextContent
 from letta.schemas.user import User as PydanticUser
 from letta.services.image_manager import ImageManager
-from letta.services.image_text import format_image_text_block, normalize_image_handle
+from letta.services.image_text import format_image_llm_reference_from_metadata, normalize_image_handle
 ToolReturn = Union[str, List[Union[TextContent, ImageContent, dict]]]
 
 
@@ -27,7 +27,15 @@ async def build_fetch_image_tool_return(handle: str, actor: PydanticUser) -> Too
     media_type = image.media_type or "image/jpeg"
     # Ref-only at rest; hydration on read supplies pixels for UI/LLM (FR §4.6, §12 r3).
     blocks = [
-        TextContent(text=format_image_text_block(image)),
+        TextContent(
+            text=format_image_llm_reference_from_metadata(
+                image_id,
+                {
+                    "caption": image.caption,
+                    "description": image.description,
+                },
+            )
+        ),
         ImageContent(
             source=LettaImage(
                 file_id=image_id,

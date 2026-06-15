@@ -4,6 +4,7 @@ from letta.services.image_text import (
     _apply_insert,
     _apply_str_replace,
     edit_image_text,
+    format_image_llm_reference,
     format_image_text_block,
     get_image_text,
 )
@@ -48,6 +49,20 @@ async def test_get_image_text_single_field(monkeypatch):
 
     result = await get_image_text("image-abc", actor=None, field="description")
     assert result == "Search text"
+
+
+def test_format_image_llm_reference_omits_empty_tiers():
+    text = format_image_llm_reference("abc", caption=None, description="  ")
+    assert text == "Image ID: image-abc (image_fetch, image_get_text, image_edit_text)"
+
+    text = format_image_llm_reference(
+        "image-xyz",
+        caption="Short",
+        description="Longer search text",
+    )
+    assert "Image ID: image-xyz" in text
+    assert "Caption: Short" in text
+    assert "Description: Longer search text" in text
 
 
 def test_format_image_text_block_includes_all_tiers():

@@ -82,6 +82,27 @@ async def test_hydrate_tool_return_text_tier_replaces_image_with_description():
 
 
 @pytest.mark.asyncio
+async def test_hydrate_tool_return_prepends_caption_and_description():
+    class _Store:
+        async def get_bytes(self, key):
+            return b"\x89PNG"
+
+    msg = _tool_return_image_message("img-meta")
+    metadata = {
+        "img-meta": {
+            "object_url_full": "images/full",
+            "media_type": "image/png",
+            "caption": "Red barn",
+            "description": "Weathered wooden barn at sunset",
+        }
+    }
+    await _hydrate_tool_return_letta_images(msg, metadata, _Store(), render_decisions=None)
+    ref = msg.tool_returns[0].func_response[1].text
+    assert "Caption: Red barn" in ref
+    assert "Description: Weathered wooden barn at sunset" in ref
+
+
+@pytest.mark.asyncio
 async def test_hydrate_tool_return_without_decisions_uses_full_key():
     fetched = []
 
@@ -93,5 +114,11 @@ async def test_hydrate_tool_return_without_decisions_uses_full_key():
     msg = _tool_return_image_message("img-full")
     metadata = {"img-full": {"object_url_full": "images/full", "media_type": "image/png"}}
     await _hydrate_tool_return_letta_images(msg, metadata, _Store(), render_decisions=None)
+    parts = msg.tool_returns[0].func_response
+    assert len(parts) == 3
+    assert isinstance(parts[0], TextContent)
+    assert parts[0].text == "summary"
+    assert isinstance(parts[1], TextContent)
+    assert "Image ID: image-img-full" in parts[1].text
     assert fetched == ["images/full"]
-    assert msg.tool_returns[0].func_response[1].source.data
+    assert msg.tool_returns[0].func_response[2].source.data
