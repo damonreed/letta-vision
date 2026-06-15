@@ -37,7 +37,8 @@ async def test_build_fetch_image_tool_return_multimodal(monkeypatch):
         media_type = "image/png"
         file_size_full = 8
         description = "A test image"
-        caption = None
+        caption = "Short label"
+        details = "Longer literal details"
 
     class _Mgr:
         async def get_by_id_async(self, handle, actor):
@@ -49,7 +50,11 @@ async def test_build_fetch_image_tool_return_multimodal(monkeypatch):
     result = await build_fetch_image_tool_return("abc", actor=None)
     assert isinstance(result, list)
     assert result[0]["type"] == "text"
-    assert "8 bytes" in result[0]["text"]
+    text = result[0]["text"]
+    assert "Caption: Short label" in text
+    assert "Description: A test image" in text
+    assert "Details: Longer literal details" in text
+    assert "8 bytes" in text
     assert result[1]["type"] == "image"
     assert result[1]["source"]["type"] == "letta"
     assert result[1]["source"]["file_id"] == "image-abc"

@@ -85,6 +85,29 @@ class ImageManager:
 
     @enforce_types
     @trace_method
+    async def update_text_field_async(
+        self,
+        image_id: str,
+        actor: PydanticUser,
+        *,
+        field: str,
+        value: Optional[str],
+    ) -> Optional[PydanticImage]:
+        async with db_registry.async_session() as session:
+            row = await ImageRecord.read_async(db_session=session, identifier=image_id, actor=actor)
+            if field == "caption":
+                row.caption = value
+            elif field == "description":
+                row.description = value
+            elif field == "details":
+                row.details = value
+            else:
+                raise ValueError(f"Invalid image text field: {field}")
+            updated = await row.update_async(session, actor=actor)
+            return updated.to_pydantic()
+
+    @enforce_types
+    @trace_method
     async def update_metadata_async(
         self,
         image_id: str,

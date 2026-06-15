@@ -183,7 +183,58 @@ async def image_fetch(self: "Agent", handle: str) -> str:
         handle: Image record id (image-<uuid>).
 
     Returns:
-        Multimodal tool return: text summary plus image reference for vision models and the client UI.
+        Multimodal tool return: caption, description, and details text plus image reference for vision models and the client UI.
+    """
+    raise NotImplementedError("This should never be invoked directly. Contact Letta if you see this error message.")
+
+
+async def image_get_text(
+    self: "Agent",
+    handle: str,
+    field: Optional[Literal["caption", "description", "details"]] = None,
+) -> str:
+    """
+    Read stored text metadata for an image without fetching pixels.
+
+    Args:
+        handle: Image record id (image-<uuid>).
+        field: Optional text tier to return. Omit to return caption, description, and details together.
+
+    Returns:
+        A single field string, or a dict with handle and all three text tiers when field is omitted.
+    """
+    raise NotImplementedError("This should never be invoked directly. Contact Letta if you see this error message.")
+
+
+async def image_edit_text(
+    self: "Agent",
+    handle: str,
+    field: Literal["caption", "description", "details"],
+    command: Literal["str_replace", "insert", "set"],
+    old_string: Optional[str] = None,
+    new_string: Optional[str] = None,
+    insert_text: Optional[str] = None,
+    insert_line: int = -1,
+) -> str:
+    """
+    Edit caption, description, or details text for an image. Re-embeds the image record after each edit.
+
+    Commands (same semantics as the memory tool):
+        str_replace — replace old_string with new_string (must match exactly once)
+        insert — insert insert_text after insert_line (-1 appends)
+        set — replace the entire field with new_string
+
+    Args:
+        handle: Image record id (image-<uuid>).
+        field: Text tier to edit.
+        command: Edit operation to perform.
+        old_string: Text to replace (str_replace only).
+        new_string: Replacement text (str_replace, set).
+        insert_text: Text to insert (insert only).
+        insert_line: Line index for insert (-1 appends).
+
+    Returns:
+        The updated field text.
     """
     raise NotImplementedError("This should never be invoked directly. Contact Letta if you see this error message.")
 

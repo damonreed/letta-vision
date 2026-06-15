@@ -43,6 +43,8 @@ class LettaCoreToolExecutor(ToolExecutor):
             "conversation_search": self.conversation_search,
             "search_all": self.search_all,
             "image_fetch": self.image_fetch,
+            "image_get_text": self.image_get_text,
+            "image_edit_text": self.image_edit_text,
             "image_search": self.image_search,
             # Deprecated aliases
             "recall": self.search_all,
@@ -100,6 +102,42 @@ class LettaCoreToolExecutor(ToolExecutor):
         from letta.services.image_fetch import build_fetch_image_tool_return
 
         return await build_fetch_image_tool_return(handle, actor)
+
+    async def image_get_text(
+        self,
+        agent_state: AgentState,
+        actor: User,
+        handle: str,
+        field: Optional[Literal["caption", "description", "details"]] = None,
+    ):
+        from letta.services.image_text import get_image_text
+
+        return await get_image_text(handle, actor, field=field)
+
+    async def image_edit_text(
+        self,
+        agent_state: AgentState,
+        actor: User,
+        handle: str,
+        field: Literal["caption", "description", "details"],
+        command: Literal["str_replace", "insert", "set"],
+        old_string: Optional[str] = None,
+        new_string: Optional[str] = None,
+        insert_text: Optional[str] = None,
+        insert_line: int = -1,
+    ) -> str:
+        from letta.services.image_text import edit_image_text
+
+        return await edit_image_text(
+            handle,
+            field,
+            command,
+            actor,
+            old_string=old_string,
+            new_string=new_string,
+            insert_text=insert_text,
+            insert_line=insert_line,
+        )
 
     async def image_search(
         self,

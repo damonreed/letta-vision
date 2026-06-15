@@ -1269,6 +1269,7 @@ class LettaAgentV2(BaseAgentV2):
                 "archival_memory_search",
                 "image_fetch",
                 "fetch_image",
+                "image_get_text",
                 "file_archives_search",
                 "file_contents_search",
                 "image_search",

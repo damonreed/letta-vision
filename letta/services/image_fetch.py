@@ -7,17 +7,8 @@ from typing import List, Union
 from letta.schemas.letta_message_content import ImageContent, LettaImage, TextContent
 from letta.schemas.user import User as PydanticUser
 from letta.services.image_manager import ImageManager
+from letta.services.image_text import format_image_text_block, normalize_image_handle
 ToolReturn = Union[str, List[Union[TextContent, ImageContent, dict]]]
-
-
-def normalize_image_handle(handle: str) -> str:
-    """Accept bare uuid or image-<uuid> handles from recall."""
-    cleaned = (handle or "").strip()
-    if not cleaned:
-        return cleaned
-    if cleaned.startswith("image-"):
-        return cleaned
-    return f"image-{cleaned}"
 
 
 def multimodal_tool_return(blocks: List[Union[TextContent, ImageContent]]) -> List[dict]:
@@ -34,11 +25,9 @@ async def build_fetch_image_tool_return(handle: str, actor: PydanticUser) -> Too
         return f"Image {handle} not found."
 
     media_type = image.media_type or "image/jpeg"
-    byte_size = image.file_size_full or 0
-    summary = image.description or image.caption or f"Image {image_id}"
     # Ref-only at rest; hydration on read supplies pixels for UI/LLM (FR §4.6, §12 r3).
     blocks = [
-        TextContent(text=f"{summary} ({media_type}, {byte_size} bytes)"),
+        TextContent(text=format_image_text_block(image)),
         ImageContent(
             source=LettaImage(
                 file_id=image_id,

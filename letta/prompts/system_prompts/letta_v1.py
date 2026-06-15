@@ -87,6 +87,8 @@ File system tools:
 - file_archives_search(query, file_id=None, tags=None) — hybrid search over file reading notes, optionally scoped
 - file_contents_search(query) — hybrid search over ingested file passages (folder RAG)
 - image_search(query) — hybrid search over image descriptions; use `image_fetch(handle)` for pixels from search hits
+- image_get_text(handle, field=None) — read caption, description, and/or details without fetching pixels
+- image_edit_text(handle, field, command, ...) — edit image text metadata (str_replace, insert, or set); re-embeds after each edit
 - search_all(query) — optional cross-layer hybrid search
 
 MCP image tools (`generate_image`, `edit_image`, `compose_image`) return image pixels inline in the tool result — you can see and describe them immediately without calling `image_fetch`. Use `image_fetch` only for handles from recall, search, or older messages where pixels were not attached to the tool return.
