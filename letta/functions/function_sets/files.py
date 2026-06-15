@@ -161,11 +161,11 @@ async def update_file_headline(agent_state: "AgentState", file_id: str, new_summ
     raise NotImplementedError("Tool not implemented. Please contact the Letta team.")
 
 
-async def write_file_archive(
+async def write_file_note(
     agent_state: "AgentState", file_id: str, title: str, content: str, tags: Optional[List[str]] = None
 ) -> dict:
     """
-    Write a file reading note (topical archive) linked to a file.
+    Write a file reading note linked to a file.
 
     Args:
         file_id (str): The file this note is about.
@@ -174,7 +174,47 @@ async def write_file_archive(
         tags (Optional[List[str]]): Optional tags for later search.
 
     Returns:
-        dict: Created file archive metadata including stored tags.
+        dict: Created file note metadata including stored tags.
+    """
+    raise NotImplementedError("Tool not implemented. Please contact the Letta team.")
+
+
+async def file_notes_search(
+    agent_state: "AgentState",
+    query: str,
+    file_id: Optional[str] = None,
+    tags: Optional[List[str]] = None,
+    limit: int = 10,
+) -> dict:
+    """
+    Hybrid search over file reading notes.
+
+    Args:
+        query (str): Natural-language search query.
+        file_id (Optional[str]): Limit search to one file's notes.
+        tags (Optional[List[str]]): Filter by note tags.
+        limit (int): Maximum results to return.
+
+    Returns:
+        dict: Ranked file note hits with provenance metadata.
+    """
+    raise NotImplementedError("Tool not implemented. Please contact the Letta team.")
+
+
+async def write_file_archive(
+    agent_state: "AgentState", file_id: str, title: str, content: str, tags: Optional[List[str]] = None
+) -> dict:
+    """
+    Deprecated alias for write_file_note.
+
+    Args:
+        file_id: The file this note is about.
+        title: Short title naming the topical focus.
+        content: Note body (1-8000 characters).
+        tags: Optional tags for later search.
+
+    Returns:
+        Created file note metadata including stored tags.
     """
     raise NotImplementedError("Tool not implemented. Please contact the Letta team.")
 
@@ -187,16 +227,16 @@ async def file_archives_search(
     limit: int = 10,
 ) -> dict:
     """
-    Hybrid search over file reading notes (file archives).
+    Deprecated alias for file_notes_search.
 
     Args:
-        query (str): Natural-language search query.
-        file_id (Optional[str]): Limit search to one file's notes.
-        tags (Optional[List[str]]): Filter by note tags.
-        limit (int): Maximum results to return.
+        query: Natural-language search query.
+        file_id: Limit search to one file's notes.
+        tags: Filter by note tags.
+        limit: Maximum results to return.
 
     Returns:
-        dict: Ranked file archive hits with provenance metadata.
+        Ranked file note hits with provenance metadata.
     """
     raise NotImplementedError("Tool not implemented. Please contact the Letta team.")
 
@@ -223,7 +263,7 @@ async def search_file_archives(
     limit: int = 10,
 ) -> dict:
     """
-    Deprecated alias for file_archives_search.
+    Deprecated alias for file_notes_search.
 
     Args:
         query: Natural-language search query.

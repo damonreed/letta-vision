@@ -351,7 +351,7 @@ class ThreeTierFileTools:
             "version": updated.version,
         }
 
-    async def write_file_archive(
+    async def write_file_note(
         self,
         agent_state: AgentState,
         file_id: str,
@@ -377,7 +377,7 @@ class ThreeTierFileTools:
             "tags": archive.tags,
         }
 
-    async def search_file_archives(
+    async def file_notes_search(
         self,
         agent_state: AgentState,
         query: str,

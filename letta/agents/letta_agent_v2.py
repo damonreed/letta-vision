@@ -1270,6 +1270,7 @@ class LettaAgentV2(BaseAgentV2):
                 "image_fetch",
                 "fetch_image",
                 "image_get_text",
+                "file_notes_search",
                 "file_archives_search",
                 "file_contents_search",
                 "image_search",

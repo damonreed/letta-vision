@@ -123,10 +123,12 @@ BASE_TOOLS = [
     "archival_memory_insert",
     "archival_memory_search",
 ]
-# Archival memory (passages) remains supported; distinct from file reading notes (write_file_archive / file_archives_search).
+# Archival memory (passages) remains supported; distinct from file reading notes (write_file_note / file_notes_search).
 DEPRECATED_LETTA_TOOLS: list[str] = [
     "recall",
     "fetch_image",
+    "write_file_archive",
+    "file_archives_search",
     "search_file_archives",
     "search_file_contents",
     "search_archives",
@@ -196,8 +198,8 @@ FILES_TOOLS = [
     "file_read_range",
     "file_grep",
     "update_file_headline",
-    "write_file_archive",
-    "file_archives_search",
+    "write_file_note",
+    "file_notes_search",
     "file_contents_search",
 ]
 
@@ -234,6 +236,8 @@ LETTA_TOOL_SET = set(
 )
 
 DEPRECATED_FILE_TOOL_NAMES = {
+    "write_file_archive",
+    "file_archives_search",
     "search_file_archives",
     "search_file_contents",
     "search_archives",
@@ -242,6 +246,7 @@ DEPRECATED_FILE_TOOL_NAMES = {
 LETTA_PARALLEL_SAFE_TOOLS = {
     "conversation_search",
     "archival_memory_search",
+    "file_notes_search",
     "file_archives_search",
     "file_contents_search",
     "image_search",
