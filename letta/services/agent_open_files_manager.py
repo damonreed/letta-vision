@@ -103,6 +103,24 @@ class AgentOpenFilesManager:
 
     @enforce_types
     @trace_method
+    async def clamp_cursors_for_file(self, *, file_id: str, max_char: int, actor: PydanticUser) -> int:
+        """Clamp cursor_char for every agent with this file open. Returns rows touched."""
+        max_char = max(0, max_char)
+        async with db_registry.async_session() as session:
+            query = select(AgentOpenFileModel).where(
+                AgentOpenFileModel.file_id == file_id,
+                AgentOpenFileModel.organization_id == actor.organization_id,
+                AgentOpenFileModel.is_deleted == False,
+            )
+            rows = list((await session.execute(query)).scalars().all())
+            for row in rows:
+                row.cursor_char = min(row.cursor_char, max_char)
+            if rows:
+                await session.commit()
+            return len(rows)
+
+    @enforce_types
+    @trace_method
     async def update_cursor(self, *, agent_id: str, file_id: str, cursor_char: int, actor: PydanticUser) -> None:
         async with db_registry.async_session() as session:
             row = await self._get_open_row(session, agent_id, file_id, actor.organization_id)

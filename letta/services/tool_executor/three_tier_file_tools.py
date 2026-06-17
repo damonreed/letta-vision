@@ -109,9 +109,9 @@ class ThreeTierFileTools:
                 file_metadata=file_metadata,
             )
 
-        safe_create_task(_run_ingest(), label=f"add_text_file_ingest:{file_metadata.id}")
+        safe_create_task(_run_ingest(), label=f"file_add_ingest:{file_metadata.id}")
 
-    async def add_text_file(
+    async def file_add(
         self,
         agent_state: AgentState,
         folder_id: str,
@@ -179,7 +179,7 @@ class ThreeTierFileTools:
         )
 
         logger.info(
-            "add_text_file created file_id=%s folder_id=%s name=%s bytes=%s",
+            "file_add created file_id=%s folder_id=%s name=%s bytes=%s",
             file_metadata.id,
             folder_id,
             unique_filename,
@@ -333,6 +333,30 @@ class ThreeTierFileTools:
                     break
             char_offset += len(line) + 1
         return {"file_id": file_id, "hits": hits}
+
+    async def file_edit_text(
+        self,
+        agent_state: AgentState,
+        file_id: str,
+        command: str,
+        old_string: Optional[str] = None,
+        new_string: Optional[str] = None,
+        insert_text: Optional[str] = None,
+        insert_line: int = -1,
+    ) -> dict:
+        from letta.services.file_text import edit_file_text
+
+        file_id = await self._resolve_file_id(agent_state, file_id)
+        return await edit_file_text(
+            file_id=file_id,
+            command=command,
+            actor=self.actor,
+            agent_state=agent_state,
+            old_string=old_string,
+            new_string=new_string,
+            insert_text=insert_text,
+            insert_line=insert_line,
+        )
 
     async def update_file_headline(self, agent_state: AgentState, file_id: str, new_summary: str) -> dict:
         file_id = await self._resolve_file_id(agent_state, file_id)

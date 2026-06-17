@@ -187,7 +187,7 @@ BUILTIN_TOOLS = ["run_code", "run_code_with_tools", "web_search", "fetch_webpage
 
 # Built in tools
 FILES_TOOLS = [
-    "add_text_file",
+    "file_add",
     "attach_folder",
     "detach_folder",
     "open_file",
@@ -197,6 +197,7 @@ FILES_TOOLS = [
     "file_read_prev_page",
     "file_read_range",
     "file_grep",
+    "file_edit_text",
     "update_file_headline",
     "write_file_note",
     "file_notes_search",
@@ -206,13 +207,14 @@ FILES_TOOLS = [
 # File tools that mutate in-context <open_files> / directories and require system prompt refresh.
 FILE_STATE_SYSTEM_REFRESH_TOOLS = frozenset(
     {
-        "add_text_file",
+        "file_add",
         "attach_folder",
         "detach_folder",
         "open_file",
         "close_file",
         "update_file_headline",
         # Deprecated aliases (existing agents may still call these until tools are re-synced)
+        "add_text_file",
         "update_file_core",
     }
 )
@@ -236,6 +238,7 @@ LETTA_TOOL_SET = set(
 )
 
 DEPRECATED_FILE_TOOL_NAMES = {
+    "add_text_file",
     "write_file_archive",
     "file_archives_search",
     "search_file_archives",

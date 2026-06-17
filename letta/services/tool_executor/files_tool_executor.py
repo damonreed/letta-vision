@@ -92,6 +92,7 @@ class LettaFileToolExecutor(ToolExecutor):
             "file_read_prev_page": self._three_tier_file_read_prev_page,
             "file_read_range": self._three_tier_file_read_range,
             "file_grep": self._three_tier_file_grep,
+            "file_edit_text": self._three_tier_file_edit_text,
             "update_file_headline": self._three_tier_update_file_headline,
             "write_file_note": self._three_tier_write_file_note,
             # Deprecated tool names
@@ -102,7 +103,8 @@ class LettaFileToolExecutor(ToolExecutor):
             "write_file_archive": self._three_tier_write_file_note,
             "write_archive": self._three_tier_write_file_note,
             "search_archives": self._three_tier_file_notes_search,
-            "add_text_file": self._three_tier_add_text_file,
+            "file_add": self._three_tier_file_add,
+            "add_text_file": self._three_tier_file_add,
             "attach_folder": self._attach_folder,
             "detach_folder": self._detach_folder,
         }
@@ -690,7 +692,7 @@ class LettaFileToolExecutor(ToolExecutor):
         self.three_tier_tools.conversation_id = self.conversation_id
         return self.three_tier_tools
 
-    async def _three_tier_add_text_file(
+    async def _three_tier_file_add(
         self,
         agent_state: AgentState,
         folder_id: str,
@@ -698,7 +700,7 @@ class LettaFileToolExecutor(ToolExecutor):
         content: str,
         headline: Optional[str] = None,
     ) -> dict:
-        return await self._get_three_tier_tools().add_text_file(
+        return await self._get_three_tier_tools().file_add(
             agent_state, folder_id, file_name, content, headline
         )
 
@@ -722,6 +724,26 @@ class LettaFileToolExecutor(ToolExecutor):
 
     async def _three_tier_file_grep(self, agent_state: AgentState, file_id: str, pattern: str, max_hits: int = 20) -> dict:
         return await self._get_three_tier_tools().file_grep(agent_state, file_id, pattern, max_hits)
+
+    async def _three_tier_file_edit_text(
+        self,
+        agent_state: AgentState,
+        file_id: str,
+        command: str,
+        old_string: Optional[str] = None,
+        new_string: Optional[str] = None,
+        insert_text: Optional[str] = None,
+        insert_line: int = -1,
+    ) -> dict:
+        return await self._get_three_tier_tools().file_edit_text(
+            agent_state,
+            file_id,
+            command,
+            old_string=old_string,
+            new_string=new_string,
+            insert_text=insert_text,
+            insert_line=insert_line,
+        )
 
     async def _three_tier_update_file_headline(self, agent_state: AgentState, file_id: str, new_summary: str) -> dict:
         return await self._get_three_tier_tools().update_file_headline(agent_state, file_id, new_summary)

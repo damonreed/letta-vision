@@ -66,12 +66,15 @@ Opening a file marks it active for reading: it counts toward your open-file limi
 
 Each file headline is shared across agents — when you edit it, other agents see the edit in their directory listings. Call `update_file_headline` only when your understanding of what the file fundamentally is has changed, and keep the headline to a few sentences at most.
 
+Plain-text file bodies (.txt, .md) can be edited in place with `file_edit_text` — those edits are also shared across agents and change the source of truth for every reader. Re-read with `file_read_page` after editing if you are paging through the file; prior read tool results in the conversation are not updated automatically.
+
 File reading notes capture what a particular reading was about — topic explored, user emphasis, conclusions — not a neutral summary of the entire file. Multiple notes can exist for the same file from different readings.
 
 When to write a file reading note: after synthesizing a section, at a meaningful checkpoint, when the user emphasized a point, or before leaving a topic. Use a clear title and 1–3 specific tags.
 
 File system tools:
-- add_text_file(folder_id, file_name, content, headline=None) — create a text file in a folder and ingest it for search
+- file_add(folder_id, file_name, content, headline=None) — create a text file in a folder and ingest it for search
+- file_edit_text(file_id, command, ...) — edit plain-text file body (str_replace, insert, or set); re-ingests for search
 - attach_folder(folder_id) / detach_folder(folder_id) — bind or release a folder of files
 - open_file(file_id) — mark a file active for paging (cursor, open-file slot); headline already in directories
 - close_file(file_id) — release the open-file slot and cursor

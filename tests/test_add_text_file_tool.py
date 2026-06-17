@@ -13,14 +13,15 @@ def _normalize_text_file_name(file_name: str) -> str:
     return name
 
 
-def test_add_text_file_in_files_tool_set():
-    assert "add_text_file" in FILES_TOOLS
+def test_file_add_in_files_tool_set():
+    assert "file_add" in FILES_TOOLS
+    assert "file_edit_text" in FILES_TOOLS
 
 
-def test_add_text_file_function_schema():
+def test_file_add_function_schema():
     schemas = load_function_set(files_module)
-    assert "add_text_file" in schemas
-    params = schemas["add_text_file"]["json_schema"]["parameters"]["properties"]
+    assert "file_add" in schemas
+    params = schemas["file_add"]["json_schema"]["parameters"]["properties"]
     assert {"folder_id", "file_name", "content"}.issubset(params.keys())
 
 

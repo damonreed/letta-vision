@@ -1,10 +1,10 @@
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, List, Literal, Optional
 
 if TYPE_CHECKING:
     from letta.schemas.agent import AgentState
 
 
-async def add_text_file(
+async def file_add(
     agent_state: "AgentState",
     folder_id: str,
     file_name: str,
@@ -22,6 +22,28 @@ async def add_text_file(
 
     Returns:
         dict: Created file metadata (file_id, file_name, folder_id, processing_status).
+    """
+    raise NotImplementedError("Tool not implemented. Please contact the Letta team.")
+
+
+async def add_text_file(
+    agent_state: "AgentState",
+    folder_id: str,
+    file_name: str,
+    content: str,
+    headline: Optional[str] = None,
+) -> dict:
+    """
+    Deprecated alias for file_add.
+
+    Args:
+        folder_id: The folder (source) ID to store the file in.
+        file_name: Filename (e.g. notes.txt). A .txt suffix is added when missing.
+        content: Full text body to write into the file.
+        headline: Optional short file headline for directory listings.
+
+    Returns:
+        Created file metadata (file_id, file_name, folder_id, processing_status).
     """
     raise NotImplementedError("Tool not implemented. Please contact the Letta team.")
 
@@ -128,6 +150,40 @@ async def file_read_range(agent_state: "AgentState", file_id: str, start_char: i
 
     Returns:
         dict: Requested content and character range.
+    """
+    raise NotImplementedError("Tool not implemented. Please contact the Letta team.")
+
+
+async def file_edit_text(
+    agent_state: "AgentState",
+    file_id: str,
+    command: Literal["str_replace", "insert", "set"],
+    old_string: Optional[str] = None,
+    new_string: Optional[str] = None,
+    insert_text: Optional[str] = None,
+    insert_line: int = -1,
+) -> dict:
+    """
+    Edit the body text of a plain-text file (.txt, .md). Re-ingests passages for search after each edit.
+
+    Commands (same semantics as image_edit_text and the memory tool):
+        str_replace — replace old_string with new_string (must match exactly once)
+        insert — insert insert_text after insert_line (-1 appends)
+        set — replace the entire file body with new_string
+
+    File body edits are shared across agents — the file is the source of truth for all readers.
+    Re-read with file_read_page after editing if you are paging through the file.
+
+    Args:
+        file_id (str): The file ID to edit.
+        command (str): Edit operation to perform.
+        old_string (Optional[str]): Text to replace (str_replace only).
+        new_string (Optional[str]): Replacement text (str_replace, set).
+        insert_text (Optional[str]): Text to insert (insert only).
+        insert_line (int): Line index for insert (-1 appends).
+
+    Returns:
+        dict: Status, file_id, char_count, command, and processing_status while re-ingest runs.
     """
     raise NotImplementedError("Tool not implemented. Please contact the Letta team.")
 
