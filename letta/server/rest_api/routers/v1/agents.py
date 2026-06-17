@@ -703,6 +703,21 @@ async def detach_tool_from_agent(
     return await server.agent_manager.get_agent_by_id_async(agent_id=agent_id, actor=actor)
 
 
+@router.post("/{agent_id}/tools/refresh", operation_id="refresh_agent_tools")
+async def refresh_agent_tools(
+    agent_id: AgentId,
+    server: "SyncServer" = Depends(get_letta_server),
+    headers: HeaderParams = Depends(get_headers),
+):
+    """
+    Refresh built-in tools for an agent.
+
+    Upserts org-wide tool definitions, then attaches any missing file tools (additive only).
+    """
+    actor = await server.user_manager.get_actor_or_default_async(actor_id=headers.actor_id)
+    return await server.agent_manager.refresh_agent_tools_async(agent_id=agent_id, actor=actor)
+
+
 class ModifyApprovalRequest(BaseModel):
     """Request body for modifying tool approval requirements."""
 

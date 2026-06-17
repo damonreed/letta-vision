@@ -2941,6 +2941,35 @@ class AgentManager:
 
     @enforce_types
     @trace_method
+    async def refresh_agent_tools_async(self, agent_id: str, actor: PydanticUser) -> dict:
+        """
+        Refresh built-in tools for an agent:
+        1. Upsert org-wide base tool definitions (schemas in DB)
+        2. Attach any missing FILES_TOOLS to the agent (additive only)
+        """
+        from letta.services.tool_manager import ToolManager
+
+        await ToolManager().upsert_base_tools_async(actor=actor)
+
+        agent_state = await self.get_agent_by_id_async(
+            agent_id=agent_id,
+            include_relationships=["tools"],
+            actor=actor,
+        )
+        before_names = {tool.name for tool in agent_state.tools}
+        agent_state = await self.attach_missing_files_tools_async(agent_state=agent_state, actor=actor)
+        after_names = {tool.name for tool in agent_state.tools}
+        added_tools = sorted(after_names - before_names)
+
+        return {
+            "status": "success",
+            "agent_id": agent_id,
+            "added_tools": added_tools,
+            "tool_count": len(after_names),
+        }
+
+    @enforce_types
+    @trace_method
     async def detach_all_files_tools_async(self, agent_state: PydanticAgentState, actor: PydanticUser) -> PydanticAgentState:
         """
         Detach all core file tools from an agent.

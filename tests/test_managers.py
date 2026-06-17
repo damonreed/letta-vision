@@ -1756,6 +1756,24 @@ async def test_attach_missing_files_tools_async(server: SyncServer, sarah_agent,
 
 
 @pytest.mark.asyncio
+async def test_refresh_agent_tools_async(server: SyncServer, sarah_agent, default_user):
+    """Refresh upserts base tools and attaches missing file tools."""
+    agent_state = await server.agent_manager.get_agent_by_id_async(agent_id=sarah_agent.id, actor=default_user)
+    initial_tool_count = len(agent_state.tools)
+
+    result = await server.agent_manager.refresh_agent_tools_async(agent_id=sarah_agent.id, actor=default_user)
+
+    assert result["status"] == "success"
+    assert result["agent_id"] == sarah_agent.id
+    assert isinstance(result["added_tools"], list)
+
+    updated = await server.agent_manager.get_agent_by_id_async(agent_id=sarah_agent.id, actor=default_user)
+    file_tool_names = {tool.name for tool in updated.tools if tool.tool_type == ToolType.LETTA_FILES_CORE}
+    assert file_tool_names == set(FILES_TOOLS)
+    assert len(updated.tools) >= initial_tool_count
+
+
+@pytest.mark.asyncio
 async def test_attach_missing_files_tools_async_partial(server: SyncServer, sarah_agent, default_user):
     """Test attaching missing file tools when some are already attached."""
     # First ensure file tools exist in the system
