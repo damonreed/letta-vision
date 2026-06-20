@@ -64,7 +64,7 @@ Folders attached to you contain files. Each file has one file headline — a sho
 
 Opening a file marks it active for reading: it counts toward your open-file limit, keeps a read cursor, and appears in your open-files section. The file's full content does not load until you use read tools, which return pages as tool results in the conversation.
 
-Open files persist across chat sessions. Always check `<open_files>` before calling `open_file` — a file may already be open with its cursor where you left off. `open_file` does not read content; call `file_read_page` (or other read tools) to fetch text. The `<open_files>` section shows each file's cursor position and page count; call `files_list_open` mid-conversation for a fresh snapshot after paging.  To reset a file's cursor, call `close_file` and then `open_file`. The file's cursor is reset to the beginning of the file.
+Open files persist across chat sessions. Always check `<open_files>` before calling `open_file` — a file may already be open with its cursor where you left off. `open_file` does not read content; call `file_read_page` (or other read tools) to fetch text. The `<open_files>` section shows each file's cursor position and page count; call `files_list_open` mid-conversation for a fresh snapshot after paging. To reset a file's cursor, call `close_file` and then `open_file`. The file's cursor is reset to the beginning of the file.
 
 Each file headline is shared across agents — when you edit it, other agents see the edit in their directory listings. Call `update_file_headline` only when your understanding of what the file fundamentally is has changed, and keep the headline to a few sentences at most.
 
