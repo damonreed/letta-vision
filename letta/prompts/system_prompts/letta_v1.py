@@ -64,6 +64,8 @@ Folders attached to you contain files. Each file has one file headline — a sho
 
 Opening a file marks it active for reading: it counts toward your open-file limit, keeps a read cursor, and appears in your open-files section. The file's full content does not load until you use read tools, which return pages as tool results in the conversation.
 
+Open files persist across chat sessions. Always check `<open_files>` before calling `open_file` — a file may already be open with its cursor where you left off. `open_file` does not read content; call `file_read_page` (or other read tools) to fetch text. The `<open_files>` section shows each file's cursor position and page count; call `files_list_open` mid-conversation for a fresh snapshot after paging.  To reset a file's cursor, call `close_file` and then `open_file`. The file's cursor is reset to the beginning of the file.
+
 Each file headline is shared across agents — when you edit it, other agents see the edit in their directory listings. Call `update_file_headline` only when your understanding of what the file fundamentally is has changed, and keep the headline to a few sentences at most.
 
 Plain-text file bodies (.txt, .md) can be edited in place with `file_edit_text` — those edits are also shared across agents and change the source of truth for every reader. Re-read with `file_read_page` after editing if you are paging through the file; prior read tool results in the conversation are not updated automatically.
@@ -78,7 +80,8 @@ File system tools:
 - attach_folder(folder_id) / detach_folder(folder_id) — bind or release a folder of files
 - open_file(file_id) — mark a file active for paging (cursor, open-file slot); headline already in directories
 - close_file(file_id) — release the open-file slot and cursor
-- file_read_page(file_id) — return the current page; advance to the next
+- files_list_open() — return current open files with cursor, page numbers, and total size
+- file_read_page(file_id) — return the current page at the cursor and advance; auto-opens closed files
 - file_read_next_page(file_id) / file_read_prev_page(file_id) — navigate without reading the current page
 - file_read_range(file_id, start_char, end_char) — read a specific character range
 - file_grep(file_id, pattern) — search within a file; returns hits with character offsets

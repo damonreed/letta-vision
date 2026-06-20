@@ -4,6 +4,7 @@ from typing import List, Optional
 from sqlalchemy import and_, delete, select
 
 from letta.orm.agent_open_file import AgentOpenFile as AgentOpenFileModel
+from letta.orm.file import FileContent as FileContentModel
 from letta.orm.file import FileMetadata as FileMetadataModel
 from letta.orm.file_core_block import FileCoreBlock as FileCoreBlockModel
 from letta.otel.tracing import trace_method
@@ -137,9 +138,10 @@ class AgentOpenFilesManager:
     ) -> List[OpenFileCoreView]:
         async with db_registry.async_session() as session:
             query = (
-                select(AgentOpenFileModel, FileMetadataModel, FileCoreBlockModel)
+                select(AgentOpenFileModel, FileMetadataModel, FileCoreBlockModel, FileContentModel)
                 .join(FileMetadataModel, AgentOpenFileModel.file_id == FileMetadataModel.id)
                 .outerjoin(FileCoreBlockModel, AgentOpenFileModel.file_id == FileCoreBlockModel.id)
+                .outerjoin(FileContentModel, AgentOpenFileModel.file_id == FileContentModel.file_id)
                 .where(
                     AgentOpenFileModel.agent_id == agent_id,
                     AgentOpenFileModel.organization_id == actor.organization_id,
@@ -149,9 +151,10 @@ class AgentOpenFilesManager:
             )
             rows = (await session.execute(query)).all()
             views: List[OpenFileCoreView] = []
-            for open_row, file_meta, core in rows:
+            for open_row, file_meta, core, content in rows:
                 summary = core.summary if core and not core.is_deleted else "No headline yet."
                 char_limit = core.char_limit if core and not core.is_deleted else 2000
+                total_chars = len(content.text) if content and content.text else 0
                 views.append(
                     OpenFileCoreView(
                         file_id=open_row.file_id,
@@ -160,6 +163,7 @@ class AgentOpenFilesManager:
                         summary=summary,
                         char_limit=char_limit,
                         cursor_char=open_row.cursor_char,
+                        total_chars=total_chars,
                         is_open=True,
                     )
                 )

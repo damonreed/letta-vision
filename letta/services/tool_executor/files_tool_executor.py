@@ -87,6 +87,7 @@ class LettaFileToolExecutor(ToolExecutor):
             "file_notes_search": self._three_tier_file_notes_search,
             "open_file": self._three_tier_open_file,
             "close_file": self._three_tier_close_file,
+            "files_list_open": self._three_tier_files_list_open,
             "file_read_page": self._three_tier_file_read_page,
             "file_read_next_page": self._three_tier_file_read_next_page,
             "file_read_prev_page": self._three_tier_file_read_prev_page,
@@ -709,6 +710,9 @@ class LettaFileToolExecutor(ToolExecutor):
 
     async def _three_tier_close_file(self, agent_state: AgentState, file_id: str) -> dict:
         return await self._get_three_tier_tools().close_file(agent_state, file_id)
+
+    async def _three_tier_files_list_open(self, agent_state: AgentState) -> dict:
+        return await self._get_three_tier_tools().files_list_open(agent_state)
 
     async def _three_tier_file_read_page(self, agent_state: AgentState, file_id: str) -> dict:
         return await self._get_three_tier_tools().file_read_page(agent_state, file_id)

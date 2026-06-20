@@ -100,6 +100,19 @@ async def close_file(agent_state: "AgentState", file_id: str) -> dict:
     raise NotImplementedError("Tool not implemented. Please contact the Letta team.")
 
 
+async def files_list_open(agent_state: "AgentState") -> dict:
+    """
+    List currently open files with cursor position, page numbers, and total size.
+
+    Args:
+        agent_state: Current agent state (injected by runtime).
+
+    Returns:
+        dict: Open files with cursor_char, total_chars, page_number, and total_pages.
+    """
+    raise NotImplementedError("Tool not implemented. Please contact the Letta team.")
+
+
 async def file_read_page(agent_state: "AgentState", file_id: str) -> dict:
     """
     Read the current page at the cursor and advance.

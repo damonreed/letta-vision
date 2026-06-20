@@ -158,6 +158,7 @@ class VoiceAgent(BaseAgent):
             archival_memory_size=self.num_archival_memories,
             sources=agent_state.sources,
             max_files_open=agent_state.max_files_open,
+            page_size_chars=agent_state.per_file_view_window_char_limit,
             llm_config=agent_state.llm_config,
         )
         letta_message_db_queue = await create_input_messages(

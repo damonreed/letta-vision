@@ -225,6 +225,47 @@ class ThreeTierFileTools:
             "evicted_file_ids": evicted,
         }
 
+    async def _ensure_file_open(self, agent_state: AgentState, file_id: str):
+        open_row = await self.open_files_manager.get_open_file(
+            agent_id=agent_state.id, file_id=file_id, actor=self.actor
+        )
+        if open_row is not None:
+            return open_row
+        open_row, _evicted = await self.open_files_manager.open_file(
+            agent_id=agent_state.id,
+            file_id=file_id,
+            actor=self.actor,
+            max_files_open=agent_state.max_files_open,
+        )
+        return open_row
+
+    async def files_list_open(self, agent_state: AgentState) -> dict:
+        views = await self.open_files_manager.list_open_files_with_cores(
+            agent_id=agent_state.id, actor=self.actor
+        )
+        page_size = self._page_size(agent_state)
+        open_files = []
+        for view in views:
+            entry = {
+                "file_id": view.file_id,
+                "file_name": view.file_name,
+                "cursor_char": view.cursor_char,
+                "headline": view.summary,
+            }
+            total_chars = view.total_chars
+            if total_chars is not None:
+                entry["total_chars"] = total_chars
+                current_page, total_pages = CharPageReader.page_info(view.cursor_char, total_chars, page_size)
+                entry["page_number"] = current_page
+                entry["total_pages"] = total_pages
+            open_files.append(entry)
+        return {
+            "open_files": open_files,
+            "count": len(open_files),
+            "max_files_open": agent_state.max_files_open,
+            "page_size_chars": page_size,
+        }
+
     async def close_file(self, agent_state: AgentState, file_id: str) -> dict:
         file_id = await self._resolve_file_id(agent_state, file_id)
         closed = await self.open_files_manager.close_file(
@@ -250,11 +291,7 @@ class ThreeTierFileTools:
 
     async def file_read_page(self, agent_state: AgentState, file_id: str) -> dict:
         file_id = await self._resolve_file_id(agent_state, file_id)
-        open_row = await self.open_files_manager.get_open_file(
-            agent_id=agent_state.id, file_id=file_id, actor=self.actor
-        )
-        if open_row is None:
-            raise ValueError(f"File {file_id} is not open. Call open_file first.")
+        open_row = await self._ensure_file_open(agent_state, file_id)
         result = await self._read_page_at_cursor(agent_state, file_id, open_row.cursor_char)
         await self.open_files_manager.update_cursor(
             agent_id=agent_state.id,
@@ -267,11 +304,7 @@ class ThreeTierFileTools:
 
     async def file_read_next_page(self, agent_state: AgentState, file_id: str) -> dict:
         file_id = await self._resolve_file_id(agent_state, file_id)
-        open_row = await self.open_files_manager.get_open_file(
-            agent_id=agent_state.id, file_id=file_id, actor=self.actor
-        )
-        if open_row is None:
-            raise ValueError(f"File {file_id} is not open. Call open_file first.")
+        open_row = await self._ensure_file_open(agent_state, file_id)
         file_meta = await self.file_manager.get_file_by_id(file_id=file_id, actor=self.actor, include_content=True)
         page_size = self._page_size(agent_state)
         reader = CharPageReader(file_meta.content or "", page_size)
@@ -285,11 +318,7 @@ class ThreeTierFileTools:
 
     async def file_read_prev_page(self, agent_state: AgentState, file_id: str) -> dict:
         file_id = await self._resolve_file_id(agent_state, file_id)
-        open_row = await self.open_files_manager.get_open_file(
-            agent_id=agent_state.id, file_id=file_id, actor=self.actor
-        )
-        if open_row is None:
-            raise ValueError(f"File {file_id} is not open. Call open_file first.")
+        open_row = await self._ensure_file_open(agent_state, file_id)
         file_meta = await self.file_manager.get_file_by_id(file_id=file_id, actor=self.actor, include_content=True)
         page_size = self._page_size(agent_state)
         reader = CharPageReader(file_meta.content or "", page_size)

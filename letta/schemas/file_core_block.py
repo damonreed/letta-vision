@@ -39,4 +39,5 @@ class OpenFileCoreView(LettaBase):
     summary: str
     char_limit: int = 2000
     cursor_char: int = 0
+    total_chars: Optional[int] = None
     is_open: bool = True

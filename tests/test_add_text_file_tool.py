@@ -16,6 +16,7 @@ def _normalize_text_file_name(file_name: str) -> str:
 def test_file_add_in_files_tool_set():
     assert "file_add" in FILES_TOOLS
     assert "file_edit_text" in FILES_TOOLS
+    assert "files_list_open" in FILES_TOOLS
 
 
 def test_file_add_function_schema():

@@ -268,6 +268,7 @@ class ConversationManager:
             archival_memory_size=num_archival_memories,
             sources=agent_state.sources,
             max_files_open=agent_state.max_files_open,
+            page_size_chars=agent_state.per_file_view_window_char_limit,
             llm_config=agent_state.llm_config,
         )
 
@@ -349,6 +350,7 @@ class ConversationManager:
             tool_rules_solver=tool_rules_solver,
             sources=agent_state.sources,
             max_files_open=agent_state.max_files_open,
+            page_size_chars=agent_state.per_file_view_window_char_limit,
             llm_config=agent_state.llm_config,
         )
 

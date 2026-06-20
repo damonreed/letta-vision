@@ -55,3 +55,12 @@ class CharPageReader:
     def prev_page_cursor(self, cursor_char: int) -> int:
         current_page = self.page_number_for_cursor(cursor_char)
         return self.cursor_for_page(max(1, current_page - 1))
+
+    @staticmethod
+    def page_info(cursor_char: int, total_chars: int, page_size: int) -> Tuple[int, int]:
+        """Return (current_page, total_pages) for a cursor position."""
+        page_size = max(1, page_size)
+        total_pages = max(1, (total_chars + page_size - 1) // page_size) if total_chars else 1
+        if cursor_char <= 0:
+            return 1, total_pages
+        return min(total_pages, (cursor_char // page_size) + 1), total_pages

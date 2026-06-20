@@ -14,14 +14,36 @@ def test_open_files_section_in_compile():
                 file_name="story.txt",
                 source_id="source-xyz",
                 summary="A stable headline.",
-                cursor_char=0,
+                cursor_char=4500,
+                total_chars=12000,
+            )
+        ],
+    )
+    compiled = memory.compile(sources=[], page_size_chars=1000)
+    assert "<open_files>" in compiled
+    assert "A stable headline." in compiled
+    assert 'cursor="4500/12000"' in compiled
+    assert 'page="5/12"' in compiled
+    assert 'name="story.txt"' in compiled
+
+
+def test_open_files_section_without_page_size_omits_page_attr():
+    memory = Memory(
+        blocks=[Block(label="persona", value="test", limit=2000)],
+        open_file_cores=[
+            OpenFileCoreView(
+                file_id="file-abc",
+                file_name="story.txt",
+                source_id="source-xyz",
+                summary="A stable headline.",
+                cursor_char=100,
+                total_chars=500,
             )
         ],
     )
     compiled = memory.compile(sources=[])
-    assert "<open_files>" in compiled
-    assert "A stable headline." in compiled
-    assert "story.txt" not in compiled or "file_id" in compiled
+    assert 'cursor="100/500"' in compiled
+    assert 'page="' not in compiled
 
 
 def test_directories_exclude_page_content():

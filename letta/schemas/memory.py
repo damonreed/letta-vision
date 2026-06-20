@@ -19,6 +19,7 @@ from letta.schemas.enums import AgentType
 from letta.schemas.file import FileStatus
 from letta.schemas.file_core_block import OpenFileCoreView
 from letta.schemas.message import Message
+from letta.services.files.char_page_reader import CharPageReader
 
 
 class ContextWindowOverview(BaseModel):
@@ -593,7 +594,9 @@ class Memory(BaseModel, validate_assignment=True):
         s.write("</available_skills>")
         return s.getvalue()
 
-    def _render_open_files(self, s: StringIO, max_files_open: Optional[int] = None):
+    def _render_open_files(
+        self, s: StringIO, max_files_open: Optional[int] = None, page_size_chars: Optional[int] = None
+    ):
         s.write("\n\n<open_files>\n")
         if max_files_open is not None:
             current_open = len(self.open_file_cores)
@@ -601,8 +604,16 @@ class Memory(BaseModel, validate_assignment=True):
             s.write(f"- current_files_open={current_open}\n")
             s.write(f"- max_files_open={max_files_open}\n")
             s.write("</file_limits>\n")
+        page_size = max(1, int(page_size_chars)) if page_size_chars is not None else None
         for core in self.open_file_cores:
-            s.write(f'<file file_id="{core.file_id}" name="{core.file_name}">\n')
+            attrs = f'file_id="{core.file_id}" name="{core.file_name}"'
+            total_chars = core.total_chars
+            if total_chars is not None:
+                attrs += f' cursor="{core.cursor_char}/{total_chars}"'
+                if page_size is not None:
+                    current_page, total_pages = CharPageReader.page_info(core.cursor_char, total_chars, page_size)
+                    attrs += f' page="{current_page}/{total_pages}"'
+            s.write(f"<file {attrs}>\n")
             s.write(f"{core.summary}\n")
             s.write("</file>\n")
         s.write("</open_files>")
@@ -684,7 +695,15 @@ class Memory(BaseModel, validate_assignment=True):
             s.write("</directory>\n")
         s.write("</directories>")
 
-    def compile(self, tool_usage_rules=None, sources=None, max_files_open=None, llm_config=None, client_skills=None) -> str:
+    def compile(
+        self,
+        tool_usage_rules=None,
+        sources=None,
+        max_files_open=None,
+        page_size_chars=None,
+        llm_config=None,
+        client_skills=None,
+    ) -> str:
         """Efficiently render memory, tool rules, and sources into a prompt string."""
         s = StringIO()
 
@@ -723,7 +742,7 @@ class Memory(BaseModel, validate_assignment=True):
             s.write("</tool_usage_rules>")
 
         if self.open_file_cores:
-            self._render_open_files(s, max_files_open)
+            self._render_open_files(s, max_files_open, page_size_chars)
 
         if sources:
             if is_react:
@@ -734,13 +753,22 @@ class Memory(BaseModel, validate_assignment=True):
         return s.getvalue()
 
     @trace_method
-    async def compile_async(self, tool_usage_rules=None, sources=None, max_files_open=None, llm_config=None, client_skills=None) -> str:
+    async def compile_async(
+        self,
+        tool_usage_rules=None,
+        sources=None,
+        max_files_open=None,
+        page_size_chars=None,
+        llm_config=None,
+        client_skills=None,
+    ) -> str:
         """Async version that offloads to a thread for CPU-bound string building."""
         return await asyncio.to_thread(
             self.compile,
             tool_usage_rules=tool_usage_rules,
             sources=sources,
             max_files_open=max_files_open,
+            page_size_chars=page_size_chars,
             llm_config=llm_config,
             client_skills=client_skills,
         )

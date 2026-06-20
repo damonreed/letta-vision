@@ -1501,6 +1501,7 @@ class AgentManager:
             archival_memory_size=num_archival_memories,
             sources=agent_state.sources,
             max_files_open=agent_state.max_files_open,
+            page_size_chars=agent_state.per_file_view_window_char_limit,
             llm_config=agent_state.llm_config,
         )
 
@@ -1566,6 +1567,7 @@ class AgentManager:
             sources=agent_state.sources,
             tool_usage_rules=tool_rules_solver.compile_tool_rule_prompts(),
             max_files_open=agent_state.max_files_open,
+            page_size_chars=agent_state.per_file_view_window_char_limit,
             llm_config=agent_state.llm_config,
         )
         if curr_memory_str in curr_system_message_openai["content"] and not force:
@@ -1772,6 +1774,7 @@ class AgentManager:
             sources=agent_state.sources,
             tool_usage_rules=temp_tool_rules_solver.compile_tool_rule_prompts(),
             max_files_open=agent_state.max_files_open,
+            page_size_chars=agent_state.per_file_view_window_char_limit,
             llm_config=agent_state.llm_config,
         )
         if new_memory_str not in system_message.content[0].text:
