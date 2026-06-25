@@ -359,18 +359,22 @@ class MCPServerManager:
                 persisted_tool = persisted_tool_map[tool_name]
                 tool_create = ToolCreate.from_mcp(mcp_server_name=mcp_server_name, mcp_tool=current_tool)
 
-                # Check if schema has changed
-                if persisted_tool.json_schema != tool_create.json_schema:
-                    # Update the tool
+                schema_changed = persisted_tool.json_schema != tool_create.json_schema
+                return_limit_changed = persisted_tool.return_char_limit != tool_create.return_char_limit
+                if schema_changed or return_limit_changed:
                     update_data = ToolUpdate(
                         description=tool_create.description,
                         json_schema=tool_create.json_schema,
                         source_code=tool_create.source_code,
+                        return_char_limit=tool_create.return_char_limit,
                     )
 
                     await self.tool_manager.update_tool_by_id_async(tool_id=persisted_tool.id, tool_update=update_data, actor=actor)
                     updated_tools.append(tool_name)
-                    logger.info(f"Updated MCP tool {tool_name} with new schema from server {mcp_server_name}")
+                    if schema_changed:
+                        logger.info(f"Updated MCP tool {tool_name} with new schema from server {mcp_server_name}")
+                    else:
+                        logger.info(f"Updated MCP tool {tool_name} return_char_limit on server {mcp_server_name}")
             else:
                 # Add new tool
                 # Skip INVALID tools

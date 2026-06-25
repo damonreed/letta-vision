@@ -511,6 +511,7 @@ CORE_MEMORY_BLOCK_CHAR_LIMIT: int = 100000
 # Function return limits
 FUNCTION_RETURN_CHAR_LIMIT = 50000  # ~300 words
 BASE_FUNCTION_RETURN_CHAR_LIMIT = 50000  # same as regular function limit
+MCP_FUNCTION_RETURN_CHAR_LIMIT = 200000  # MCP tools (e.g. Scenecraft) often return large JSON payloads
 FILE_IS_TRUNCATED_WARNING = "# NOTE: This block is truncated, use functions to view the full content."
 
 # Tool return truncation limit for LLM context window management

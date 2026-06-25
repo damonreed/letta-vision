@@ -4,6 +4,7 @@ from pydantic import ConfigDict, Field, model_validator
 
 from letta.constants import (
     FUNCTION_RETURN_CHAR_LIMIT,
+    MCP_FUNCTION_RETURN_CHAR_LIMIT,
     LETTA_BUILTIN_TOOL_MODULE_NAME,
     LETTA_CORE_TOOL_MODULE_NAME,
     LETTA_FILES_TOOL_MODULE_NAME,
@@ -166,6 +167,7 @@ class ToolCreate(LettaBase):
             tags=tags,
             source_code=wrapper_function_str,
             json_schema=json_schema,
+            return_char_limit=MCP_FUNCTION_RETURN_CHAR_LIMIT,
         )
 
     def model_dump(self, to_orm: bool = False, **kwargs):
