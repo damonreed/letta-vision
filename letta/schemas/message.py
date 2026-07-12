@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from letta.constants import DEFAULT_MESSAGE_TOOL, DEFAULT_MESSAGE_TOOL_KWARG, REQUEST_HEARTBEAT_PARAM, TOOL_CALL_ID_MAX_LEN
 from letta.helpers.datetime_helpers import get_utc_time, is_utc_datetime
 from letta.helpers.json_helpers import json_dumps
+from letta.helpers.thinking_tags import split_reasoning_at_thinking_close
 from letta.local_llm.constants import INNER_THOUGHTS_KWARG, INNER_THOUGHTS_KWARG_VERTEX
 from letta.otel.tracing import trace_method
 from letta.schemas.enums import MessageRole, PrimitiveType
@@ -757,24 +758,44 @@ class Message(BaseMessage):
                     )
 
             elif isinstance(content_part, ReasoningContent):
-                # "native" COT
-                if messages and messages[-1].message_type == MessageType.reasoning_message:
-                    messages[-1].reasoning += content_part.reasoning
-                else:
-                    messages.append(
-                        ReasoningMessage(
-                            id=self.id,
-                            date=self.created_at,
-                            reasoning=content_part.reasoning,
-                            source="reasoner_model",  # TODO do we want to tag like this?
-                            signature=content_part.signature,
-                            name=self.name,
-                            otid=otid,
-                            step_id=self.step_id,
-                            is_err=self.is_err,
-                            run_id=self.run_id,
+                # "native" COT — also recover replies some providers leave after </thinking>
+                reasoning_text, leaked_response = split_reasoning_at_thinking_close(content_part.reasoning or "")
+                if reasoning_text:
+                    if messages and messages[-1].message_type == MessageType.reasoning_message:
+                        messages[-1].reasoning += reasoning_text
+                    else:
+                        messages.append(
+                            ReasoningMessage(
+                                id=self.id,
+                                date=self.created_at,
+                                reasoning=reasoning_text,
+                                source="reasoner_model",  # TODO do we want to tag like this?
+                                signature=content_part.signature,
+                                name=self.name,
+                                otid=otid,
+                                step_id=self.step_id,
+                                is_err=self.is_err,
+                                run_id=self.run_id,
+                            )
                         )
-                    )
+                if leaked_response:
+                    otid_response = Message.generate_otid_from_id(self.id, current_message_count + len(messages))
+                    if messages and messages[-1].message_type == MessageType.assistant_message:
+                        messages[-1].content += leaked_response
+                    else:
+                        messages.append(
+                            AssistantMessage(
+                                id=self.id,
+                                date=self.created_at,
+                                content=leaked_response,
+                                name=self.name,
+                                otid=otid_response,
+                                sender_id=self.sender_id,
+                                step_id=self.step_id,
+                                is_err=self.is_err,
+                                run_id=self.run_id,
+                            )
+                        )
 
             elif isinstance(content_part, SummarizedReasoningContent):
                 # TODO remove the cast and just return the native type
@@ -1638,9 +1659,17 @@ class Message(BaseMessage):
         if parse_content_parts and self.content is not None:
             for content in self.content:
                 if isinstance(content, ReasoningContent):
-                    openai_message["reasoning_content"] = content.reasoning
+                    reasoning_text, leaked_response = split_reasoning_at_thinking_close(content.reasoning or "")
+                    openai_message["reasoning_content"] = reasoning_text
                     if content.signature:
                         openai_message["reasoning_content_signature"] = content.signature
+                    # Recover reply text some providers left after an in-band </thinking> marker
+                    if leaked_response:
+                        existing = openai_message.get("content")
+                        if isinstance(existing, str) and existing:
+                            openai_message["content"] = existing + leaked_response
+                        elif existing in (None, ""):
+                            openai_message["content"] = leaked_response
                 if isinstance(content, RedactedReasoningContent):
                     openai_message["redacted_reasoning_content"] = content.data
 

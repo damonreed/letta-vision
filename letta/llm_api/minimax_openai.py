@@ -8,10 +8,9 @@ from typing import Any
 from letta.schemas.llm_config import LLMConfig
 
 # Models that echo thinking in assistant text while also streaming reasoning_content.
-_THINK_TAG = "think"
 _THINKING_BLOCK_PATTERNS = (
+    re.compile(r"<thinking>.*?</thinking>\s*", re.DOTALL | re.IGNORECASE),
     re.compile(r"<think>.*?</think>\s*", re.DOTALL | re.IGNORECASE),
-    re.compile(rf"<{_THINK_TAG}>.*?</{_THINK_TAG}>\s*", re.DOTALL | re.IGNORECASE),
 )
 
 # MiniMax M3 vision accepts low/default/high — not OpenAI's "auto".

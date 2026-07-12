@@ -40,6 +40,7 @@ from openai.types.responses.response_stream_event import ResponseStreamEvent
 
 from letta.constants import DEFAULT_MESSAGE_TOOL, DEFAULT_MESSAGE_TOOL_KWARG
 from letta.llm_api.error_utils import is_context_window_overflow_message
+from letta.helpers.thinking_tags import ThinkingCloseSplitBuffer, split_reasoning_at_thinking_close
 from letta.llm_api.minimax_openai import extract_reasoning_from_message_data, strip_duplicate_thinking_from_assistant_text
 from letta.llm_api.openai_client import is_openai_reasoning_model
 from letta.local_llm.utils import num_tokens_from_functions, num_tokens_from_messages
@@ -641,6 +642,8 @@ class SimpleOpenAIStreamingInterface:
 
         self.content_messages = []
         self.emitted_hidden_reasoning = False  # Track if we've emitted hidden reasoning message
+        # Some OpenRouter models (e.g. Aion) put </thinking> + reply inside reasoning_content
+        self._thinking_close_split = ThinkingCloseSplitBuffer()
 
         self.requires_approval_tools = requires_approval_tools
 
@@ -649,6 +652,21 @@ class SimpleOpenAIStreamingInterface:
         merged_messages = []
         reasoning_content = []
         concat_content_parts: list[str] = []
+
+        # Include any held-back suffix that never completed a close tag
+        held = self._thinking_close_split.flush()
+        if held:
+            self.content_messages.append(
+                ReasoningMessage(
+                    id=self.letta_message_id,
+                    date=datetime.now(timezone.utc).isoformat(),
+                    reasoning=held,
+                    source="reasoner_model",
+                    signature=None,
+                    run_id=self.run_id,
+                    step_id=self.step_id,
+                )
+            )
 
         for msg in self.content_messages:
             if isinstance(msg, HiddenReasoningMessage) and not shown_omitted:
@@ -664,18 +682,22 @@ class SimpleOpenAIStreamingInterface:
 
         if reasoning_content:
             combined_reasoning = "".join(reasoning_content)
+            # Safety net: split any in-band thinking close that was not caught while streaming
+            combined_reasoning, leaked_response = split_reasoning_at_thinking_close(combined_reasoning)
+            if leaked_response:
+                concat_content_parts.insert(0, leaked_response)
             # Only reroute reasoning into content for DeepSeek streams when no assistant text was emitted
             # and no tool calls were produced (i.e., a reasoning-only final answer).
             is_deepseek = bool(self.model and self.model.startswith("deepseek"))
             produced_tool_calls = bool(self._tool_calls_acc)
             if is_deepseek and not concat_content_parts and not produced_tool_calls:
                 concat_content_parts.append(combined_reasoning)
-            else:
+            elif combined_reasoning:
                 merged_messages.append(ReasoningContent(is_native=True, reasoning=combined_reasoning, signature=None))
 
         if concat_content_parts:
             assistant_text = "".join(concat_content_parts)
-            if reasoning_content:
+            if reasoning_content or merged_messages:
                 assistant_text = strip_duplicate_thinking_from_assistant_text(assistant_text)
             if assistant_text:
                 merged_messages.append(TextContent(text=assistant_text))
@@ -907,23 +929,57 @@ class SimpleOpenAIStreamingInterface:
                     or extract_reasoning_from_message_data(delta_dump)
                 )
                 if reasoning_content is not None and reasoning_content != "":
+                    reasoning_part, response_part = self._thinking_close_split.feed(reasoning_content)
+                    if reasoning_part:
+                        if prev_message_type and prev_message_type != "reasoning_message":
+                            message_index += 1
+                        reasoning_msg = ReasoningMessage(
+                            id=self.letta_message_id,
+                            date=datetime.now(timezone.utc).isoformat(),
+                            otid=Message.generate_otid_from_id(self.letta_message_id, message_index),
+                            source="reasoner_model",
+                            reasoning=reasoning_part,
+                            signature=None,
+                            run_id=self.run_id,
+                            step_id=self.step_id,
+                        )
+                        self.content_messages.append(reasoning_msg)
+                        prev_message_type = reasoning_msg.message_type
+                        yield reasoning_msg
+                    if response_part:
+                        if prev_message_type and prev_message_type != "assistant_message":
+                            message_index += 1
+                        assistant_from_reasoning = AssistantMessage(
+                            id=self.letta_message_id,
+                            content=response_part,
+                            date=datetime.now(timezone.utc).isoformat(),
+                            otid=Message.generate_otid_from_id(self.letta_message_id, message_index),
+                            run_id=self.run_id,
+                            step_id=self.step_id,
+                        )
+                        self.content_messages.append(assistant_from_reasoning)
+                        prev_message_type = assistant_from_reasoning.message_type
+                        yield assistant_from_reasoning
+
+            if message_delta.content is not None and message_delta.content != "":
+                # Flush any held thinking-close suffix into reasoning before content arrives
+                held = self._thinking_close_split.flush()
+                if held:
                     if prev_message_type and prev_message_type != "reasoning_message":
                         message_index += 1
-                    reasoning_msg = ReasoningMessage(
+                    held_msg = ReasoningMessage(
                         id=self.letta_message_id,
                         date=datetime.now(timezone.utc).isoformat(),
                         otid=Message.generate_otid_from_id(self.letta_message_id, message_index),
                         source="reasoner_model",
-                        reasoning=reasoning_content,
+                        reasoning=held,
                         signature=None,
                         run_id=self.run_id,
                         step_id=self.step_id,
                     )
-                    self.content_messages.append(reasoning_msg)
-                    prev_message_type = reasoning_msg.message_type
-                    yield reasoning_msg
-
-            if message_delta.content is not None and message_delta.content != "":
+                    self.content_messages.append(held_msg)
+                    prev_message_type = held_msg.message_type
+                    yield held_msg
                 if prev_message_type and prev_message_type != "assistant_message":
                     message_index += 1
                 assistant_msg = AssistantMessage(
