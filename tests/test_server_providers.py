@@ -3112,14 +3112,13 @@ async def test_refresh_byok_provider_removes_old_models(default_user, provider_m
 
 
 @pytest.mark.asyncio
-async def test_refresh_base_provider_fails(default_user, provider_manager):
-    """Test that attempting to refresh a base provider returns an error.
+async def test_refresh_base_provider_requires_enabled_instance(default_user, provider_manager):
+    """Test that refreshing a base provider fails when it is not env-enabled.
 
-    The refresh endpoint should only work for BYOK providers, not base providers.
-    Base providers are managed by environment variables and shouldn't be refreshed.
+    Base providers store no API keys in the DB, so refresh must use the server's
+    in-memory enabled provider. If that instance is missing, refresh returns 400.
     """
-    from fastapi import HTTPException
-
+    from letta.errors import LettaInvalidArgumentError
     from letta.server.rest_api.routers.v1.providers import refresh_provider_models
     from letta.server.server import SyncServer
 
@@ -3136,9 +3135,10 @@ async def test_refresh_base_provider_fails(default_user, provider_manager):
     # Verify it's a base provider
     assert base_provider.provider_category == ProviderCategory.base
 
-    # Create a mock server
+    # Create a mock server with no enabled providers
     server = SyncServer(init_with_default_org_and_user=False)
     server.provider_manager = provider_manager
+    server._enabled_providers = []
 
     # Create mock headers
     mock_headers = MagicMock()
@@ -3148,17 +3148,83 @@ async def test_refresh_base_provider_fails(default_user, provider_manager):
     server.user_manager = MagicMock()
     server.user_manager.get_actor_or_default_async = AsyncMock(return_value=default_user)
 
-    # Attempt to refresh the base provider - should raise HTTPException
-    with pytest.raises(HTTPException) as exc_info:
+    # Attempt to refresh the base provider without an enabled instance
+    with pytest.raises(LettaInvalidArgumentError) as exc_info:
         await refresh_provider_models(
             provider_id=base_provider.id,
             headers=mock_headers,
             server=server,
         )
 
-    assert exc_info.value.status_code == 400
-    assert "BYOK" in exc_info.value.detail
+    assert "not enabled" in str(exc_info.value)
 
+@pytest.mark.asyncio
+async def test_refresh_base_provider_syncs_models(default_user, provider_manager):
+    """Test that refreshing a base provider syncs models via the enabled env instance."""
+    from letta.server.rest_api.routers.v1.providers import refresh_provider_models
+    from letta.server.server import SyncServer
+
+    test_id = generate_test_id()
+    provider_name = f"test-base-refresh-ok-{test_id}"
+
+    base_provider_create = ProviderCreate(
+        name=provider_name,
+        provider_type=ProviderType.openai,
+        api_key="",
+    )
+    base_provider = await provider_manager.create_provider_async(base_provider_create, actor=default_user, is_byok=False)
+    assert base_provider.provider_category == ProviderCategory.base
+
+    mock_llm = LLMConfig(
+        model="gpt-4o",
+        model_endpoint_type="openai",
+        model_endpoint="https://api.openai.com/v1",
+        context_window=128000,
+        handle=f"{provider_name}/gpt-4o",
+        provider_name=provider_name,
+        provider_category=ProviderCategory.base,
+    )
+    mock_embedding = EmbeddingConfig(
+        embedding_model="text-embedding-3-small",
+        embedding_endpoint_type="openai",
+        embedding_endpoint="https://api.openai.com/v1",
+        embedding_dim=1536,
+        embedding_chunk_size=300,
+        handle=f"{provider_name}/text-embedding-3-small",
+    )
+
+    enabled = MagicMock()
+    enabled.name = base_provider.name
+    enabled.list_llm_models_async = AsyncMock(return_value=[mock_llm])
+    enabled.list_embedding_models_async = AsyncMock(return_value=[mock_embedding])
+
+    server = SyncServer(init_with_default_org_and_user=False)
+    server.provider_manager = provider_manager
+    server.default_user = default_user
+    server._enabled_providers = [enabled]
+
+    mock_headers = MagicMock()
+    mock_headers.actor_id = default_user.id
+    server.user_manager = MagicMock()
+    server.user_manager.get_actor_or_default_async = AsyncMock(return_value=default_user)
+
+    refreshed = await refresh_provider_models(
+        provider_id=base_provider.id,
+        headers=mock_headers,
+        server=server,
+    )
+
+    assert refreshed.id == base_provider.id
+    assert refreshed.last_synced is not None
+    enabled.list_llm_models_async.assert_awaited_once()
+    enabled.list_embedding_models_async.assert_awaited_once()
+
+    synced_llm = await provider_manager.list_models_async(
+        actor=default_user,
+        model_type="llm",
+        provider_id=base_provider.id,
+    )
+    assert {m.name for m in synced_llm} == {"gpt-4o"}
 
 @pytest.mark.asyncio
 async def test_get_model_by_handle_prioritizes_byok_over_base(default_user, provider_manager):

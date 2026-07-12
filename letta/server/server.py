@@ -454,6 +454,41 @@ class SyncServer(object):
                 return provider
         return None
 
+    async def refresh_base_provider_models_async(self, persisted_provider: Provider) -> None:
+        """Re-fetch and persist models for a built-in (base) provider using the env-backed instance.
+
+        Base providers do not store API keys in the DB, so refresh must use the in-memory
+        enabled provider from server env (same path as startup sync).
+        """
+        enabled_provider = self._get_enabled_provider(persisted_provider.name)
+        if not enabled_provider:
+            raise LettaInvalidArgumentError(
+                f"Base provider '{persisted_provider.name}' is not enabled in server environment",
+                argument_name="provider_id",
+            )
+
+        llm_models = await enabled_provider.list_llm_models_async()
+        embedding_models = await enabled_provider.list_embedding_models_async()
+
+        await self.provider_manager.sync_provider_models_async(
+            provider=persisted_provider,
+            llm_models=llm_models,
+            embedding_models=embedding_models,
+            organization_id=None,  # Global models
+        )
+        await self.provider_manager.update_provider_last_synced_async(persisted_provider.id)
+        logger.info(
+            f"Refreshed {len(llm_models)} LLM models and {len(embedding_models)} embedding models "
+            f"for base provider {persisted_provider.name}"
+        )
+
+        if persisted_provider.provider_type == ProviderType.openrouter:
+            try:
+                await self.provider_manager.warm_openrouter_vision_cache_async(actor=self.default_user)
+                logger.info("Warmed OpenRouter vision cache after base provider refresh")
+            except Exception as e:
+                logger.error(f"Failed to warm OpenRouter vision cache after refresh: {e}", exc_info=True)
+
     async def _sync_provider_models_async(self):
         """Sync all provider models to database at startup."""
         logger.info("Syncing provider models to database")
