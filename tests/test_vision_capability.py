@@ -52,6 +52,15 @@ def test_registry_moonshot_byok_bare_model_id():
     assert model_supports_vision("kimi-k2.6", handle="openai-proxy/kimi-k2.6")
 
 
+def test_registry_moonshot_kimi_k3():
+    """Kimi K3 has native vision; not covered by kimi-k2* globs."""
+    assert model_supports_vision("kimi-k3", handle="openai-proxy/moonshot-ai/kimi-k3")
+    assert model_supports_vision(
+        "moonshotai/kimi-k3",
+        handle="openai-proxy/moonshotai/kimi-k3",
+    )
+
+
 def test_registry_siliconflow_byok_handle_path():
     assert model_supports_vision(
         "moonshotai/Kimi-K2.6",

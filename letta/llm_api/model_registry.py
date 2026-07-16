@@ -26,7 +26,10 @@ VISION_CAPABLE_MODELS: list[tuple[str, str]] = [
     # OpenRouter — empirically validated (smoke test)
     ("OpenRouter", "moonshotai/kimi-k2.6"),
     ("OpenRouter", "moonshotai/kimi-k2.5"),
+    ("OpenRouter", "moonshotai/kimi-k3"),
     # Moonshot AI direct (OpenAI-compatible BYOK; model ids omit org prefix)
+    ("Moonshot", "kimi-k3"),
+    ("Moonshot", "kimi-k3*"),
     ("Moonshot", "kimi-k2.6"),
     ("Moonshot", "kimi-k2.5"),
     ("Moonshot", "kimi-k2*"),

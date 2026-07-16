@@ -326,6 +326,7 @@ LLM_MAX_CONTEXT_WINDOW = {
     "glm-5": 180000,
     "glm-5-code": 180000,
     # kimi (moonshot)
+    "kimi-k3": 1048576,
     "kimi-k2.5": 262144,
     "kimi-k2.6": 262144,
     "kimi-k2-thinking": 256000,
