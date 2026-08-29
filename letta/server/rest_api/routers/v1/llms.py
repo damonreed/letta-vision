@@ -39,7 +39,15 @@ async def list_llm_models(
     # Convert all models to the new Model schema
     return [
         Model.from_llm_config(
-            model.model_copy(update={"supports_vision": model_supports_vision(model.model, handle=model.handle)})
+            model.model_copy(
+                update={
+                    "supports_vision": model_supports_vision(
+                        model.model,
+                        handle=model.handle,
+                        db_flag=model.supports_vision,
+                    )
+                }
+            )
         )
         for model in models
     ]

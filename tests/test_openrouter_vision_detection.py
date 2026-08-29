@@ -83,6 +83,46 @@ def test_openrouter_without_cache_defaults_false_not_registry():
     )
 
 
+def test_openrouter_cache_miss_uses_db_flag():
+    """Persisted provider_models.supports_vision must win over a cold OpenRouter cache."""
+    assert model_supports_vision(
+        "z-ai/glm-5.3-flash",
+        handle="openrouter/z-ai/glm-5.3-flash",
+        db_flag=True,
+    )
+    assert not model_supports_vision(
+        "z-ai/glm-5.3-flash",
+        handle="openrouter/z-ai/glm-5.3-flash",
+        db_flag=False,
+    )
+
+
+def test_openrouter_glm_53_flash_cached_true():
+    refresh_openrouter_vision_cache(
+        [{"id": "z-ai/glm-5.3-flash", "architecture": {"input_modalities": ["text", "image"]}}]
+    )
+    assert model_supports_vision(
+        "z-ai/glm-5.3-flash",
+        handle="openrouter/z-ai/glm-5.3-flash",
+    )
+
+
+def test_manual_override_false_wins_over_db_flag(tmp_path, monkeypatch):
+    overrides = tmp_path / "model_overrides.json"
+    overrides.write_text(
+        json.dumps({"vision": {"openrouter/z-ai/glm-5.3-flash": False}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("MODEL_OVERRIDES_PATH", str(overrides))
+    reg._BRIDGE_VISION_OVERRIDES = None
+    assert not model_supports_vision(
+        "z-ai/glm-5.3-flash",
+        handle="openrouter/z-ai/glm-5.3-flash",
+        db_flag=True,
+    )
+    reg._BRIDGE_VISION_OVERRIDES = None
+
+
 def test_non_openrouter_handle_uses_registry():
     assert model_supports_vision(
         "moonshotai/kimi-k2.6",

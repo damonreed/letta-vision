@@ -4,7 +4,8 @@ Vision-capability resolution for LLM models.
 Precedence (see model_supports_vision):
 1. Manual override (model_overrides.json from letta-vision-client)
 2. OpenRouter catalog cache (architecture.input_modalities) for openrouter/* handles
-3. Curated registry globs + LETTA_VISION_MODELS_EXTRA for BYOK / non-OpenRouter paths
+3. Persisted provider_models.supports_vision (positive only) when the OpenRouter cache is cold
+4. Curated registry globs + LETTA_VISION_MODELS_EXTRA for BYOK / non-OpenRouter paths
 
 The curated registry (FR §3.1) remains authoritative for openai-proxy, Moonshot BYOK,
 Ollama, etc. OpenRouter base-provider handles use the OpenRouter /v1/models catalog
@@ -27,6 +28,9 @@ VISION_CAPABLE_MODELS: list[tuple[str, str]] = [
     ("OpenRouter", "moonshotai/kimi-k2.6"),
     ("OpenRouter", "moonshotai/kimi-k2.5"),
     ("OpenRouter", "moonshotai/kimi-k3"),
+    ("OpenRouter", "z-ai/glm-5.3-flash"),
+    # Z.AI direct / BYOK (OpenAI-compatible; model ids omit org prefix)
+    ("Z.AI", "glm-5.3-flash"),
     # Moonshot AI direct (OpenAI-compatible BYOK; model ids omit org prefix)
     ("Moonshot", "kimi-k3"),
     ("Moonshot", "kimi-k3*"),
@@ -231,11 +235,17 @@ def _openrouter_cache_supports_vision(model: str, handle: str | None, identifier
     cached = openrouter_model_supports_vision(model)
     if cached is not None:
         return cached
-    return False
+    return None
 
 
-def model_supports_vision(model: str, handle: str | None = None) -> bool:
-    """Return True if the model accepts image content blocks for the configured handle."""
+def model_supports_vision(model: str, handle: str | None = None, db_flag: bool | None = None) -> bool:
+    """Return True if the model accepts image content blocks for the configured handle.
+
+    OpenRouter cache misses do not consult registry globs (over-inclusion is worse
+    than under-inclusion for routed catalogs). Callers that have a persisted
+    provider_models.supports_vision value should pass it as db_flag so a cold
+    cache cannot persist false onto a newly assigned agent.
+    """
     identifiers = _model_identifiers(model, handle)
     bridge_override = _bridge_override_for_identifiers(identifiers, _load_bridge_vision_overrides())
     if bridge_override is not None:
@@ -244,6 +254,14 @@ def model_supports_vision(model: str, handle: str | None = None) -> bool:
     openrouter_cached = _openrouter_cache_supports_vision(model, handle, identifiers)
     if openrouter_cached is not None:
         return openrouter_cached
+
+    # Positive DB catalog flag only. LLMConfig.supports_vision defaults to False, so a
+    # missing/unknown row must not block BYOK registry matches.
+    if db_flag:
+        return True
+
+    if any(_is_openrouter_handle(ident) for ident in identifiers):
+        return False
 
     return _registry_supports_vision(identifiers)
 

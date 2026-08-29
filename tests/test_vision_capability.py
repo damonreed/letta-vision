@@ -75,6 +75,15 @@ def test_registry_moonshot_vision_preview_models():
     )
 
 
+def test_registry_glm_53_flash_byok():
+    """GLM-5.3 Flash is natively multimodal; OpenRouter path still uses the catalog cache."""
+    assert model_supports_vision("glm-5.3-flash", handle="openai-proxy/glm-5.3-flash")
+    assert model_supports_vision(
+        "z-ai/glm-5.3-flash",
+        handle="openai-proxy/z-ai/glm-5.3-flash",
+    )
+
+
 def test_bridge_vision_override_can_disable_registry_match(tmp_path, monkeypatch):
     overrides = tmp_path / "model_overrides.json"
     overrides.write_text(

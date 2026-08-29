@@ -1099,6 +1099,8 @@ class ProviderManager:
         # Construct the LLMConfig from the model and provider data.
         # SGLang providers get return_token_ids/return_logprobs=True so the native
         # adapter is used and token IDs are returned for RL training.
+        from letta.llm_api.model_registry import model_supports_vision
+
         is_sglang = provider.provider_type == ProviderType.sglang
         llm_config = LLMConfig(
             model=model.name,
@@ -1109,6 +1111,9 @@ class ProviderManager:
             provider_name=provider.name,
             provider_category=provider.provider_category,
             max_tokens=max_tokens,
+            supports_vision=model_supports_vision(
+                model.name, handle=model.handle, db_flag=model.supports_vision
+            ),
             return_token_ids=is_sglang,
             return_logprobs=is_sglang,
         )
