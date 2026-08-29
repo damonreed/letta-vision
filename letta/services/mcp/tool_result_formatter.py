@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import io
 import json
 import logging
 import re
@@ -24,9 +23,6 @@ from mcp.types import TextResourceContents
 from letta.schemas.letta_message_content import Base64Image, ImageContent, TextContent
 
 logger = logging.getLogger(__name__)
-
-_MAX_EDGE = 1024
-_JPEG_QUALITY = 85
 
 # Prepended to image-bearing MCP tool returns. The JSON envelope from servers like
 # ZapImage advertises an images[].url, which primes vision models to report the result
@@ -65,42 +61,12 @@ def _image_byte_estimate(piece: Any) -> int:
     return 0
 
 
-def _resize_image_b64(data: str, media_type: str) -> tuple[str, str]:
-    """Downscale base64 image so longest edge <= _MAX_EDGE. Returns (data, media_type)."""
-    try:
-        from PIL import Image
-
-        raw = base64.b64decode(data)
-        img = Image.open(io.BytesIO(raw))
-        w, h = img.size
-        if max(w, h) <= _MAX_EDGE:
-            return data, media_type
-
-        scale = _MAX_EDGE / max(w, h)
-        new_w, new_h = round(w * scale), round(h * scale)
-        img = img.resize((new_w, new_h), Image.LANCZOS)
-
-        has_alpha = img.mode in ("RGBA", "LA", "PA")
-        if has_alpha:
-            out_format, out_media = "PNG", "image/png"
-            buf = io.BytesIO()
-            img.save(buf, format=out_format)
-        else:
-            out_format, out_media = "JPEG", "image/jpeg"
-            if img.mode != "RGB":
-                img = img.convert("RGB")
-            buf = io.BytesIO()
-            img.save(buf, format=out_format, quality=_JPEG_QUALITY)
-
-        encoded = base64.b64encode(buf.getvalue()).decode("ascii")
-        logger.debug("Resized tool-result image %dx%d -> %dx%d (%s)", w, h, new_w, new_h, out_media)
-        return encoded, out_media
-    except Exception as e:
-        logger.warning("Image resize failed, passing original: %s", e)
-        return data, media_type
-
-
 def _mcp_image_to_letta(piece: McpImageContent | dict) -> ImageContent | None:
+    """Keep provider pixels intact so ingest can store full resolution.
+
+    LLM context uses the 1MP derivative (enrichment / on-demand render-policy),
+    not a pre-ingest downscale. Downscaling here would persist 1k as "full".
+    """
     if isinstance(piece, McpImageContent):
         data = piece.data
         media_type = getattr(piece, "mimeType", None) or getattr(piece, "mime_type", None) or "image/png"
@@ -109,7 +75,6 @@ def _mcp_image_to_letta(piece: McpImageContent | dict) -> ImageContent | None:
         media_type = piece.get("mimeType") or piece.get("mime_type") or "image/png"
     if not data:
         return None
-    data, media_type = _resize_image_b64(data, media_type)
     return ImageContent(source=Base64Image(media_type=media_type, data=data))
 
 

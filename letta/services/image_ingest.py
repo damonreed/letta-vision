@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import re
 from datetime import datetime, timezone
@@ -123,6 +124,17 @@ def _parse_caption_json(text: str) -> dict:
     }
 
 
+def _probe_image_dimensions(data: bytes) -> tuple[Optional[int], Optional[int]]:
+    """Read pixel size from image bytes. Returns (None, None) if undecodable."""
+    try:
+        from PIL import Image
+
+        with Image.open(io.BytesIO(data)) as img:
+            return img.size
+    except Exception:
+        return None, None
+
+
 async def ingest_image_sync(
     data: bytes,
     media_type: str,
@@ -145,6 +157,11 @@ async def ingest_image_sync(
     existing = await manager.get_by_hash_async(content_hash, actor)
     if existing:
         return existing.id
+
+    if width is None or height is None:
+        probed_w, probed_h = _probe_image_dimensions(data)
+        width = width if width is not None else probed_w
+        height = height if height is not None else probed_h
 
     key = await store.put_bytes(content_hash, data)
     image_id = manager.new_image_id()

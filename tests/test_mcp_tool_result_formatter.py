@@ -1,7 +1,12 @@
+import base64
+import io
 import json
 
+from mcp.types import EmbeddedResource as McpEmbeddedResource
 from mcp.types import ImageContent as McpImageContent
 from mcp.types import TextContent as McpTextContent
+from mcp.types import TextResourceContents
+from PIL import Image
 
 from letta.schemas.letta_message_content import ImageContent, TextContent
 from letta.schemas.message import tool_return_has_images, tool_return_to_openai_chat_content
@@ -10,6 +15,13 @@ from letta.services.mcp.tool_result_formatter import (
     format_mcp_tool_content,
     mcp_content_to_letta_parts,
 )
+
+
+def _png_b64(width: int, height: int) -> str:
+    img = Image.new("RGB", (width, height), color=(200, 40, 40))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
 def test_format_omits_image_base64_keeps_json():
@@ -47,6 +59,20 @@ def test_mcp_content_to_letta_parts_preserves_image():
     image_part = next(p for p in out if isinstance(p, ImageContent))
     assert image_part.source.data == huge
     assert "example.com" in next(p.text for p in out if isinstance(p, TextContent))
+
+
+def test_mcp_content_to_letta_parts_preserves_full_resolution():
+    """generate_image 2k pixels must reach ingest; do not downscale in the formatter."""
+    data = _png_b64(2048, 1365)
+    content = [
+        McpTextContent(type="text", text='{"status": "success"}'),
+        McpImageContent(type="image", data=data, mimeType="image/png"),
+    ]
+    out = mcp_content_to_letta_parts(content)
+    image_part = next(p for p in out if isinstance(p, ImageContent))
+    raw = base64.b64decode(image_part.source.data)
+    img = Image.open(io.BytesIO(raw))
+    assert img.size == (2048, 1365)
 
 
 def test_mcp_content_to_letta_parts_prepends_inline_visibility_note():

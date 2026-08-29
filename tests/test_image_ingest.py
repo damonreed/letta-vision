@@ -9,6 +9,7 @@ from letta.schemas.letta_message_content import LettaImage
 from letta.services.image_ingest import (
     _extract_assistant_text,
     _parse_caption_json,
+    _probe_image_dimensions,
     convert_historic_images_in_message,
     ingest_images_in_message,
 )
@@ -272,3 +273,66 @@ def test_extract_assistant_text_minimax_reasoning_split_fallback():
         }
     )
     assert "Lantern street" in text
+
+
+def test_probe_image_dimensions_reads_png_size():
+    from io import BytesIO
+
+    from PIL import Image
+
+    buf = BytesIO()
+    Image.new("RGB", (2048, 1365), color=(10, 20, 30)).save(buf, format="PNG")
+    width, height = _probe_image_dimensions(buf.getvalue())
+    assert (width, height) == (2048, 1365)
+
+
+def test_probe_image_dimensions_undecodable_returns_none():
+    assert _probe_image_dimensions(b"not-an-image") == (None, None)
+
+
+@pytest.mark.asyncio
+async def test_ingest_image_sync_records_probed_dimensions(monkeypatch):
+    from io import BytesIO
+
+    from PIL import Image
+
+    from letta.orm.image import ImageRecord
+    from letta.services.image_ingest import ingest_image_sync
+
+    buf = BytesIO()
+    Image.new("RGB", (2496, 1664), color=(1, 2, 3)).save(buf, format="PNG")
+    raw = buf.getvalue()
+    captured = {}
+
+    class FakeStore:
+        def content_hash(self, data):
+            return "hash-test"
+
+        def wire_byte_size(self, data):
+            return len(data)
+
+        async def put_bytes(self, content_hash, data, suffix=""):
+            return f"obj/{content_hash}"
+
+    class FakeManager:
+        def new_image_id(self):
+            return "image-dim-1"
+
+        async def get_by_hash_async(self, content_hash, actor):
+            return None
+
+        async def create_record_async(self, record, actor):
+            captured["record"] = record
+
+    monkeypatch.setattr("letta.services.image_ingest.get_object_store_client", lambda: FakeStore())
+    monkeypatch.setattr("letta.services.image_ingest.ImageManager", FakeManager)
+
+    class FakeActor:
+        organization_id = "org-test"
+
+    image_id = await ingest_image_sync(raw, "image/png", actor=FakeActor(), provenance="generated")
+    assert image_id == "image-dim-1"
+    record = captured["record"]
+    assert isinstance(record, ImageRecord)
+    assert record.width == 2496
+    assert record.height == 1664
