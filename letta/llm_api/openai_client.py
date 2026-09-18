@@ -203,6 +203,27 @@ def supports_content_none(llm_config: LLMConfig) -> bool:
     return True
 
 
+def _is_muse_spark_model(model: str | None) -> bool:
+    return "muse-spark" in (model or "").lower()
+
+
+def _is_muse_spark_contributor(model: str | None) -> bool:
+    name = (model or "").lower()
+    return "muse-spark" in name and "contributor" in name
+
+
+def _openrouter_reasoning_effort(model: str | None, effort: str | None) -> str | None:
+    """Highest Contributor-tier effort Meta actually accepts.
+
+    OpenRouter lists `max` for muse-spark-1.3-contributor, but Meta returns HTTP 400.
+    `xhigh` is the highest accepted value; treat unset and `max` as `xhigh`.
+    """
+    if _is_muse_spark_contributor(model):
+        if effort is None or effort == "max":
+            return "xhigh"
+    return effort
+
+
 def _is_openrouter_endpoint(
     endpoint: str | None,
     *,
@@ -818,15 +839,18 @@ class OpenAIClient(LLMClientBase):
                 }
 
         # Add OpenRouter reasoning configuration via extra_body
-        if is_openrouter and llm_config.enable_reasoner:
+        if is_openrouter and (llm_config.enable_reasoner or _is_muse_spark_model(model)):
             reasoning_config = {}
-            if llm_config.reasoning_effort:
-                reasoning_config["effort"] = llm_config.reasoning_effort
+            effort = _openrouter_reasoning_effort(model, llm_config.reasoning_effort)
+            if effort:
+                reasoning_config["effort"] = effort
             if llm_config.max_reasoning_tokens and llm_config.max_reasoning_tokens > 0:
                 reasoning_config["max_tokens"] = llm_config.max_reasoning_tokens
             if not reasoning_config:
                 reasoning_config = {"enabled": True}
-            request_data["extra_body"] = {"reasoning": reasoning_config}
+            existing_extra = request_data.get("extra_body", {})
+            existing_extra["reasoning"] = reasoning_config
+            request_data["extra_body"] = existing_extra
 
         # Add OpenRouter provider preferences for GLM-5 auto mode
         # Exclude low-quality (fp4), degraded, tool-unsupported, and high-error-rate providers

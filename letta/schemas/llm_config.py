@@ -570,7 +570,19 @@ class LLMConfig(BaseModel):
         # Moonshot Kimi reasoning models
         if "kimi" in model:
             return True
+        # Meta Muse Spark is a mandatory-reasoning model (`none` is rejected).
+        if "muse-spark" in model:
+            return True
         return False
+
+    @classmethod
+    def _apply_muse_spark_reasoning_defaults(cls, config: "LLMConfig") -> "LLMConfig":
+        """Muse Spark cannot disable reasoning; Contributor rejects effort=max."""
+        config.enable_reasoner = True
+        config.put_inner_thoughts_in_kwargs = False
+        if "contributor" in config.model.lower() and (config.reasoning_effort is None or config.reasoning_effort == "max"):
+            config.reasoning_effort = "xhigh"
+        return config
 
     @classmethod
     def supports_verbosity(cls, config: "LLMConfig") -> bool:
@@ -638,8 +650,10 @@ class LLMConfig(BaseModel):
                 config.put_inner_thoughts_in_kwargs = False
                 return config
 
-            # OpenRouter reasoning models: toggle honored
+            # OpenRouter reasoning models: toggle honored (Muse Spark cannot disable)
             if cls.is_openrouter_reasoning_model(config):
+                if "muse-spark" in config.model.lower():
+                    return cls._apply_muse_spark_reasoning_defaults(config)
                 config.enable_reasoner = bool(reasoning)
                 config.put_inner_thoughts_in_kwargs = False
                 return config
@@ -692,6 +706,9 @@ class LLMConfig(BaseModel):
                 config.enable_reasoner = True
                 if config.max_reasoning_tokens == 0:
                     config.max_reasoning_tokens = 1024
+            elif cls.is_openrouter_reasoning_model(config) and "muse-spark" in config.model.lower():
+                logger.warning("Reasoning cannot be disabled for Muse Spark models")
+                return cls._apply_muse_spark_reasoning_defaults(config)
             else:
                 config.put_inner_thoughts_in_kwargs = False
                 config.enable_reasoner = False
@@ -719,6 +736,8 @@ class LLMConfig(BaseModel):
             elif cls.is_zai_reasoning_model(config):
                 config.put_inner_thoughts_in_kwargs = False
             elif cls.is_openrouter_reasoning_model(config):
+                if "muse-spark" in config.model.lower():
+                    return cls._apply_muse_spark_reasoning_defaults(config)
                 config.put_inner_thoughts_in_kwargs = False
             elif cls.is_openai_reasoning_model(config):
                 config.put_inner_thoughts_in_kwargs = False

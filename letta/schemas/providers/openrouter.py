@@ -136,6 +136,13 @@ class OpenRouterProvider(OpenAIProvider):
                 logger.debug(f"Model {model_name} missing context_length, using default: {context_window_size}")
 
             supports_vision = self.model_has_image_input(model)
+            name_lower = model_name.lower()
+            extra_kwargs = {}
+            if "muse-spark" in name_lower:
+                extra_kwargs["enable_reasoner"] = True
+                if "contributor" in name_lower:
+                    # Meta rejects effort=max on Contributor; xhigh is the highest accepted value.
+                    extra_kwargs["reasoning_effort"] = "xhigh"
             configs.append(
                 LLMConfig(
                     model=model_name,
@@ -147,6 +154,7 @@ class OpenRouterProvider(OpenAIProvider):
                     provider_name=self.name,
                     provider_category=self.provider_category,
                     supports_vision=supports_vision,
+                    **extra_kwargs,
                 )
             )
 
