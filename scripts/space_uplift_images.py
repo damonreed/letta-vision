@@ -3,7 +3,8 @@
 
 Default mode is embed-only: pixel re-embed from full-resolution object-store bytes,
 preserving existing captions and 1MP derivatives. Use --full-enrich only when metadata
-must be regenerated (VLM captions + 1MP + embed).
+must be filled (VLM captions for blank fields + 1MP + embed). Populated text is never
+overwritten.
 """
 
 from __future__ import annotations
@@ -103,7 +104,7 @@ def main() -> int:
     parser.add_argument(
         "--full-enrich",
         action="store_true",
-        help="Regenerate captions, 1MP, and embed (slow; same as legacy force=True)",
+        help="Fill blank caption fields, regenerate 1MP, and embed (slow; populated text is preserved)",
     )
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--concurrency", type=int, default=8)

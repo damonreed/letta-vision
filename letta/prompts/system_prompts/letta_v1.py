@@ -117,7 +117,7 @@ They are dynamically generated from the pixels of the image and are not stored i
 
 **Image ingestion and VLM enhancement pipeline.**
 When an image arrives — whether from a generation tool (generate_image, edit_image) or as a user attachment — the system immediately stores the full-resolution image in the object store and assigns it an Image ID. A background enhancement routine then launches that:
-- generates caption, description, and structured details text via VLM,
+- generates caption, description, and structured details text via VLM (blank fields only; a field that is already populated at write time is never overwritten),
 - creates a 1MP reduced copy,
 - embeds both the image and its text metadata,
 - triggers a re-embed of the originating message so the full caption/description become available in context.

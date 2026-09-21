@@ -9,6 +9,8 @@ import re
 from datetime import datetime, timezone
 from typing import List, Literal, Optional, Union
 
+from sqlalchemy import select
+
 from letta.embeddings.resolver import resolve_embedding_config_async
 from letta.embeddings.util import prepare_vector_for_write
 from letta.llm_api.llm_client import LLMClient
@@ -41,6 +43,8 @@ _CAPTION_FALLBACK = {
     "description": "An image was shared in this conversation.",
     "details": "Image content available via fetch_image.",
 }
+
+_IMAGE_TEXT_FIELDS = ("caption", "description", "details")
 
 _CAPTION_PROMPT = (
     "Describe this image. Respond with a single JSON object only (no markdown fences) "
@@ -552,6 +556,68 @@ def _captions_from_image(image) -> dict:
     }
 
 
+def _text_is_populated(value: Optional[str]) -> bool:
+    """True when a text field has non-whitespace content that automatic generation must not overwrite."""
+    return bool(value and str(value).strip())
+
+
+def _all_text_fields_populated(captions: dict) -> bool:
+    return all(_text_is_populated(captions.get(field)) for field in _IMAGE_TEXT_FIELDS)
+
+
+def _merge_caption_fields(existing: dict, generated: dict) -> dict:
+    """Keep non-blank existing text; fill only blank fields from generated output."""
+    merged = {}
+    for field in _IMAGE_TEXT_FIELDS:
+        current = existing.get(field)
+        if _text_is_populated(current):
+            merged[field] = current
+        else:
+            merged[field] = generated.get(field)
+    return merged
+
+
+def _apply_generated_text_if_blank(row, generated: dict) -> dict:
+    """Write generated text only into currently blank fields. Call immediately before persist."""
+    applied = {}
+    for field in _IMAGE_TEXT_FIELDS:
+        current = getattr(row, field)
+        if _text_is_populated(current):
+            applied[field] = current
+            continue
+        value = generated.get(field)
+        setattr(row, field, value)
+        applied[field] = value
+    return applied
+
+
+async def _lock_image_row_for_update(session, image_id: str, actor: PydanticUser):
+    """Load the image row with FOR UPDATE so the blank-field check sees the latest committed text."""
+    q = select(ImageRecord).where(ImageRecord.id == image_id).with_for_update()
+    if actor is not None and getattr(actor, "organization_id", None):
+        q = q.where(ImageRecord.organization_id == actor.organization_id)
+    row = (await session.execute(q)).scalar_one_or_none()
+    if row is None:
+        raise ValueError(f"Image not found: {image_id}")
+    return row
+
+
+async def _resolve_enrichment_captions(image, raw: bytes, actor: PydanticUser) -> dict:
+    """VLM caption request. Populated-field preservation happens at write time, not here.
+
+    Skips the VLM call when every text field is already filled (cost only).
+    """
+    existing_captions = _captions_from_image(image)
+    if _all_text_fields_populated(existing_captions):
+        logger.info(
+            "Skipping VLM caption generation for %s; caption, description, and details are already populated",
+            image.id,
+        )
+        return existing_captions
+
+    return await _generate_three_tier_captions(raw, image.media_type, actor)
+
+
 async def reembed_image_embedding_only(image_id: str, actor: PydanticUser) -> None:
     """Re-pixel-embed from stored full-resolution bytes; leave captions and 1MP unchanged.
 
@@ -598,7 +664,11 @@ async def enrich_image_background(
     message_id: Optional[str] = None,
     force: bool = False,
 ) -> None:
-    """Background: 1MP derivative, captions, pixel embed, message re-embed push."""
+    """Background: 1MP derivative, captions, pixel embed, message re-embed push.
+
+    Caption/description/details are filled only when still blank at persist time;
+    populated text is preserved even on forced re-enrichment.
+    """
     manager = ImageManager()
     store = get_object_store_client()
     try:
@@ -620,19 +690,19 @@ async def enrich_image_background(
             embed_bytes, embed_media_type, onemp_wire = generate_1mp_derivative(raw, image.media_type)
             onemp_key = await store.put_bytes(image.content_hash, embed_bytes, suffix="_1mp")
 
-        captions = await _generate_three_tier_captions(raw, image.media_type, actor)
+        captions = await _resolve_enrichment_captions(image, raw, actor)
         embedding_config = await resolve_embedding_config_async(actor=actor)
         llm_client = LLMClient.create(embedding_config.embedding_endpoint_type, actor=actor)
 
         from letta.server.db import db_registry
 
         async with db_registry.async_session() as session:
-            row = await ImageRecord.read_async(db_session=session, identifier=image_id, actor=actor)
+            # Re-read under row lock after the VLM call so an edit that landed during
+            # generation is visible; then apply generated text only to still-blank fields.
+            row = await _lock_image_row_for_update(session, image_id, actor)
             row.object_url_1mp = onemp_key
             row.file_size_1mp = onemp_wire
-            row.caption = captions.get("caption")
-            row.description = captions.get("description")
-            row.details = captions.get("details")
+            captions = _apply_generated_text_if_blank(row, captions)
             await row.update_async(session, actor=actor)
 
         prepared = await _embed_image_vector(

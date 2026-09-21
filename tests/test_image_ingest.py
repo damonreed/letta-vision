@@ -7,9 +7,12 @@ from letta.schemas.letta_message_content import Base64Image, ImageContent, TextC
 from letta.schemas.message import Message, ToolReturn
 from letta.schemas.letta_message_content import LettaImage
 from letta.services.image_ingest import (
+    _apply_generated_text_if_blank,
     _extract_assistant_text,
+    _merge_caption_fields,
     _parse_caption_json,
     _probe_image_dimensions,
+    _text_is_populated,
     convert_historic_images_in_message,
     ingest_images_in_message,
 )
@@ -273,6 +276,108 @@ def test_extract_assistant_text_minimax_reasoning_split_fallback():
         }
     )
     assert "Lantern street" in text
+
+
+def test_text_is_populated_rejects_blank():
+    assert _text_is_populated("kept caption") is True
+    assert _text_is_populated(None) is False
+    assert _text_is_populated("") is False
+    assert _text_is_populated("   \n") is False
+
+
+def test_merge_caption_fields_preserves_populated_and_fills_blanks():
+    existing = {"caption": "Keep me", "description": None, "details": "  "}
+    generated = {"caption": "New cap", "description": "New desc", "details": "New details"}
+    merged = _merge_caption_fields(existing, generated)
+    assert merged["caption"] == "Keep me"
+    assert merged["description"] == "New desc"
+    assert merged["details"] == "New details"
+
+
+def test_merge_caption_fields_all_populated_ignores_generated():
+    existing = {"caption": "A", "description": "B", "details": "C"}
+    generated = {"caption": "X", "description": "Y", "details": "Z"}
+    assert _merge_caption_fields(existing, generated) == existing
+
+
+def test_apply_generated_text_if_blank_skips_populated_fields():
+    from types import SimpleNamespace
+
+    row = SimpleNamespace(caption="User caption", description=None, details="  ")
+    generated = {"caption": "VLM cap", "description": "VLM desc", "details": "VLM details"}
+    applied = _apply_generated_text_if_blank(row, generated)
+    assert row.caption == "User caption"
+    assert row.description == "VLM desc"
+    assert row.details == "VLM details"
+    assert applied == {
+        "caption": "User caption",
+        "description": "VLM desc",
+        "details": "VLM details",
+    }
+
+
+def test_apply_generated_text_if_blank_does_not_touch_fully_populated_row():
+    from types import SimpleNamespace
+
+    row = SimpleNamespace(caption="A", description="B", details="C")
+    applied = _apply_generated_text_if_blank(row, {"caption": "X", "description": "Y", "details": "Z"})
+    assert row.caption == "A"
+    assert row.description == "B"
+    assert row.details == "C"
+    assert applied == {"caption": "A", "description": "B", "details": "C"}
+
+
+@pytest.mark.asyncio
+async def test_resolve_enrichment_captions_skips_vlm_when_all_populated(monkeypatch):
+    from types import SimpleNamespace
+
+    from letta.services.image_ingest import _resolve_enrichment_captions
+
+    called = False
+
+    async def fake_generate(*args, **kwargs):
+        nonlocal called
+        called = True
+        return {"caption": "X", "description": "Y", "details": "Z"}
+
+    monkeypatch.setattr("letta.services.image_ingest._generate_three_tier_captions", fake_generate)
+    image = SimpleNamespace(
+        id="image-1",
+        media_type="image/png",
+        caption="Existing caption",
+        description="Existing description",
+        details="Existing details",
+    )
+    captions = await _resolve_enrichment_captions(image, b"raw", actor=None)
+    assert called is False
+    assert captions == {
+        "caption": "Existing caption",
+        "description": "Existing description",
+        "details": "Existing details",
+    }
+
+
+@pytest.mark.asyncio
+async def test_resolve_enrichment_captions_fills_only_blank_fields(monkeypatch):
+    from types import SimpleNamespace
+
+    from letta.services.image_ingest import _resolve_enrichment_captions
+
+    generated = {"caption": "Generated cap", "description": "Generated desc", "details": "Generated details"}
+
+    async def fake_generate(*args, **kwargs):
+        return generated
+
+    monkeypatch.setattr("letta.services.image_ingest._generate_three_tier_captions", fake_generate)
+    image = SimpleNamespace(
+        id="image-2",
+        media_type="image/png",
+        caption="User caption",
+        description=None,
+        details="",
+    )
+    captions = await _resolve_enrichment_captions(image, b"raw", actor=None)
+    assert captions == generated
 
 
 def test_probe_image_dimensions_reads_png_size():
