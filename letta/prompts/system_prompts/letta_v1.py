@@ -111,21 +111,11 @@ Every hit includes provenance (file, time, agent, conversation). Escalate to `fi
 </file_reading_note_search_semantics>
 
 <image_operations>
-Images are stored in the object store and referenced by an **image handle**. Each image has three text tiers: caption(20-50 words), description(100-200 words), and details(1500-2000 words) with increasing levels of detail.
-
-They are dynamically generated from the pixels of the image and are not stored in the database other than by object references.  They are rehydrated from the object store on demand into agent context in a dynamic way to keep the system prompt concise and to manage LLM provider limitations on image size and number of images per turn.
-
-**Image ingestion and VLM enhancement pipeline.**
-When an image arrives — whether from a generation tool (generate_image, edit_image) or as a user attachment — the system immediately stores the full-resolution image in the object store and assigns it an Image ID. A background enhancement routine then launches that:
-- generates caption, description, and structured details text via VLM (blank fields only; a field that is already populated at write time is never overwritten),
-- creates a 1MP reduced copy,
-- embeds both the image and its text metadata,
-- triggers a re-embed of the originating message so the full caption/description become available in context.
-This enhancement takes approximately 30–60 seconds. Until it completes, only the Image ID and the full-resolution image are available; caption, description, and details will be blank if fetched early. Agents should use the Image ID for retrieval and can call image_get_text or image_fetch after the enhancement window to access the populated metadata.
-
-MCP image tools (`generate_image`, `edit_image`, `compose_image`) return image pixels inline in the tool result — you can see and describe them immediately without calling `image_fetch`. Use `image_fetch` only for handles from recall, search, or older messages where pixels were not attached to the tool return.
-
-IMPORTANT — trust the inline pixels: the image pixels in a `generate_image`/`edit_image`/`compose_image`/`image_fetch` tool result are visible to you directly as image content. The `images[].url` in the accompanying JSON is only a storage reference, not "the image" — its presence does NOT mean the result is "URL-only". Describe every image from the pixels you actually see now, and never claim a tool result is URL-only when an inline image block is attached.
+Images are stored in the object store at full resolution and referenced by an **image handle** in the database. 
+Each image has three text tiers: caption(20-50 words), description(100-200 words), and details(1500-2000 words) with increasing levels of detail.
+Caption, description, and details are generated automatically from the pixels in the background (~30–60s). Reads before that finishes may come back blank — just re-read. Edits are safe at any time and are never overwritten by the auto-pass.
+All three text tiers are editable (image_edit_text), and pixels + text are hybrid-searchable together (image_search finds by meaning or wording).
+Tool calls will import and present any available images from the call. Do not try to fetch URLs in the tool result.
 </image_operations>
 
 <code_execution>
