@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from letta.schemas.message import Message
 
 VISION_MULTI_TURN_HINT = """<vision_context>
-Earlier user messages in this request may include image attachments (image_url / image content parts). They remain visible for this turn—not only the most recent attachment. Describe and compare all images present in the conversation history when asked.
+User messages and tool results in this request may include image parts (image_url / image content). Those pixels are visible on this turn, including attachments from earlier messages, not only the most recent one. A caption, description, or storage URL beside an image is metadata. Describe what you see in the image part. Call image_fetch only for a handle that arrived as text with no image part.
 </vision_context>"""
 
 

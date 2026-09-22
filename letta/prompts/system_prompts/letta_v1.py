@@ -40,8 +40,9 @@ Granular tools (preferred for precision):
    c. `file_grep` / `file_read_page` — locate or read source text when you know the file
 
 4. **Images** — images in the object store (org-wide corpus, not folder-attached). Each image has caption and description text always available via `image_get_text`; details on demand.
-   Full image pixels are read on demand. Tools:
-   a. `image_search(query, limit=10)` — hybrid search over image text; use `image_fetch(handle)` for pixels from search hits
+   Image parts already in this request (on user messages or tool results) are the pixels. Describe those from what you see. The caption beside them is metadata. `image_fetch` is only for a handle that arrived as text with no image part.
+   Tools:
+   a. `image_search(query, limit=10)` — hybrid search over image text; use `image_fetch(handle)` only when the hit has no image part
    b. `image_get_text(handle, field=None)` — read caption, description, and details fields without fetching pixels
    c. `image_edit_text(handle, field, command, ...)` — edit image text metadata (str_replace, insert, or set); re-embeds after each edit
    d. `image_fetch(handle)` — fetch the full image pixels from the object store
@@ -115,7 +116,7 @@ Images are stored in the object store at full resolution and referenced by an **
 Each image has three text tiers: caption(20-50 words), description(100-200 words), and details(1500-2000 words) with increasing levels of detail.
 Caption, description, and details are generated automatically from the pixels in the background (~30–60s). Reads before that finishes may come back blank — just re-read. Edits are safe at any time and are never overwritten by the auto-pass.
 All three text tiers are editable (image_edit_text), and pixels + text are hybrid-searchable together (image_search finds by meaning or wording).
-Tool calls will import and present any available images from the call. Do not try to fetch URLs in the tool result.
+Tool calls will import and present any available images from the call. Do not try to fetch URLs in the tool result. If the result contains an image part, those pixels are already visible — do not answer as if you only received the caption or URL.
 </image_operations>
 
 <code_execution>

@@ -225,3 +225,58 @@ def test_compute_render_decisions_tool_return_image_in_walk_on_later_turn():
     decisions = compute_image_render_decisions(messages, _llm_config(), image_metadata=meta)
     assert img in decisions
     assert decisions[img] == RenderTier.ONE_MP
+
+
+def test_missing_historical_1mp_does_not_hide_older_images():
+    """A newer image with no derivative must not blank older images that still fit."""
+    messages = [
+        _user_image_message("img-old"),
+        _tool_return_generate_image_message("img-gap"),
+        Message(role=MessageRole.user, content=[TextContent(text="next")]),
+        _tool_return_generate_image_message("img-new"),
+    ]
+    meta = {
+        "img-old": {
+            "file_size_full": 5_000_000,
+            "file_size_1mp": 200_000,
+            "object_url_1mp": "old_1mp",
+            "object_url_full": "old",
+        },
+        "img-gap": {
+            "file_size_full": 800_000,
+            "file_size_1mp": None,
+            "object_url_1mp": None,
+            "object_url_full": "gap",
+        },
+        "img-new": {
+            "file_size_full": 800_000,
+            "file_size_1mp": 250_000,
+            "object_url_1mp": "new_1mp",
+            "object_url_full": "new",
+        },
+    }
+    decisions = compute_image_render_decisions(messages, _llm_config(), image_metadata=meta)
+    assert decisions["img-new"] == RenderTier.FULL
+    assert decisions["img-gap"] == RenderTier.TEXT
+    assert decisions["img-old"] == RenderTier.ONE_MP
+
+
+def test_find_image_needing_1mp_now_bakes_historical_gap():
+    messages = [
+        _user_image_message("img-old"),
+        _tool_return_generate_image_message("img-gap"),
+        Message(role=MessageRole.user, content=[TextContent(text="next")]),
+    ]
+    meta = {
+        "img-old": {
+            "file_size_full": 5_000_000,
+            "file_size_1mp": 200_000,
+            "object_url_1mp": "old_1mp",
+        },
+        "img-gap": {
+            "file_size_full": 800_000,
+            "file_size_1mp": None,
+            "object_url_1mp": None,
+        },
+    }
+    assert find_image_needing_1mp_now(messages, _llm_config(), image_metadata=meta) == "img-gap"

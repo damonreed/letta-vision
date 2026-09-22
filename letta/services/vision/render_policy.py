@@ -121,7 +121,7 @@ def find_image_needing_1mp_now(
     *,
     image_metadata: Optional[Dict[str, dict]] = None,
 ) -> Optional[str]:
-    """Return the first current-turn image that needs an on-demand 1MP bake."""
+    """Return the next image that needs an on-demand 1MP bake, newest first."""
     if not conversation_has_letta_images(messages):
         return None
     if not supports_image_blocks_in_history(llm_config):
@@ -166,10 +166,16 @@ def find_image_needing_1mp_now(
             else:
                 demoted = True
         else:
+            if onemp_size is None and not info.get("object_url_1mp"):
+                # Enrichment may not have finished. Bake instead of treating the
+                # gap as budget overflow, which would hide every older image.
+                return img_id
             if onemp_size and onemp_size <= remaining:
                 remaining -= onemp_size
                 if parts_remaining is not None:
                     parts_remaining -= needed_parts
+            elif onemp_size is None:
+                continue
             else:
                 demoted = True
 
@@ -239,7 +245,12 @@ def compute_image_render_decisions(
                     decisions[img_id] = RenderTier.TEXT
                     demoted = True
         else:
-            if onemp_size and onemp_size <= remaining:
+            if onemp_size is None:
+                # No derivative yet (or size unknown). Omit this image only;
+                # older images that still fit keep their pixels.
+                decisions[img_id] = RenderTier.TEXT
+                continue
+            if onemp_size <= remaining:
                 decisions[img_id] = RenderTier.ONE_MP
                 remaining -= onemp_size
                 if parts_remaining is not None:
