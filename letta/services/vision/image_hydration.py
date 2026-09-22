@@ -93,6 +93,25 @@ def _maybe_prepend_reference(parts: list, file_id: str, info: dict, *, as_dict: 
     parts.append(_reference_text_part(file_id, info, as_dict=as_dict))
 
 
+def _media_type_for_image_bytes(raw: bytes, fallback: str) -> str:
+    """MIME type from the bytes themselves.
+
+    The 1MP derivative is always JPEG (`generate_1mp_derivative`), while
+    `images.media_type` stays the original upload type. Labeling those JPEG
+    bytes as `image/png` makes providers drop the part, so the model only
+    sees the caption text.
+    """
+    if raw.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if raw.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if len(raw) >= 12 and raw.startswith(b"RIFF") and raw[8:12] == b"WEBP":
+        return "image/webp"
+    return fallback
+
+
 async def _hydrate_letta_image_bytes(
     file_id: str,
     tier: RenderTier,
@@ -110,8 +129,8 @@ async def _hydrate_letta_image_bytes(
     if not key:
         return None, None
     raw = await store.get_bytes(key)
-    media_type = info.get("media_type") or "image/png"
-    return base64.standard_b64encode(raw).decode("ascii"), media_type
+    fallback = info.get("media_type") or "image/png"
+    return base64.standard_b64encode(raw).decode("ascii"), _media_type_for_image_bytes(raw, fallback)
 
 
 async def _apply_letta_image_hydration(
@@ -148,7 +167,7 @@ async def _apply_letta_image_hydration(
         data, hydrated_type = await _hydrate_letta_image_bytes(file_id, tier, info, store)
         if data:
             source["data"] = data
-            source["media_type"] = source.get("media_type") or hydrated_type or info.get("media_type")
+            source["media_type"] = hydrated_type or source.get("media_type") or info.get("media_type")
             image_part = {**image_part, "source": source}
     except Exception as exc:
         logger.warning("Failed to hydrate image %s: %s", file_id, exc)

@@ -65,3 +65,37 @@ async def test_hydrate_content_full_tier_prepends_reference_and_pixels():
     assert "Caption: Lighthouse" in msg.content[0].text
     assert isinstance(msg.content[1], ImageContent)
     assert msg.content[1].source.data
+    assert msg.content[1].source.media_type == "image/png"
+
+
+@pytest.mark.asyncio
+async def test_hydrate_content_one_mp_jpeg_is_not_labeled_as_original_png():
+    """1MP derivatives are JPEG even when the upload and the Letta ref say PNG."""
+
+    class _Store:
+        async def get_bytes(self, key):
+            assert key == "images/onemp"
+            return b"\xff\xd8\xff\xe0" + b"\x00" * 8
+
+    msg = Message(
+        role=MessageRole.user,
+        content=[ImageContent(source=LettaImage(file_id="img-content", media_type="image/png"))],
+    )
+    metadata = {
+        "img-content": {
+            "object_url_1mp": "images/onemp",
+            "media_type": "image/png",
+            "caption": "Poster",
+            "description": "Seven night challenge poster",
+        }
+    }
+    await _hydrate_content_letta_images(
+        msg,
+        metadata,
+        _Store(),
+        decisions={"img-content": RenderTier.ONE_MP},
+    )
+    image = msg.content[1]
+    assert isinstance(image, ImageContent)
+    assert image.source.media_type == "image/jpeg"
+    assert image.source.data.startswith("/9j/")
