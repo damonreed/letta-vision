@@ -59,13 +59,16 @@ async def test_hydrate_content_full_tier_prepends_reference_and_pixels():
         _Store(),
         decisions={"img-content": RenderTier.FULL},
     )
-    assert len(msg.content) == 2
+    assert len(msg.content) == 3
     assert isinstance(msg.content[0], TextContent)
-    assert "Image ID: image-img-content" in msg.content[0].text
-    assert "Caption: Lighthouse" in msg.content[0].text
-    assert isinstance(msg.content[1], ImageContent)
-    assert msg.content[1].source.data
-    assert msg.content[1].source.media_type == "image/png"
+    assert "directly visible" in msg.content[0].text
+    assert isinstance(msg.content[1], TextContent)
+    assert "Image ID: image-img-content" in msg.content[1].text
+    assert "Caption:" not in msg.content[1].text
+    assert "Description:" not in msg.content[1].text
+    assert isinstance(msg.content[2], ImageContent)
+    assert msg.content[2].source.data
+    assert msg.content[2].source.media_type == "image/png"
 
 
 @pytest.mark.asyncio
@@ -95,7 +98,10 @@ async def test_hydrate_content_one_mp_jpeg_is_not_labeled_as_original_png():
         _Store(),
         decisions={"img-content": RenderTier.ONE_MP},
     )
-    image = msg.content[1]
+    image = msg.content[-1]
     assert isinstance(image, ImageContent)
+    handle = msg.content[-2]
+    assert isinstance(handle, TextContent)
+    assert "Caption:" not in handle.text
     assert image.source.media_type == "image/jpeg"
     assert image.source.data.startswith("/9j/")

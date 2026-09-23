@@ -21,6 +21,13 @@ from letta.services.vision.render_policy import (
 
 logger = get_logger(__name__)
 
+# User-message images have no tool-result visibility note. Without one, the model
+# treats the adjacent caption as the whole input and reports that the upload was text.
+_USER_IMAGE_VISIBILITY_NOTE = (
+    "[This image is attached inline in the user message and is directly visible right now. "
+    "Describe it from the pixels. Do not answer from a caption, and do not say the upload arrived as text.]"
+)
+
 ImagePart = Union[ImageContent, dict]
 
 
@@ -80,17 +87,34 @@ def _preceding_part_has_image_id(parts: list, file_id: str) -> bool:
     return normalized in text or file_id in text
 
 
-def _reference_text_part(file_id: str, info: dict, *, as_dict: bool):
-    text = format_image_llm_reference_from_metadata(file_id, info)
+def _reference_text_part(file_id: str, info: dict, *, as_dict: bool, include_text_tiers: bool = True):
+    text = format_image_llm_reference_from_metadata(file_id, info, include_text_tiers=include_text_tiers)
     if as_dict:
         return {"type": "text", "text": text}
     return TextContent(text=text)
 
 
-def _maybe_prepend_reference(parts: list, file_id: str, info: dict, *, as_dict: bool) -> None:
+def _maybe_prepend_reference(
+    parts: list,
+    file_id: str,
+    info: dict,
+    *,
+    as_dict: bool,
+    include_text_tiers: bool = True,
+) -> None:
     if _preceding_part_has_image_id(parts, file_id):
         return
-    parts.append(_reference_text_part(file_id, info, as_dict=as_dict))
+    parts.append(_reference_text_part(file_id, info, as_dict=as_dict, include_text_tiers=include_text_tiers))
+
+
+def _append_user_visibility_note(parts: list, *, as_dict: bool) -> None:
+    text = _part_text(parts[-1]) if parts else ""
+    if "directly visible" in text:
+        return
+    if as_dict:
+        parts.append({"type": "text", "text": _USER_IMAGE_VISIBILITY_NOTE})
+    else:
+        parts.append(TextContent(text=_USER_IMAGE_VISIBILITY_NOTE))
 
 
 def _media_type_for_image_bytes(raw: bytes, fallback: str) -> str:
@@ -142,13 +166,18 @@ async def _apply_letta_image_hydration(
     updated_parts: list,
     image_part: ImagePart,
     as_dict: bool,
+    user_attachment: bool = False,
 ) -> None:
     if tier == RenderTier.TEXT:
         if not _preceding_part_has_image_id(updated_parts, file_id):
             updated_parts.append(_reference_text_part(file_id, info, as_dict=as_dict))
         return
 
-    _maybe_prepend_reference(updated_parts, file_id, info, as_dict=as_dict)
+    if user_attachment:
+        _append_user_visibility_note(updated_parts, as_dict=as_dict)
+    # Pixels are in the following part. Caption and description are a substitute
+    # the model will prefer, then report that it never received the image.
+    _maybe_prepend_reference(updated_parts, file_id, info, as_dict=as_dict, include_text_tiers=not user_attachment)
 
     if isinstance(image_part, ImageContent) and isinstance(image_part.source, LettaImage):
         media_type = image_part.source.media_type or info.get("media_type") or "image/png"
@@ -335,6 +364,7 @@ async def _hydrate_content_letta_images(
                 updated_parts=updated_parts,
                 image_part=block,
                 as_dict=False,
+                user_attachment=True,
             )
         elif isinstance(block, dict) and block.get("type") == "image":
             source = block.get("source") or {}
@@ -352,6 +382,7 @@ async def _hydrate_content_letta_images(
                 updated_parts=updated_parts,
                 image_part=block,
                 as_dict=True,
+                user_attachment=True,
             )
         else:
             updated_parts.append(block)

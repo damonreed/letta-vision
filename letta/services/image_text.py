@@ -32,22 +32,35 @@ def format_image_llm_reference(
     *,
     caption: Optional[str] = None,
     description: Optional[str] = None,
+    include_text_tiers: bool = True,
 ) -> str:
-    """Companion text for hydrated images: handle plus optional caption/description tiers."""
+    """Companion text for hydrated images: handle plus optional caption/description tiers.
+
+    When the pixels are already attached, omit caption and description. Those tiers
+    are a full stand-in for the picture, and the model will answer from them and
+    report that the upload never arrived.
+    """
     image_id = normalize_image_handle(file_id)
     lines = [f"Image ID: {image_id} (image_fetch, image_get_text, image_edit_text)"]
-    if caption and str(caption).strip():
-        lines.append(f"Caption: {str(caption).strip()}")
-    if description and str(description).strip():
-        lines.append(f"Description: {str(description).strip()}")
+    if include_text_tiers:
+        if caption and str(caption).strip():
+            lines.append(f"Caption: {str(caption).strip()}")
+        if description and str(description).strip():
+            lines.append(f"Description: {str(description).strip()}")
     return "\n".join(lines)
 
 
-def format_image_llm_reference_from_metadata(file_id: str, info: dict) -> str:
+def format_image_llm_reference_from_metadata(
+    file_id: str,
+    info: dict,
+    *,
+    include_text_tiers: bool = True,
+) -> str:
     return format_image_llm_reference(
         file_id,
         caption=info.get("caption"),
         description=info.get("description"),
+        include_text_tiers=include_text_tiers,
     )
 
 
