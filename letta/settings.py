@@ -473,7 +473,7 @@ class Settings(BaseSettings):
 
     # v0.6.0 multimodal memory
     vision_context_byte_cap: int = Field(
-        default=20 * 1024 * 1024,
+        default=15 * 1024 * 1024,
         description="Provider request wire-byte ceiling for image blocks in chat history (base64-encoded sizes).",
     )
     image_caption_model_handle: Optional[str] = Field(
