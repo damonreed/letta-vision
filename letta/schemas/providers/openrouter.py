@@ -91,7 +91,19 @@ class OpenRouterProvider(OpenAIProvider):
         OpenRouter models provide context_length in the API response,
         so this is mainly a fallback.
         """
+        if "gemini-3.8-flash" in (model_name or "").lower():
+            from letta.llm_api.openai_client import GEMINI_38_FLASH_CONTEXT_WINDOW
+
+            return GEMINI_38_FLASH_CONTEXT_WINDOW
         return DEFAULT_CONTEXT_WINDOW
+
+    def get_default_max_output_tokens(self, model_name: str) -> int:
+        """Gemini 3.8 Flash can emit 64k tokens; the OpenAI fallback is 16k."""
+        if "gemini-3.8-flash" in (model_name or "").lower():
+            from letta.llm_api.openai_client import GEMINI_38_FLASH_MAX_OUTPUT_TOKENS
+
+            return GEMINI_38_FLASH_MAX_OUTPUT_TOKENS
+        return super().get_default_max_output_tokens(model_name)
 
     async def list_llm_models_async(self) -> list[LLMConfig]:
         """
@@ -143,6 +155,10 @@ class OpenRouterProvider(OpenAIProvider):
                 if "contributor" in name_lower:
                     # Meta rejects effort=max on Contributor; xhigh is the highest accepted value.
                     extra_kwargs["reasoning_effort"] = "xhigh"
+            elif "gemini-3.8-flash" in name_lower:
+                # Every call uses thinking level high. minimal is rejected.
+                extra_kwargs["enable_reasoner"] = True
+                extra_kwargs["reasoning_effort"] = "high"
             configs.append(
                 LLMConfig(
                     model=model_name,

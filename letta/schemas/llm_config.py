@@ -585,6 +585,16 @@ class LLMConfig(BaseModel):
         return config
 
     @classmethod
+    def _apply_gemini_38_flash_reasoning_defaults(cls, config: "LLMConfig", reasoning: bool) -> "LLMConfig":
+        """Gemini 3.8 Flash always uses thinking level high."""
+        from letta.llm_api.openai_client import gemini_38_flash_reasoning_effort
+
+        config.enable_reasoner = True
+        config.put_inner_thoughts_in_kwargs = False
+        config.reasoning_effort = gemini_38_flash_reasoning_effort(config.reasoning_effort, enabled=reasoning)
+        return config
+
+    @classmethod
     def supports_verbosity(cls, config: "LLMConfig") -> bool:
         """Check if the model supports verbosity control."""
         return config.model_endpoint_type == "openai" and config.model.startswith("gpt-5")
@@ -650,10 +660,12 @@ class LLMConfig(BaseModel):
                 config.put_inner_thoughts_in_kwargs = False
                 return config
 
-            # OpenRouter reasoning models: toggle honored (Muse Spark cannot disable)
+            # OpenRouter reasoning models: toggle honored (Muse Spark and Gemini 3.8 Flash cannot disable)
             if cls.is_openrouter_reasoning_model(config):
                 if "muse-spark" in config.model.lower():
                     return cls._apply_muse_spark_reasoning_defaults(config)
+                if "gemini-3.8-flash" in config.model.lower():
+                    return cls._apply_gemini_38_flash_reasoning_defaults(config, reasoning)
                 config.enable_reasoner = bool(reasoning)
                 config.put_inner_thoughts_in_kwargs = False
                 return config
@@ -709,6 +721,9 @@ class LLMConfig(BaseModel):
             elif cls.is_openrouter_reasoning_model(config) and "muse-spark" in config.model.lower():
                 logger.warning("Reasoning cannot be disabled for Muse Spark models")
                 return cls._apply_muse_spark_reasoning_defaults(config)
+            elif cls.is_openrouter_reasoning_model(config) and "gemini-3.8-flash" in config.model.lower():
+                logger.warning("Reasoning cannot be disabled for Gemini 3.8 Flash; using thinking level high")
+                return cls._apply_gemini_38_flash_reasoning_defaults(config, False)
             else:
                 config.put_inner_thoughts_in_kwargs = False
                 config.enable_reasoner = False
@@ -738,6 +753,8 @@ class LLMConfig(BaseModel):
             elif cls.is_openrouter_reasoning_model(config):
                 if "muse-spark" in config.model.lower():
                     return cls._apply_muse_spark_reasoning_defaults(config)
+                if "gemini-3.8-flash" in config.model.lower():
+                    return cls._apply_gemini_38_flash_reasoning_defaults(config, True)
                 config.put_inner_thoughts_in_kwargs = False
             elif cls.is_openai_reasoning_model(config):
                 config.put_inner_thoughts_in_kwargs = False

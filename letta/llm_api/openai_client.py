@@ -224,6 +224,55 @@ def _openrouter_reasoning_effort(model: str | None, effort: str | None) -> str |
     return effort
 
 
+# Gemini 3.8 Flash output cap. Thinking tokens share this budget.
+GEMINI_38_FLASH_MAX_OUTPUT_TOKENS = 65536
+GEMINI_38_FLASH_CONTEXT_WINDOW = 1_048_576
+# Caps inherited from generic provider fallbacks, not from this model's limit.
+_GEMINI_38_FLASH_FALLBACK_OUTPUT_TOKENS = frozenset({4096, 16384})
+
+
+def _is_gemini_38_flash(model: str | None) -> bool:
+    return "gemini-3.8-flash" in (model or "").lower()
+
+
+def gemini_38_flash_reasoning_effort(effort: str | None = None, *, enabled: bool = True) -> str:
+    """Every Gemini 3.8 Flash call uses thinking level high.
+
+    Stored effort and the reasoning toggle are ignored. ``minimal`` is an
+    error on this model, and thinking cannot be turned off.
+    """
+    del effort, enabled
+    return "high"
+
+
+def _apply_gemini_38_flash_request_options(request_data: dict, llm_config: LLMConfig) -> None:
+    """Send thinking-level effort and drop options Gemini 3.8 Flash rejects.
+
+    Google's migration notes for this model: use ``thinking_level`` (via
+    OpenRouter ``reasoning.effort``), do not send ``thinking_budget``
+    (``reasoning.max_tokens``), and strip ``temperature`` / ``top_p`` / ``top_k``.
+    """
+    effort = gemini_38_flash_reasoning_effort(
+        llm_config.reasoning_effort,
+        enabled=bool(llm_config.enable_reasoner),
+    )
+    extra = dict(request_data.get("extra_body") or {})
+    reasoning = dict(extra.get("reasoning") or {})
+    reasoning.pop("max_tokens", None)
+    reasoning.pop("enabled", None)
+    reasoning["effort"] = effort
+    extra["reasoning"] = reasoning
+    request_data["extra_body"] = extra
+
+    request_data.pop("temperature", None)
+    request_data.pop("top_p", None)
+    request_data.pop("top_k", None)
+
+    max_out = request_data.get("max_completion_tokens")
+    if max_out is None or max_out in _GEMINI_38_FLASH_FALLBACK_OUTPUT_TOKENS:
+        request_data["max_completion_tokens"] = GEMINI_38_FLASH_MAX_OUTPUT_TOKENS
+
+
 def _is_openrouter_endpoint(
     endpoint: str | None,
     *,
@@ -838,8 +887,9 @@ class OpenAIClient(LLMClientBase):
                     "chat_template_args": {"enable_thinking": True},
                 }
 
-        # Add OpenRouter reasoning configuration via extra_body
-        if is_openrouter and (llm_config.enable_reasoner or _is_muse_spark_model(model)):
+        # Add OpenRouter reasoning configuration via extra_body.
+        # Gemini 3.8 Flash is shaped afterwards: effort only, no token budget.
+        if is_openrouter and not _is_gemini_38_flash(model) and (llm_config.enable_reasoner or _is_muse_spark_model(model)):
             reasoning_config = {}
             effort = _openrouter_reasoning_effort(model, llm_config.reasoning_effort)
             if effort:
@@ -851,6 +901,9 @@ class OpenAIClient(LLMClientBase):
             existing_extra = request_data.get("extra_body", {})
             existing_extra["reasoning"] = reasoning_config
             request_data["extra_body"] = existing_extra
+
+        if is_openrouter and _is_gemini_38_flash(model):
+            _apply_gemini_38_flash_request_options(request_data, llm_config)
 
         # Add OpenRouter provider preferences for GLM-5 auto mode
         # Exclude low-quality (fp4), degraded, tool-unsupported, and high-error-rate providers
