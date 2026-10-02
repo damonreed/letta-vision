@@ -586,7 +586,7 @@ class LLMConfig(BaseModel):
 
     @classmethod
     def _apply_gemini_38_flash_reasoning_defaults(cls, config: "LLMConfig", reasoning: bool) -> "LLMConfig":
-        """Gemini 3.8 Flash always uses thinking level high."""
+        """Gemini 3.8 Flash always uses Google's default thinking level, medium."""
         from letta.llm_api.openai_client import gemini_38_flash_reasoning_effort
 
         config.enable_reasoner = True
@@ -722,7 +722,7 @@ class LLMConfig(BaseModel):
                 logger.warning("Reasoning cannot be disabled for Muse Spark models")
                 return cls._apply_muse_spark_reasoning_defaults(config)
             elif cls.is_openrouter_reasoning_model(config) and "gemini-3.8-flash" in config.model.lower():
-                logger.warning("Reasoning cannot be disabled for Gemini 3.8 Flash; using thinking level high")
+                logger.warning("Reasoning cannot be disabled for Gemini 3.8 Flash; using thinking level medium")
                 return cls._apply_gemini_38_flash_reasoning_defaults(config, False)
             else:
                 config.put_inner_thoughts_in_kwargs = False

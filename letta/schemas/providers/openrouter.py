@@ -156,9 +156,9 @@ class OpenRouterProvider(OpenAIProvider):
                     # Meta rejects effort=max on Contributor; xhigh is the highest accepted value.
                     extra_kwargs["reasoning_effort"] = "xhigh"
             elif "gemini-3.8-flash" in name_lower:
-                # Every call uses thinking level high. minimal is rejected.
+                # Every call uses Google's default thinking level, medium. minimal is rejected.
                 extra_kwargs["enable_reasoner"] = True
-                extra_kwargs["reasoning_effort"] = "high"
+                extra_kwargs["reasoning_effort"] = "medium"
             configs.append(
                 LLMConfig(
                     model=model_name,

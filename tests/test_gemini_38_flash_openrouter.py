@@ -45,47 +45,47 @@ def _request(llm_config: LLMConfig) -> dict:
     )
 
 
-def test_gemini_38_flash_effort_is_always_high():
+def test_gemini_38_flash_effort_is_always_medium():
     for effort in (None, "medium", "low", "high", "xhigh", "max", "minimal", "none"):
-        assert gemini_38_flash_reasoning_effort(effort, enabled=True) == "high"
-        assert gemini_38_flash_reasoning_effort(effort, enabled=False) == "high"
+        assert gemini_38_flash_reasoning_effort(effort, enabled=True) == "medium"
+        assert gemini_38_flash_reasoning_effort(effort, enabled=False) == "medium"
 
 
 def test_gemini_38_flash_request_uses_thinking_level_not_budget():
     request_data = _request(_flash_config(enable_reasoner=True, reasoning_effort=None))
 
     reasoning = request_data["extra_body"]["reasoning"]
-    assert reasoning == {"effort": "high"}
+    assert reasoning == {"effort": "medium"}
     assert "temperature" not in request_data
     assert "top_p" not in request_data
     assert request_data["max_completion_tokens"] == GEMINI_38_FLASH_MAX_OUTPUT_TOKENS
     assert request_data["model"] == "google/gemini-3.8-flash"
 
 
-def test_gemini_38_flash_request_keeps_explicit_output_cap_and_forces_high_effort():
+def test_gemini_38_flash_request_keeps_explicit_output_cap_and_forces_medium_effort():
     request_data = _request(
-        _flash_config(enable_reasoner=False, reasoning_effort="low", max_tokens=8192, temperature=1.0)
+        _flash_config(enable_reasoner=False, reasoning_effort="high", max_tokens=8192, temperature=1.0)
     )
 
-    assert request_data["extra_body"]["reasoning"] == {"effort": "high"}
+    assert request_data["extra_body"]["reasoning"] == {"effort": "medium"}
     assert request_data["max_completion_tokens"] == 8192
     assert "temperature" not in request_data
 
 
-def test_gemini_38_flash_disabled_reasoning_drops_to_low():
+def test_gemini_38_flash_disabled_reasoning_stays_medium():
     config = _flash_config(enable_reasoner=True, reasoning_effort="high")
     updated = LLMConfig.apply_reasoning_setting_to_config(
         config.model_copy(), reasoning=False, agent_type=AgentType.letta_v1_agent
     )
     assert updated.enable_reasoner is True
     assert updated.put_inner_thoughts_in_kwargs is False
-    assert updated.reasoning_effort == "high"
+    assert updated.reasoning_effort == "medium"
 
     request_data = _request(updated)
-    assert request_data["extra_body"]["reasoning"] == {"effort": "high"}
+    assert request_data["extra_body"]["reasoning"] == {"effort": "medium"}
 
 
-def test_gemini_38_flash_reasoning_setting_is_always_high():
+def test_gemini_38_flash_reasoning_setting_is_always_medium():
     config = _flash_config(reasoning_effort="minimal")
     for agent_type in (AgentType.letta_v1_agent, AgentType.memgpt_v2_agent):
         for reasoning in (True, False):
@@ -93,7 +93,7 @@ def test_gemini_38_flash_reasoning_setting_is_always_high():
                 config.model_copy(), reasoning=reasoning, agent_type=agent_type
             )
             assert updated.enable_reasoner is True
-            assert updated.reasoning_effort == "high"
+            assert updated.reasoning_effort == "medium"
 
 
 @pytest.mark.asyncio
@@ -116,7 +116,7 @@ async def test_openrouter_list_stamps_gemini_38_flash(monkeypatch):
     configs = {c.model: c for c in await provider.list_llm_models_async()}
 
     flash = configs["google/gemini-3.8-flash"]
-    assert flash.reasoning_effort == "high"
+    assert flash.reasoning_effort == "medium"
     assert flash.enable_reasoner is True
     assert flash.max_tokens == GEMINI_38_FLASH_MAX_OUTPUT_TOKENS
 

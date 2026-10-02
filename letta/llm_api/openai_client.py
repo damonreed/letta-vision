@@ -236,13 +236,13 @@ def _is_gemini_38_flash(model: str | None) -> bool:
 
 
 def gemini_38_flash_reasoning_effort(effort: str | None = None, *, enabled: bool = True) -> str:
-    """Every Gemini 3.8 Flash call uses thinking level high.
+    """Every Gemini 3.8 Flash call uses Google's default thinking level, medium.
 
     Stored effort and the reasoning toggle are ignored. ``minimal`` is an
     error on this model, and thinking cannot be turned off.
     """
     del effort, enabled
-    return "high"
+    return "medium"
 
 
 def _apply_gemini_38_flash_request_options(request_data: dict, llm_config: LLMConfig) -> None:
