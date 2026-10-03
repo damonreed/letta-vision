@@ -41,6 +41,7 @@ from letta.llm_api.error_utils import (
     is_openrouter_image_payload_limit_message,
     openrouter_image_payload_limit_user_message,
 )
+from letta.llm_api.gemini_schema import sanitize_openai_tools_for_gemini
 from letta.llm_api.helpers import (
     add_inner_thoughts_to_functions,
     convert_response_format_to_responses_api,
@@ -919,6 +920,11 @@ class OpenAIClient(LLMClientBase):
             request_data["extra_body"] = merge_provider_preferences(llm_config, existing_extra)
 
         apply_minimax_openai_request_extras(request_data, llm_config)
+
+        # Gemini rejects type-unions that include "array" without an items schema
+        # ("any_of[N].items: missing field"). Rewrite only on the way out.
+        if request_data.get("tools") and "gemini" in (model or "").lower():
+            request_data["tools"] = sanitize_openai_tools_for_gemini(request_data["tools"])
 
         return request_data
 

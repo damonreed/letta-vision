@@ -34,6 +34,7 @@ from letta.errors import (
 from letta.helpers.datetime_helpers import get_utc_time_int
 from letta.helpers.json_helpers import json_dumps, json_loads, sanitize_unicode_surrogates
 from letta.llm_api.error_utils import is_insufficient_credits_message
+from letta.llm_api.gemini_schema import sanitize_json_schema_for_gemini
 from letta.llm_api.llm_client_base import LLMClientBase
 from letta.local_llm.json_parser import clean_json_string_extra_backslash
 from letta.log import get_logger
@@ -411,6 +412,7 @@ class GoogleVertexClient(LLMClientBase):
             if "parameters" in func and isinstance(func["parameters"], dict):
                 # Resolve $ref in schema because Google AI SDK doesn't support them
                 func["parameters"] = self._resolve_json_schema_refs(func["parameters"])
+                func["parameters"] = sanitize_json_schema_for_gemini(func["parameters"])
                 self._clean_google_ai_schema_properties(func["parameters"])
 
             # Add inner thoughts
