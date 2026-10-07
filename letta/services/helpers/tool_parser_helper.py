@@ -6,6 +6,7 @@ from typing import Any, Union
 from letta.constants import REQUEST_HEARTBEAT_DESCRIPTION, REQUEST_HEARTBEAT_PARAM, SEND_MESSAGE_TOOL_NAME
 from letta.schemas.agent import AgentState
 from letta.schemas.response_format import ResponseFormatType, ResponseFormatUnion
+from letta.services.mcp.image_arg_resolver import annotate_image_tool_schema
 from letta.types import JsonDict, JsonValue
 
 
@@ -86,10 +87,12 @@ def runtime_override_tool_json_schema(
     Cases:
         1. We will inject `send_message` tool calls with `response_format` if provided
         2. Tools will have an additional `request_heartbeat` parameter added (except for terminal tools).
+        3. Zapimage edit/compose tools accept an image handle (image-<uuid>) in place of a URL.
     """
     if terminal_tools is None:
         terminal_tools = set()
     for tool_json in tool_list:
+        annotate_image_tool_schema(tool_json)
         if tool_json["name"] == SEND_MESSAGE_TOOL_NAME and response_format and response_format.type != ResponseFormatType.text:
             if response_format.type == ResponseFormatType.json_schema:
                 tool_json["parameters"]["properties"]["message"] = response_format.json_schema["schema"]

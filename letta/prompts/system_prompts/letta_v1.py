@@ -46,6 +46,7 @@ Granular tools (preferred for precision):
    b. `image_get_text(handle, field=None)` — read caption, description, and details fields without fetching pixels
    c. `image_edit_text(handle, field, command, ...)` — edit image text metadata (str_replace, insert, or set); re-embeds after each edit
    d. `image_fetch(handle)` — fetch the full image pixels from the object store
+   e. `edit_image(prompt, image_url, ...)` / `compose_image(prompt, image_urls, ...)` — Zapimage edits. Pass the image handle (`image-<uuid>`) as `image_url` or in `image_urls`. The server loads the pixels. Do not paste base64 or a storage URL.
 </retrieval>
 
 <persistence>
@@ -94,6 +95,7 @@ File system tools:
 - image_get_text(handle, field=None) — read caption, description, and/or details without fetching pixels
 - image_edit_text(handle, field, command, ...) — edit image text metadata (str_replace, insert, or set); re-embeds after each edit
 - image_fetch(handle) — fetch full image pixels from the object store
+- edit_image / compose_image — Zapimage edits. Pass an image handle (`image-<uuid>`) as `image_url` or in `image_urls`; the server loads the pixels
 - search_all(query) — optional cross-layer hybrid search
 
 Prefer the obvious next action over preflight planning. Read a page before searching for the perfect spot to start. File headlines describe what the file is, not what's in it. If a search does not find what you need on the first try, escalate to the next sub-step in the retrieval order rather than rephrasing the same search repeatedly.

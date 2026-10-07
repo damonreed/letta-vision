@@ -8,6 +8,7 @@ from letta.schemas.sandbox_config import SandboxConfig
 from letta.schemas.tool import Tool
 from letta.schemas.tool_execution_result import ToolExecutionResult
 from letta.schemas.user import User
+from letta.services.mcp.image_arg_resolver import resolve_mcp_image_arguments
 from letta.services.mcp_manager import MCPManager
 from letta.services.tool_executor.tool_executor_base import ToolExecutor
 from letta.utils import get_friendly_error_msg
@@ -46,6 +47,11 @@ class ExternalMCPToolExecutor(ToolExecutor):
         if agent_state:
             environment_variables = agent_state.get_agent_env_vars_as_dict()
             agent_id = agent_state.id
+
+        try:
+            function_args = await resolve_mcp_image_arguments(function_name, function_args, actor)
+        except ValueError as exc:
+            return ToolExecutionResult(status="error", func_return=str(exc))
 
         try:
             function_response, success = await mcp_manager.execute_mcp_server_tool(
