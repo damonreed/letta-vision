@@ -179,21 +179,21 @@ async def file_edit_text(
     """
     Edit the body text of a plain-text file (.txt, .md). Re-ingests passages for search after each edit.
 
-    Commands (same semantics as image_edit_text and the memory tool):
-        str_replace — replace old_string with new_string (must match exactly once)
-        insert — insert insert_text after insert_line (-1 appends)
-        set — replace the entire file body with new_string
+    Send only the arguments for the command you chose. The file is file_id, not path.
+        str_replace — requires old_string and new_string (must match exactly once)
+        insert — requires insert_text. insert_line=-1 appends. Do not send the new text as new_string.
+        set — requires new_string and replaces the entire file body
 
     File body edits are shared across agents — the file is the source of truth for all readers.
     Re-read with file_read_page after editing if you are paging through the file.
 
     Args:
-        file_id (str): The file ID to edit.
-        command (str): Edit operation to perform.
-        old_string (Optional[str]): Text to replace (str_replace only).
-        new_string (Optional[str]): Replacement text (str_replace, set).
-        insert_text (Optional[str]): Text to insert (insert only).
-        insert_line (int): Line index for insert (-1 appends).
+        file_id (str): The file ID to edit. This is the only file argument. Do not send path, old_path, or new_path.
+        command (str): One of str_replace, insert, set.
+        old_string (Optional[str]): Exact text to replace. Required for str_replace. Ignored by insert and set.
+        new_string (Optional[str]): Replacement text. Required for str_replace and set. Not the insert payload.
+        insert_text (Optional[str]): Text to insert. Required for insert. Do not send this as new_string.
+        insert_line (int): Line index for insert. -1 appends. Ignored by str_replace and set.
 
     Returns:
         dict: Status, file_id, char_count, command, and processing_status while re-ingest runs.

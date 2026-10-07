@@ -21,49 +21,52 @@ def memory(
     new_path: Optional[str] = None,
 ) -> Optional[str]:
     """
-    Memory management tool with various sub-commands for memory block operations.
+    Edit core memory blocks. The block you are editing is always the `path` argument.
+
+    `old_path` and `new_path` are used only by command="rename". They do not set `path`.
+    If a call returns "path is required", resend with `path` set. Do not retry old_path or new_path for insert or str_replace.
+    Send only the arguments for the command you chose.
+
+    Commands:
+        insert — append or insert text. Requires path and insert_text. insert_line=-1 appends. The inserted text is insert_text, not new_string.
+        str_replace — replace one exact occurrence. Requires path, old_string, and new_string.
+        create — new block. Requires path and description. file_text is optional starting text.
+        delete — remove a block. Requires path.
+        rename — move a block with old_path and new_path. To change a description instead, pass path and description.
 
     Args:
-        command (str): The sub-command to execute. Supported commands:
-            - "create": Create a new memory block
-            - "str_replace": Replace text in a memory block
-            - "insert": Insert text at a specific line in a memory block
-            - "delete": Delete a memory block
-            - "rename": Rename a memory block
-        path (Optional[str]): Path to the memory block (for str_replace, insert, delete)
-        file_text (Optional[str]): The value to set in the memory block (for create)
-        description (Optional[str]): The description to set in the memory block (for create, rename)
-        old_string (Optional[str]): Old text to replace (for str_replace)
-        new_string (Optional[str]): New text to replace with (for str_replace)
-        insert_line (Optional[int]): Line number to insert at (for insert)
-        insert_text (Optional[str]): Text to insert (for insert)
-        old_path (Optional[str]): Old path for rename operation
-        new_path (Optional[str]): New path for rename operation
+        command (str): One of create, str_replace, insert, delete, rename.
+        path (Optional[str]): Block to edit, e.g. /memories/human. Required for create, str_replace, insert, and delete. This is the only path argument for those commands. Do not put the block in old_path or new_path.
+        file_text (Optional[str]): Starting text for create. Omit to create an empty block.
+        description (Optional[str]): Block description. Required for create. With command rename and path, updates the description instead of renaming.
+        old_string (Optional[str]): Exact current text to replace. Required for str_replace. Must match exactly once. To append a new line, use insert instead.
+        new_string (Optional[str]): Replacement text. Required for str_replace. Not used by insert.
+        insert_line (Optional[int]): Line index for insert. -1 appends. 0 inserts at the beginning.
+        insert_text (Optional[str]): Text to insert. Required for insert. Do not send this as new_string.
+        old_path (Optional[str]): Rename only. Current path of the block to rename. Ignored by str_replace, insert, create, and delete. Not a substitute for path.
+        new_path (Optional[str]): Rename only. Destination path. Ignored by str_replace, insert, create, and delete. Not a substitute for path.
 
     Returns:
         Optional[str]: Success message or error description
 
     Examples:
-        # Replace text in a memory block
-        memory(agent_state, "str_replace", path="/memories/user_preferences", old_string="theme: dark", new_string="theme: light")
+        # Append a line
+        memory(command="insert", path="/memories/human", insert_line=-1, insert_text="- the new fact")
 
-        # Insert text at line 5
-        memory(agent_state, "insert", path="/memories/notes", insert_line=5, insert_text="New note here")
+        # Replace existing text
+        memory(command="str_replace", path="/memories/human", old_string="theme: dark", new_string="theme: light")
 
-        # Delete a memory block
-        memory(agent_state, "delete", path="/memories/old_notes")
+        # Create a block
+        memory(command="create", path="/memories/coding_preferences", description="The user's coding preferences.", file_text="The user adds type hints to Python code.")
 
-        # Rename a memory block
-        memory(agent_state, "rename", old_path="/memories/temp", new_path="/memories/permanent")
+        # Rename a block
+        memory(command="rename", old_path="/memories/temp", new_path="/memories/permanent")
 
-        # Update the description of a memory block
-        memory(agent_state, "rename", path="/memories/temp", description="The user's temporary notes.")
+        # Update a description without renaming
+        memory(command="rename", path="/memories/temp", description="The user's temporary notes.")
 
-        # Create a memory block with starting text
-        memory(agent_state, "create", path="/memories/coding_preferences", "description": "The user's coding preferences.", "file_text": "The user seems to add type hints to all of their Python code.")
-
-        # Create an empty memory block
-        memory(agent_state, "create", path="/memories/coding_preferences", "description": "The user's coding preferences.")
+        # Delete a block
+        memory(command="delete", path="/memories/old_notes")
     """
     raise NotImplementedError("This should never be invoked directly. Contact Letta if you see this error message.")
 
@@ -219,19 +222,19 @@ async def image_edit_text(
     """
     Edit caption, description, or details text for an image. Re-embeds the image record after each edit.
 
-    Commands (same semantics as the memory tool):
-        str_replace — replace old_string with new_string (must match exactly once)
-        insert — insert insert_text after insert_line (-1 appends)
-        set — replace the entire field with new_string
+    Send only the arguments for the command you chose. There is no path argument.
+        str_replace — requires old_string and new_string (must match exactly once)
+        insert — requires insert_text. insert_line=-1 appends. Do not send the new text as new_string.
+        set — requires new_string and replaces the entire field
 
     Args:
         handle: Image record id (image-<uuid>).
-        field: Text tier to edit.
-        command: Edit operation to perform.
-        old_string: Text to replace (str_replace only).
-        new_string: Replacement text (str_replace, set).
-        insert_text: Text to insert (insert only).
-        insert_line: Line index for insert (-1 appends).
+        field: Text tier to edit: caption, description, or details.
+        command: One of str_replace, insert, set.
+        old_string: Exact text to replace. Required for str_replace. Ignored by insert and set.
+        new_string: Replacement text. Required for str_replace and set. Not the insert payload.
+        insert_text: Text to insert. Required for insert. Do not send this as new_string.
+        insert_line: Line index for insert. -1 appends. Ignored by str_replace and set.
 
     Returns:
         The updated field text.
@@ -370,11 +373,11 @@ async def archival_memory_search(
 
 def core_memory_append(agent_state: "AgentState", label: str, content: str) -> str:  # type: ignore
     """
-    Append to the contents of core memory.
+    Append to the contents of core memory. Address the block by its label (for example "human"), not a /memories/ path. The appended text argument is content, not insert_text or new_string.
 
     Args:
-        label (str): Section of the memory to be edited.
-        content (str): Content to write to the memory. All unicode (including emojis) are supported.
+        label (str): Block label, such as human or persona. Not a /memories/ path.
+        content (str): Content to append. All unicode (including emojis) are supported.
 
     Returns:
         str: The updated value of the memory block.
@@ -387,12 +390,12 @@ def core_memory_append(agent_state: "AgentState", label: str, content: str) -> s
 
 def core_memory_replace(agent_state: "AgentState", label: str, old_content: str, new_content: str) -> str:  # type: ignore
     """
-    Replace the contents of core memory. To delete memories, use an empty string for new_content.
+    Replace the contents of core memory. To delete memories, use an empty string for new_content. Address the block by its label (for example "human"), not a /memories/ path. The match argument is old_content and the replacement is new_content, not old_string or new_string.
 
     Args:
-        label (str): Section of the memory to be edited.
-        old_content (str): String to replace. Must be an exact match.
-        new_content (str): Content to write to the memory. All unicode (including emojis) are supported.
+        label (str): Block label, such as human or persona. Not a /memories/ path.
+        old_content (str): String to replace. Must be an exact match. Not old_string.
+        new_content (str): Content to write to the memory. All unicode (including emojis) are supported. Not new_string.
 
     Returns:
         str: The updated value of the memory block.
@@ -407,11 +410,11 @@ def core_memory_replace(agent_state: "AgentState", label: str, old_content: str,
 
 def rethink_memory(agent_state: "AgentState", new_memory: str, target_block_label: str) -> None:
     """
-    Rewrite memory block for the main agent, new_memory should contain all current information from the block that is not outdated or inconsistent, integrating any new information, resulting in a new memory block that is organized, readable, and comprehensive.
+    Rewrite memory block for the main agent, new_memory should contain all current information from the block that is not outdated or inconsistent, integrating any new information, resulting in a new memory block that is organized, readable, and comprehensive. Address the block with target_block_label (for example "human"), not path or label.
 
     Args:
-        new_memory (str): The new memory with information integrated from the memory block. If there is no new information, then this should be the same as the content in the source block.
-        target_block_label (str): The name of the block to write to.
+        new_memory (str): The new memory with information integrated from the memory block. If there is no new information, then this should be the same as the content in the source block. Not file_text or new_string.
+        target_block_label (str): Block label, such as human or persona. Not a /memories/ path, and not the argument name path or label.
 
     Returns:
         None: None is always returned as this function does not produce a response.
@@ -435,13 +438,13 @@ SNIPPET_LINES: int = 4
 # Based off of: https://github.com/anthropics/anthropic-quickstarts/blob/main/computer-use-demo/computer_use_demo/tools/edit.py?ref=musings.yasyf.com#L154
 def memory_replace(agent_state: "AgentState", label: str, old_string: str, new_string: str) -> str:  # type: ignore
     """
-    The memory_replace command allows you to replace a specific string in a memory block with a new string. This is used for making precise edits.
+    The memory_replace command replaces a specific string in a memory block. Address the block by its label (for example "human"), not a /memories/ path. This is used for making precise edits.
     Do NOT attempt to replace long strings, e.g. do not attempt to replace the entire contents of a memory block with a new string.
 
     Args:
-        label (str): Section of the memory to be edited, identified by its label.
-        old_string (str): The text to replace (must match exactly, including whitespace and indentation).
-        new_string (str): The new text to insert in place of the old text. Do not include line number prefixes.
+        label (str): Block label, such as human or persona. Not a /memories/ path.
+        old_string (str): The text to replace (must match exactly, including whitespace and indentation). Required. Not a path.
+        new_string (str): The new text to insert in place of the old text. Do not include line number prefixes. This is the replacement, not an append payload.
 
     Examples:
         # Update a block containing information about the user
@@ -515,11 +518,11 @@ def memory_replace(agent_state: "AgentState", label: str, old_string: str, new_s
 
 def memory_insert(agent_state: "AgentState", label: str, new_string: str, insert_line: int = -1) -> str:  # type: ignore
     """
-    The memory_insert command allows you to insert text at a specific location in a memory block.
+    The memory_insert command inserts text at a specific location in a memory block. Address the block by its label (for example "human"), not a /memories/ path. The inserted text argument is new_string, not insert_text.
 
     Args:
-        label (str): Section of the memory to be edited, identified by its label.
-        new_string (str): The text to insert. Do not include line number prefixes.
+        label (str): Block label, such as human or persona. Not a /memories/ path.
+        new_string (str): The text to insert. Do not include line number prefixes. This tool has no insert_text argument.
         insert_line (int): The line number after which to insert the text (0 for beginning of file). Defaults to -1 (end of the file).
 
     Examples:
@@ -599,7 +602,7 @@ def memory_apply_patch(agent_state: "AgentState", label: str, patch: str) -> str
     - Tabs are normalized to spaces for matching consistency.
 
     Args:
-        label (str): The label of the memory block to patch. Required for single-block mode (when patch contains no "***" headers). Set to empty string "" when using multi-block mode with "*** Add Block:", "*** Delete Block:", or "*** Update Block:" headers.
+        label (str): Block label, such as human or persona, not a /memories/ path. Required for single-block mode (when patch contains no "***" headers). Set to empty string "" when using multi-block mode with "*** Add Block:", "*** Delete Block:", or "*** Update Block:" headers.
         patch (str): The unified diff-style patch to apply. Can be either: (1) a simple unified diff for single-block mode, or (2) a multi-block patch with "***" headers for creating, deleting, updating, or renaming multiple blocks.
 
     Returns:
@@ -612,11 +615,11 @@ def memory_apply_patch(agent_state: "AgentState", label: str, patch: str) -> str
 
 def memory_rethink(agent_state: "AgentState", label: str, new_memory: str) -> str:
     """
-    The memory_rethink command allows you to completely rewrite the contents of a memory block. Use this tool to make large sweeping changes (e.g. when you want to condense or reorganize the memory blocks), do NOT use this tool to make small precise edits (e.g. add or remove a line, replace a specific string, etc).
+    The memory_rethink command rewrites a memory block. Address the block by its label (for example "human"), not a /memories/ path. The full new text argument is new_memory, not file_text or new_string. Use this tool to make large sweeping changes (e.g. when you want to condense or reorganize the memory blocks), do NOT use this tool to make small precise edits (e.g. add or remove a line, replace a specific string, etc).
 
     Args:
-        label (str): The memory block to be rewritten, identified by its label.
-        new_memory (str): The new memory contents with information integrated from existing memory blocks and the conversation context.
+        label (str): Block label, such as human or persona. Not a /memories/ path.
+        new_memory (str): The new memory contents with information integrated from existing memory blocks and the conversation context. Not file_text or new_string.
 
     Returns:
         None: None is always returned as this function does not produce a response.
