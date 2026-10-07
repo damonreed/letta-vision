@@ -2,6 +2,7 @@
 Unit tests for the JSON Schema validator for OpenAI strict mode compliance.
 """
 
+from letta.functions.schema_generator import normalize_mcp_schema
 from letta.functions.schema_validator import SchemaHealth, validate_complete_json_schema
 
 
@@ -305,3 +306,47 @@ class TestSchemaValidator:
         status, reasons = validate_complete_json_schema(schema)
         assert status == SchemaHealth.STRICT_COMPLIANT
         assert reasons == []
+
+    def test_untyped_json_value_parameter_stays_syncable(self):
+        """An MCP parameter with no type means any JSON value.
+
+        scenecraft_set_attribute.value is published this way. Missing type used
+        to be INVALID, and resync drops INVALID tools, so the tool never appeared.
+        """
+        schema = {
+            "type": "object",
+            "properties": {
+                "asset": {"type": "string", "description": "Asset name or UUID"},
+                "path": {"type": "string", "description": "Dotted path"},
+                "value": {
+                    "description": "New JSON value for that field (string, number, boolean, object, array, or null)"
+                },
+            },
+            "required": ["asset", "path", "value"],
+        }
+
+        normalized = normalize_mcp_schema(schema)
+        value = normalized["properties"]["value"]
+        assert "anyOf" in value
+        assert value["description"].startswith("New JSON value")
+        option_types = {option["type"] for option in value["anyOf"]}
+        assert {"string", "number", "boolean", "null", "object", "array"} <= option_types
+        object_option = next(option for option in value["anyOf"] if option["type"] == "object")
+        assert object_option["additionalProperties"] is True
+
+        status, reasons = validate_complete_json_schema(normalized)
+        assert status == SchemaHealth.NON_STRICT_ONLY, reasons
+
+    def test_untyped_constraint_without_type_stays_invalid(self):
+        """A constraint keyword with no type is malformed, not an any-JSON value."""
+        schema = {
+            "type": "object",
+            "properties": {"n": {"minimum": 1}},
+            "required": ["n"],
+            "additionalProperties": False,
+        }
+
+        normalized = normalize_mcp_schema(schema)
+        assert normalized["properties"]["n"] == {"minimum": 1}
+        status, _reasons = validate_complete_json_schema(normalized)
+        assert status == SchemaHealth.INVALID

@@ -583,12 +583,78 @@ def generate_schema_from_args_schema_v2(
     return function_call_json
 
 
+# Keywords that already constrain a node, so a missing ``type`` is not "any JSON".
+_SCHEMA_COMPOSITION_KEYS = ("anyOf", "oneOf", "allOf", "$ref", "enum", "const", "properties", "items", "prefixItems")
+# Annotation keys that may sit on an otherwise untyped "any JSON value" node.
+_SCHEMA_ANNOTATION_KEYS = {"description", "title", "default", "examples", "$comment", "deprecated"}
+
+
+def _is_untyped_json_value(node: Dict[str, Any]) -> bool:
+    """True when a node is valid JSON Schema for any JSON value (no type, no structure)."""
+    if node.get("type"):
+        return False
+    if any(key in node for key in _SCHEMA_COMPOSITION_KEYS):
+        return False
+    return set(node.keys()) <= _SCHEMA_ANNOTATION_KEYS
+
+
+def _any_json_value_schema(preserved: Dict[str, Any]) -> Dict[str, Any]:
+    """Rewrite an untyped node as an explicit union of JSON types.
+
+    OpenAI and Anthropic reject tool parameters that omit ``type``. Arbitrary
+    objects cannot be represented in strict mode (``additionalProperties`` must
+    be false), so the object branch stays open and the result is non-strict.
+    """
+    primitives = [
+        {"type": "string"},
+        {"type": "number"},
+        {"type": "integer"},
+        {"type": "boolean"},
+        {"type": "null"},
+    ]
+    free_object = {"type": "object", "additionalProperties": True}
+    expanded: Dict[str, Any] = {
+        "anyOf": [
+            *primitives,
+            {"type": "object", "additionalProperties": True},
+            {"type": "array", "items": {"anyOf": [*primitives, dict(free_object)]}},
+        ]
+    }
+    for key in ("description", "title", "default", "examples"):
+        if key in preserved:
+            expanded[key] = preserved[key]
+    return expanded
+
+
+def _expand_untyped_json_values(node: Any) -> Any:
+    """Replace annotation-only schemas with an explicit any-JSON union."""
+    if isinstance(node, list):
+        return [_expand_untyped_json_values(item) for item in node]
+    if not isinstance(node, dict):
+        return node
+    if _is_untyped_json_value(node):
+        return _any_json_value_schema(node)
+
+    expanded: Dict[str, Any] = {}
+    for key, value in node.items():
+        if key in ("properties", "$defs", "definitions") and isinstance(value, dict):
+            expanded[key] = {name: _expand_untyped_json_values(prop) for name, prop in value.items()}
+        elif key in ("items", "additionalProperties", "not") and isinstance(value, (dict, list)):
+            expanded[key] = _expand_untyped_json_values(value)
+        elif key in ("anyOf", "oneOf", "allOf", "prefixItems") and isinstance(value, list):
+            expanded[key] = [_expand_untyped_json_values(item) for item in value]
+        else:
+            expanded[key] = value
+    return expanded
+
+
 def normalize_mcp_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
     """
     Normalize an MCP JSON schema to fix common issues:
-    1. Add explicit 'additionalProperties': false to all object types
-    2. Add explicit 'type' field to properties using $ref
-    3. Process $defs recursively
+    1. Expand untyped "any JSON" parameters into an explicit union so the tool is not dropped
+    2. Add explicit 'additionalProperties': false to all object types
+    3. Add explicit 'type' field to properties using $ref
+    4. Process $defs recursively
 
     Args:
         schema: The JSON schema to normalize (will be modified in-place)
@@ -599,7 +665,7 @@ def normalize_mcp_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
     import copy
 
     # Work on a deep copy to avoid modifying the original
-    schema = copy.deepcopy(schema)
+    schema = _expand_untyped_json_values(copy.deepcopy(schema))
 
     def normalize_object_schema(obj_schema: Dict[str, Any], defs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Recursively normalize an object schema."""
