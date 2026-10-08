@@ -5,8 +5,8 @@ import httpx
 from httpx_sse import SSEError, connect_sse
 from openai.types.chat.chat_completion_chunk import ChatCompletionChunk
 
-from letta.constants import OPENAI_CONTEXT_WINDOW_ERROR_SUBSTRING
 from letta.errors import LLMError
+from letta.llm_api.error_utils import is_context_window_overflow_message
 from letta.log import get_logger
 from letta.schemas.enums import MessageStreamStatus
 from letta.schemas.letta_message import AssistantMessage, HiddenReasoningMessage, ReasoningMessage, ToolCallMessage, ToolReturnMessage
@@ -33,7 +33,7 @@ def _sse_post(url: str, data: dict, headers: dict) -> Generator[Union[LettaStrea
                     response_dict = json.loads(response_bytes.decode("utf-8"))
                     error_message = response_dict.get("error", {}).get("message", "")
 
-                    if OPENAI_CONTEXT_WINDOW_ERROR_SUBSTRING in error_message:
+                    if is_context_window_overflow_message(error_message):
                         logger.error(error_message)
                         raise LLMError(error_message)
                 except LLMError:

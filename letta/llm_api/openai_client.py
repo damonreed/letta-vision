@@ -36,6 +36,8 @@ from letta.errors import (
 from letta.helpers.json_helpers import sanitize_unicode_surrogates
 from letta.helpers.log_redaction import safe_log_json
 from letta.llm_api.error_utils import (
+    extract_openrouter_provider_name,
+    is_ambiguous_provider_rejection_message,
     is_context_window_overflow_message,
     is_insufficient_credits_message,
     is_openrouter_image_payload_limit_message,
@@ -404,16 +406,7 @@ class OpenAIClient(LLMClientBase):
     @staticmethod
     def _extract_openrouter_provider(e: Exception) -> str | None:
         """Extract upstream provider name from an OpenRouter error response."""
-        body = getattr(e, "body", None)
-        if not isinstance(body, dict):
-            return None
-        error_data = body.get("error", {})
-        if not isinstance(error_data, dict):
-            return None
-        metadata = error_data.get("metadata", {})
-        if not isinstance(metadata, dict):
-            return None
-        return metadata.get("provider_name")
+        return extract_openrouter_provider_name(e)
 
     def _is_true_openai_request(self, llm_config: LLMConfig) -> bool:
         if llm_config.model_endpoint_type != "openai":
@@ -1651,13 +1644,30 @@ class OpenAIClient(LLMClientBase):
                     message=f"Bad request to OpenAI (context window exceeded): {error_str}",
                     details={"is_byok": is_byok},
                 )
-            else:
-                body_details = e.body if isinstance(e.body, dict) else {"body": e.body}
+
+            body_details = e.body if isinstance(e.body, dict) else {"body": e.body}
+            or_provider = self._extract_openrouter_provider(e) if llm_config and self._is_openrouter_request(llm_config) else None
+            if is_ambiguous_provider_rejection_message(error_str):
+                provider_label = or_provider or "upstream provider"
                 return LLMBadRequestError(
-                    message=f"Bad request to OpenAI-compatible endpoint: {str(e)}",
+                    message=(
+                        f"OpenRouter {provider_label} rejected the request with an ambiguous "
+                        f"invalid-parameters / context-length error (not treated as context overflow): {error_str}"
+                    ),
                     code=ErrorCode.INVALID_ARGUMENT,
-                    details={**body_details, "is_byok": is_byok},
+                    details={
+                        **body_details,
+                        "error_kind": "ambiguous_provider_rejection",
+                        "upstream_provider": or_provider,
+                        "is_byok": is_byok,
+                    },
                 )
+
+            return LLMBadRequestError(
+                message=f"Bad request to OpenAI-compatible endpoint: {str(e)}",
+                code=ErrorCode.INVALID_ARGUMENT,
+                details={**body_details, "is_byok": is_byok},
+            )
 
         # NOTE: The OpenAI Python SDK may raise a generic `openai.APIError` while *iterating*
         # over a stream (e.g. Responses API streaming). In this case we don't necessarily

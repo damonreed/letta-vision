@@ -54,8 +54,10 @@ LETTA_TOOL_MODULE_NAMES = [
 DEFAULT_ORG_ID = "org-00000000-0000-4000-8000-000000000000"
 DEFAULT_ORG_NAME = "default_org"
 
-# String in the error message for when the context window is too large
-# Example full message:
+# Legacy OpenAI overflow substring. Prefer is_context_window_overflow_message() in
+# letta.llm_api.error_utils — bare "maximum context length" false-positives on
+# ambiguous OpenRouter upstream rejections (e.g. Sail Research).
+# Example definitive message:
 # This model's maximum context length is 8192 tokens. However, your messages resulted in 8198 tokens (7450 in the messages, 748 in the functions). Please reduce the length of the messages or functions.
 OPENAI_CONTEXT_WINDOW_ERROR_SUBSTRING = "maximum context length"
 
