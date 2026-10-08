@@ -62,19 +62,20 @@ class GcsImageMirror:
 
         blob = self._blob(image_id)
         credentials, _project = default()
-        if not credentials.valid:
-            credentials.refresh(Request())
-
         kwargs: dict = {
             "version": "v4",
             "expiration": timedelta(seconds=self.signed_url_ttl_seconds),
             "method": "GET",
+            "credentials": credentials,
         }
-        # User ADC and some workload identities have no private key. Sign via
-        # IAM Credentials using a service account that can signBlob.
-        if self.signer_service_account and not getattr(credentials, "signer", None):
-            kwargs["service_account_email"] = self.signer_service_account
-            kwargs["access_token"] = credentials.token
+        # Service-account JSON keys can sign locally with the private key.
+        # Keyless ADC has no signer — refresh a token and use IAM signBlob.
+        if getattr(credentials, "signer", None) is None:
+            if not credentials.valid:
+                credentials.refresh(Request())
+            if self.signer_service_account:
+                kwargs["service_account_email"] = self.signer_service_account
+                kwargs["access_token"] = credentials.token
         return blob.generate_signed_url(**kwargs)
 
     async def put_image(self, image_id: str, data: bytes, content_type: str) -> str:

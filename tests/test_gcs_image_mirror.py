@@ -63,3 +63,40 @@ async def test_ensure_mirrored_copies_from_minio_when_missing(monkeypatch):
 async def test_mirror_image_bytes_noop_when_unconfigured(monkeypatch):
     monkeypatch.setattr(gim, "get_gcs_image_mirror", lambda: None)
     assert await gim.mirror_image_bytes("image-x", b"x", "image/png") is None
+
+
+def test_signed_url_uses_private_key_without_refresh(monkeypatch):
+    """SA JSON keys must sign locally; refreshing ADC scopes breaks signing."""
+
+    class _Creds:
+        valid = False
+        signer = object()
+
+        def refresh(self, _request):
+            raise AssertionError("refresh must not run when a private-key signer exists")
+
+    captured = {}
+
+    class _Blob:
+        def generate_signed_url(self, **kwargs):
+            captured.update(kwargs)
+            return "https://signed.example/obj"
+
+    class _Bucket:
+        def blob(self, _image_id):
+            return _Blob()
+
+    class _Client:
+        def bucket(self, _name):
+            return _Bucket()
+
+    monkeypatch.setattr("google.auth.default", lambda: (_Creds(), "proj"))
+    mirror = gim.GcsImageMirror("letta-vision-images", signed_url_ttl_seconds=120)
+    mirror._client = _Client()
+
+    url = mirror._signed_url_sync("image-abc")
+    assert url == "https://signed.example/obj"
+    assert captured["method"] == "GET"
+    assert captured["version"] == "v4"
+    assert "access_token" not in captured
+    assert "service_account_email" not in captured
