@@ -1,5 +1,3 @@
-import base64
-
 import pytest
 
 from letta.schemas.enums import ToolType
@@ -19,8 +17,10 @@ def _executor() -> ExternalMCPToolExecutor:
         actor=None,
     )
 
+
 PNG = b"\x89PNG\r\n\x1a\n"
 HANDLE = "image-11111111-1111-1111-1111-111111111111"
+SIGNED = "https://storage.googleapis.com/letta-vision-images/image-11111111-1111-1111-1111-111111111111?X-Goog-Signature=abc"
 
 
 class _Image:
@@ -29,39 +29,38 @@ class _Image:
         self.media_type = media_type
 
 
-class _Store:
-    def __init__(self, data: bytes = PNG):
-        self.data = data
-        self.keys = []
-
-    async def get_bytes(self, key: str) -> bytes:
-        self.keys.append(key)
-        return self.data
-
-
-def _patch_lookup(monkeypatch, image=_Image(), store=_Store()):
+def _patch_lookup(monkeypatch, image=_Image()):
     class _Mgr:
         async def get_by_id_async(self, image_id, actor):
             assert image_id == HANDLE
             return image
 
+    async def _ensure(image_id, *, minio_key, content_type):
+        assert image_id == HANDLE
+        assert minio_key == image.object_url_full
+        return SIGNED
+
     monkeypatch.setattr("letta.services.mcp.image_arg_resolver.ImageManager", lambda: _Mgr())
-    monkeypatch.setattr("letta.services.mcp.image_arg_resolver.get_object_store_client", lambda: store)
-    return store
+    monkeypatch.setattr(
+        "letta.services.mcp.image_arg_resolver.get_gcs_image_mirror",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        "letta.services.mcp.image_arg_resolver.ensure_mirrored_and_sign",
+        _ensure,
+    )
 
 
 @pytest.mark.asyncio
-async def test_edit_image_handle_becomes_data_uri(monkeypatch):
-    store = _patch_lookup(monkeypatch)
+async def test_edit_image_handle_becomes_signed_url(monkeypatch):
+    _patch_lookup(monkeypatch)
     original = {"prompt": "make the sky orange", "image_url": f"  {HANDLE}  "}
 
     resolved = await resolve_mcp_image_arguments("edit_image", original, actor=None)
 
-    expected = "data:image/png;base64," + base64.b64encode(PNG).decode("ascii")
-    assert resolved["image_url"] == expected
+    assert resolved["image_url"] == SIGNED
     assert resolved["prompt"] == "make the sky orange"
     assert original["image_url"] == f"  {HANDLE}  "
-    assert store.keys == ["sha256/abc"]
 
 
 @pytest.mark.asyncio
@@ -100,7 +99,7 @@ async def test_compose_resolves_handles_and_leaves_urls(monkeypatch):
         actor=None,
     )
 
-    assert resolved["image_urls"][0].startswith("data:image/jpeg;base64,")
+    assert resolved["image_urls"][0] == SIGNED
     assert resolved["image_urls"][1] == url
 
 
@@ -128,11 +127,12 @@ def test_schema_note_is_idempotent():
     description = twice[0]["parameters"]["properties"]["image_url"]["description"]
     assert description.count("image-<uuid>") == 1
     assert "Source URL." in description
+    assert "signed" in description.lower() or "HTTPS" in description
     assert twice[0]["description"].count("image-<uuid>") == 1
 
 
 @pytest.mark.asyncio
-async def test_executor_sends_data_uri_and_keeps_caller_args(monkeypatch):
+async def test_executor_sends_signed_url_and_keeps_caller_args(monkeypatch):
     _patch_lookup(monkeypatch)
     captured = {}
 
@@ -153,7 +153,7 @@ async def test_executor_sends_data_uri_and_keeps_caller_args(monkeypatch):
     result = await _executor().execute("edit_image", args, tool, actor=None)
 
     assert result.status == "success"
-    assert captured["tool_args"]["image_url"].startswith("data:image/png;base64,")
+    assert captured["tool_args"]["image_url"] == SIGNED
     assert args["image_url"] == HANDLE
 
 

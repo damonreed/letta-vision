@@ -79,6 +79,7 @@ dependencies = [
     "aiofiles>=24.1.0",
     "async-lru>=2.0.5",
     "pillow>=11.0.0",
+    "google-cloud-storage>=2.14.0",
 
 ]
 

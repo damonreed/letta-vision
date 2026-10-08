@@ -187,6 +187,12 @@ async def ingest_image_sync(
         is_deleted=False,
     )
     await manager.create_record_async(record, actor)
+    try:
+        from letta.services.object_store.gcs_image_mirror import mirror_image_bytes
+
+        await mirror_image_bytes(image_id, data, media_type or "application/octet-stream")
+    except Exception:
+        logger.exception("GCS mirror failed for %s; MinIO copy is intact", image_id)
     return image_id
 
 

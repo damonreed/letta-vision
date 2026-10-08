@@ -338,6 +338,30 @@ class Settings(BaseSettings):
         description="Optional project override for object store clients (e.g., GCS project).",
     )
 
+    # GCS mirror for vision images (dual-write beside MinIO). Objects are named
+    # by image id: gs://{bucket}/{image_id}. Used to hand Zapimage a signed URL
+    # instead of inlining megabytes of base64 over MCP.
+    image_gcs_bucket: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("LETTA_IMAGE_GCS_BUCKET"),
+        description="GCS bucket for image mirror (e.g. letta-vision-images). Empty disables mirroring.",
+    )
+    image_gcs_project: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("LETTA_IMAGE_GCS_PROJECT"),
+        description="GCP project for the image mirror client.",
+    )
+    image_gcs_signer_service_account: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("LETTA_IMAGE_GCS_SIGNER_SA"),
+        description="Service account email used to sign GCS URLs when ADC has no private key.",
+    )
+    image_gcs_signed_url_ttl_seconds: int = Field(
+        default=3600,
+        validation_alias=AliasChoices("LETTA_IMAGE_GCS_SIGNED_URL_TTL_SECONDS"),
+        description="TTL for signed HTTPS URLs passed to Zapimage.",
+    )
+
     # memfs service URL - when set, git memory operations are proxied to the memfs service
     # instead of running locally. This enables separating git/GCS operations into a dedicated service.
     memfs_service_url: str | None = Field(
