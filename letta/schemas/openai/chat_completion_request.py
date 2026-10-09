@@ -35,6 +35,7 @@ class AssistantMessage(BaseModel):
     reasoning_content_signature: Optional[str] = None
     redacted_reasoning_content: Optional[str] = None
     omitted_reasoning_content: Optional[bool] = None
+    reasoning_details: Optional[List[Dict[str, Any]]] = None
 
 
 class ToolMessage(BaseModel):

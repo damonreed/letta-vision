@@ -1,5 +1,5 @@
 import datetime
-from typing import List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel
 
@@ -67,6 +67,7 @@ class Message(BaseModel):
     reasoning_content_signature: Optional[str] = None  # NOTE: for Anthropic
     redacted_reasoning_content: Optional[str] = None  # NOTE: for Anthropic
     omitted_reasoning_content: bool = False  # NOTE: for OpenAI o1/o3
+    reasoning_details: Optional[List[Dict[str, Any]]] = None  # NOTE: for OpenRouter (incl. encrypted reasoning)
 
 
 class Choice(BaseModel):

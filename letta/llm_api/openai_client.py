@@ -709,6 +709,8 @@ class OpenAIClient(LLMClientBase):
                 request_messages, llm_config, image_metadata=image_metadata
             )
 
+        is_openrouter = self._is_openrouter_request(llm_config)
+
         openai_message_list = [
             cast_message_to_subtype(m)
             for m in PydanticMessage.to_openai_dicts_from_list(
@@ -717,6 +719,7 @@ class OpenAIClient(LLMClientBase):
                 use_developer_message=use_developer_message,
                 tool_return_truncation_chars=tool_return_truncation_chars,
                 image_render_decisions=image_render_decisions,
+                reasoning_details_model=llm_config.model if is_openrouter else None,
             )
         ]
 
@@ -727,7 +730,6 @@ class OpenAIClient(LLMClientBase):
             model = None
 
         # TODO: we may need to extend this to more models using proxy?
-        is_openrouter = self._is_openrouter_request(llm_config)
         if is_openrouter:
             try:
                 model = llm_config.handle.split("/", 1)[-1]

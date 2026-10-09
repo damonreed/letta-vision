@@ -165,6 +165,23 @@ class LettaAgentV3(LettaAgentV2):
                 self.logger.warning("Failed to refresh file state before system rebuild: %s", e)
         return await super()._refresh_messages(in_context_messages, force_system_prompt_refresh=force)
 
+    def _final_step_notice(self, run_id: str | None) -> Message:
+        """Request-only notice for the last step under max_steps; never persisted."""
+        from letta.server.rest_api.utils import create_heartbeat_system_message
+
+        return create_heartbeat_system_message(
+            agent_id=self.agent_state.id,
+            model=get_llm_config(self.agent_state).model,
+            function_call_success=True,
+            timezone=self.agent_state.timezone,
+            heartbeat_reason=(
+                f"{NON_USER_MSG_PREFIX}Step limit reached: this is the last step of this turn. "
+                "A tool called now will still run, but the turn ends before you see its result. "
+                "Reply to the user with where the work stands and what remains, so they can tell you to continue."
+            ),
+            run_id=run_id,
+        )
+
     def _compute_tool_return_truncation_chars(self) -> int:
         """Compute a dynamic cap for tool returns in requests.
 
@@ -372,6 +389,7 @@ class LettaAgentV3(LettaAgentV2):
                 # use_assistant_message=use_assistant_message,
                 include_return_message_types=include_return_message_types,
                 request_start_timestamp_ns=request_start_timestamp_ns,
+                remaining_turns=max_steps - i - 1,
                 include_compaction_messages=include_compaction_messages,
                 billing_context=billing_context,
             )
@@ -612,6 +630,7 @@ class LettaAgentV3(LettaAgentV2):
                     # use_assistant_message=use_assistant_message,
                     include_return_message_types=include_return_message_types,
                     request_start_timestamp_ns=request_start_timestamp_ns,
+                    remaining_turns=max_steps - i - 1,
                     include_compaction_messages=include_compaction_messages,
                     billing_context=billing_context,
                 )
@@ -1305,6 +1324,8 @@ class LettaAgentV3(LettaAgentV2):
                         messages_for_llm, image_render_decisions = await prepare_messages_for_vision_llm(
                             messages, active_llm_config, self.actor
                         )
+                        if remaining_turns == 0:
+                            messages_for_llm = list(messages_for_llm) + [self._final_step_notice(run_id)]
                         request_data = active_llm_client.build_request_data(
                             agent_type=self.agent_state.agent_type,
                             messages=messages_for_llm,

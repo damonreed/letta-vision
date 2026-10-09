@@ -1502,8 +1502,12 @@ class Message(BaseMessage):
         strip_request_heartbeat: bool = False,
         tool_return_truncation_chars: Optional[int] = None,
         image_render_decisions: Optional[dict] = None,
+        reasoning_details_model: Optional[str] = None,
     ) -> dict | None:
-        """Go from Message class to ChatCompletion message object"""
+        """Go from Message class to ChatCompletion message object.
+
+        reasoning_details_model: replay stored `reasoning_details` only on messages produced by this model.
+        """
         assert not (native_content and put_inner_thoughts_in_kwargs), "native_content and put_inner_thoughts_in_kwargs cannot both be true"
 
         if self.role == "approval" and self.tool_calls is None:
@@ -1518,6 +1522,9 @@ class Message(BaseMessage):
             text_content = self.content[0].content
         elif self.content and len(self.content) == 1 and isinstance(self.content[0], ImageContent):
             text_content = "[Image Here]"
+        elif self.content and len(self.content) == 1 and isinstance(self.content[0], (ReasoningContent, RedactedReasoningContent)):
+            text_content = None
+            parse_content_parts = True
         # Otherwise, check if we have TextContent and multiple other parts
         elif self.content and len(self.content) > 1:
             text_parts = [content for content in self.content if isinstance(content, TextContent)]
@@ -1660,9 +1667,12 @@ class Message(BaseMessage):
             for content in self.content:
                 if isinstance(content, ReasoningContent):
                     reasoning_text, leaked_response = split_reasoning_at_thinking_close(content.reasoning or "")
-                    openai_message["reasoning_content"] = reasoning_text
+                    if reasoning_text:
+                        openai_message["reasoning_content"] = reasoning_text
                     if content.signature:
                         openai_message["reasoning_content_signature"] = content.signature
+                    if content.reasoning_details and reasoning_details_model and self.model == reasoning_details_model:
+                        openai_message["reasoning_details"] = content.reasoning_details
                     # Recover reply text some providers left after an in-band </thinking> marker
                     if leaked_response:
                         existing = openai_message.get("content")
@@ -1683,6 +1693,7 @@ class Message(BaseMessage):
         use_developer_message: bool = False,
         tool_return_truncation_chars: Optional[int] = None,
         image_render_decisions: Optional[dict] = None,
+        reasoning_details_model: Optional[str] = None,
     ) -> List[dict]:
         messages = Message.filter_messages_for_llm_api(messages)
         result: List[dict] = []
@@ -1712,6 +1723,7 @@ class Message(BaseMessage):
                 use_developer_message=use_developer_message,
                 tool_return_truncation_chars=tool_return_truncation_chars,
                 image_render_decisions=image_render_decisions,
+                reasoning_details_model=reasoning_details_model,
             )
             if d is not None:
                 result.append(d)

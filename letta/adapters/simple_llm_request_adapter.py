@@ -68,12 +68,14 @@ class SimpleLLMRequestAdapter(LettaLLMRequestAdapter):
         )
 
         # Extract reasoning content from the response
-        if self.chat_completions_response.choices[0].message.reasoning_content:
+        response_message = self.chat_completions_response.choices[0].message
+        if response_message.reasoning_content or response_message.reasoning_details:
             self.reasoning_content = [
                 ReasoningContent(
-                    reasoning=self.chat_completions_response.choices[0].message.reasoning_content,
+                    reasoning=response_message.reasoning_content or "",
                     is_native=True,
-                    signature=self.chat_completions_response.choices[0].message.reasoning_content_signature,
+                    signature=response_message.reasoning_content_signature,
+                    reasoning_details=response_message.reasoning_details,
                 )
             ]
         elif self.chat_completions_response.choices[0].message.omitted_reasoning_content:

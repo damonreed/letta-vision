@@ -40,6 +40,7 @@ from openai.types.responses.response_stream_event import ResponseStreamEvent
 
 from letta.constants import DEFAULT_MESSAGE_TOOL, DEFAULT_MESSAGE_TOOL_KWARG
 from letta.llm_api.error_utils import is_context_window_overflow_message
+from letta.helpers.reasoning_details import merge_reasoning_details
 from letta.helpers.thinking_tags import ThinkingCloseSplitBuffer, split_reasoning_at_thinking_close
 from letta.llm_api.minimax_openai import extract_reasoning_from_message_data, strip_duplicate_thinking_from_assistant_text
 from letta.llm_api.openai_client import is_openai_reasoning_model
@@ -644,6 +645,7 @@ class SimpleOpenAIStreamingInterface:
         self.emitted_hidden_reasoning = False  # Track if we've emitted hidden reasoning message
         # Some OpenRouter models (e.g. Aion) put </thinking> + reply inside reasoning_content
         self._thinking_close_split = ThinkingCloseSplitBuffer()
+        self._reasoning_details: list[dict] = []
 
         self.requires_approval_tools = requires_approval_tools
 
@@ -680,6 +682,7 @@ class SimpleOpenAIStreamingInterface:
                 else:
                     concat_content_parts.append(msg.content)
 
+        combined_reasoning = ""
         if reasoning_content:
             combined_reasoning = "".join(reasoning_content)
             # Safety net: split any in-band thinking close that was not caught while streaming
@@ -692,8 +695,16 @@ class SimpleOpenAIStreamingInterface:
             produced_tool_calls = bool(self._tool_calls_acc)
             if is_deepseek and not concat_content_parts and not produced_tool_calls:
                 concat_content_parts.append(combined_reasoning)
-            elif combined_reasoning:
-                merged_messages.append(ReasoningContent(is_native=True, reasoning=combined_reasoning, signature=None))
+                combined_reasoning = ""
+        if combined_reasoning or self._reasoning_details:
+            merged_messages.append(
+                ReasoningContent(
+                    is_native=True,
+                    reasoning=combined_reasoning,
+                    signature=None,
+                    reasoning_details=self._reasoning_details or None,
+                )
+            )
 
         if concat_content_parts:
             assistant_text = "".join(concat_content_parts)
@@ -923,6 +934,7 @@ class SimpleOpenAIStreamingInterface:
             if hasattr(chunk, "choices") and len(chunk.choices) > 0 and hasattr(chunk.choices[0], "delta"):
                 delta = chunk.choices[0].delta
                 delta_dump = delta.model_dump() if hasattr(delta, "model_dump") else {}
+                merge_reasoning_details(self._reasoning_details, delta_dump.get("reasoning_details"))
                 reasoning_content = (
                     getattr(delta, "reasoning_content", None)
                     or getattr(delta, "reasoning", None)
