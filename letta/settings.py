@@ -38,8 +38,8 @@ class ToolSettings(BaseSettings):
     tool_exec_autoreload_venv: bool = True
 
     # MCP settings
-    mcp_connect_to_server_timeout: float = 30.0
-    mcp_list_tools_timeout: float = 30.0
+    mcp_connect_to_server_timeout: float = 60.0
+    mcp_list_tools_timeout: float = 60.0
     mcp_execute_tool_timeout: float = 60.0
     mcp_read_from_config: bool = False  # if False, will throw if attempting to read/write from file
     mcp_disable_stdio: bool = Field(
