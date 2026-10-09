@@ -29,9 +29,8 @@ logger = logging.getLogger(__name__)
 # as "URL-only" even though the pixels are attached inline. This note counters that.
 _INLINE_IMAGE_VISIBILITY_NOTE = (
     "[The image(s) from this tool are attached inline in this tool result and are "
-    "directly visible to you right now. Describe them from what you actually see. "
-    "The url in the JSON below is only a storage reference — do NOT call image_fetch "
-    "for these; the pixels are already here.]"
+    "directly visible to you right now. The url in the JSON below is only a storage "
+    "reference — do NOT call image_fetch for these; the pixels are already here.]"
 )
 
 # Match str(ImageContent) dumps from older parsing paths
