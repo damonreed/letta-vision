@@ -4,6 +4,7 @@ from letta.errors import LLMEmptyResponseError
 from letta.llm_api.degraded_response import (
     classify_degraded_streaming_completion,
     is_openrouter_meta_failure,
+    stream_aborted_before_output_error,
     validate_streaming_completion_or_raise,
 )
 from letta.schemas.enums import ProviderType
@@ -126,3 +127,27 @@ def test_tool_call_stream_is_valid():
         usage=LettaUsageStatistics(),
         response_id="gen-x",
     )
+
+
+def _stream_api_error(message: str):
+    import httpx
+    import openai
+
+    return openai.APIError(message, request=httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions"), body=None)
+
+
+def test_in_stream_abort_is_retryable_empty_response():
+    err = stream_aborted_before_output_error(_stream_api_error("The operation was aborted"), _openrouter_config())
+    assert isinstance(err, LLMEmptyResponseError)
+    assert err.details["degraded_reason"] == "stream_aborted_before_output"
+
+
+def test_other_in_stream_errors_are_not_reclassified():
+    import httpx
+    import openai
+
+    assert stream_aborted_before_output_error(_stream_api_error("Invalid tool schema"), _openrouter_config()) is None
+    status_err = openai.BadRequestError(
+        "timeout param invalid", response=httpx.Response(400, request=httpx.Request("POST", "https://x")), body=None
+    )
+    assert stream_aborted_before_output_error(status_err, _openrouter_config()) is None

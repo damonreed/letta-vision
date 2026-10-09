@@ -10,6 +10,7 @@ from letta.helpers.datetime_helpers import get_utc_timestamp_ns
 from letta.interfaces.anthropic_parallel_tool_call_streaming_interface import SimpleAnthropicStreamingInterface
 from letta.interfaces.gemini_streaming_interface import SimpleGeminiStreamingInterface
 from letta.interfaces.openai_streaming_interface import SimpleOpenAIResponsesStreamingInterface, SimpleOpenAIStreamingInterface
+from letta.llm_api.degraded_response import stream_aborted_before_output_error
 from letta.llm_api.openai_client import OpenAIClient
 from letta.otel.tracing import log_attributes, safe_json_dumps, trace_method
 from letta.schemas.enums import ProviderType
@@ -171,12 +172,14 @@ class SimpleLLMStreamAdapter(LettaLLMStreamAdapter):
 
         stream_started = True
         stream_failed = False
+        chunks_yielded = 0
 
         try:
             # Process the stream and yield chunks immediately for TTFT
             try:
                 async for chunk in self.interface.process(stream):  # TODO: add ttft span
                     # Yield each chunk immediately as it arrives
+                    chunks_yielded += 1
                     yield chunk
             except BaseException as e:
                 stream_failed = True
@@ -194,6 +197,11 @@ class SimpleLLMStreamAdapter(LettaLLMStreamAdapter):
                     raise
                 if isinstance(e, LLMError):
                     raise
+                if chunks_yielded == 0:
+                    aborted = stream_aborted_before_output_error(e, self.llm_config)
+                    if aborted is not None:
+                        logger.warning(f"[LLM_DEGRADED_RESPONSE] handle={self.llm_config.handle}: {aborted}")
+                        raise aborted from e
                 raise self.llm_client.handle_llm_error(e, llm_config=self.llm_config)
             else:
                 # After streaming completes, extract the accumulated data

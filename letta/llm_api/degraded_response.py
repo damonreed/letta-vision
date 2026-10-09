@@ -191,6 +191,36 @@ def validate_streaming_completion_or_raise(
     )
 
 
+_TRANSIENT_STREAM_ERROR_MARKERS = ("operation was aborted", "timed out", "timeout", "terminated")
+
+
+def stream_aborted_before_output_error(error: BaseException, llm_config: Any) -> Optional[LLMEmptyResponseError]:
+    """Retryable error for a provider-side stream abort that arrived before any output.
+
+    OpenRouter can return HTTP 200, send nothing for ~100s, then emit an in-stream error
+    ("The operation was aborted"). The OpenAI SDK raises that as a status-less APIError,
+    which would otherwise map to a non-retryable LLMBadRequestError.
+    """
+    import openai
+
+    if not isinstance(error, openai.APIError) or isinstance(error, openai.APIStatusError):
+        return None
+    msg = str(error)
+    if not any(marker in msg.lower() for marker in _TRANSIENT_STREAM_ERROR_MARKERS):
+        return None
+    return LLMEmptyResponseError(
+        message=f"LLM stream aborted by provider before any output: {msg}",
+        code=ErrorCode.INTERNAL_SERVER_ERROR,
+        details={
+            "degraded_reason": "stream_aborted_before_output",
+            "upstream_message": msg[:500],
+            "model": llm_config.model,
+            "provider_name": llm_config.provider_name,
+            "handle": llm_config.handle,
+        },
+    )
+
+
 def llm_failure_error_type(error: LLMError) -> str:
     if isinstance(error, LLMEmptyResponseError):
         return "llm_empty_response"
