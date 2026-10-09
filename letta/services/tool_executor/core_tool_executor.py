@@ -119,13 +119,14 @@ class LettaCoreToolExecutor(ToolExecutor):
         agent_state: AgentState,
         actor: User,
         handle: str,
-        field: Literal["caption", "description", "details"],
-        command: Literal["str_replace", "insert", "set"],
+        field: Optional[Literal["caption", "description", "details"]] = None,
+        command: Optional[Literal["str_replace", "insert", "set"]] = None,
         old_string: Optional[str] = None,
         new_string: Optional[str] = None,
         insert_text: Optional[str] = None,
         insert_line: int = -1,
-    ) -> str:
+        edits: Optional[list] = None,
+    ):
         from letta.services.image_text import edit_image_text
 
         return await edit_image_text(
@@ -137,6 +138,7 @@ class LettaCoreToolExecutor(ToolExecutor):
             new_string=new_string,
             insert_text=insert_text,
             insert_line=insert_line,
+            edits=edits,
         )
 
     async def image_search(

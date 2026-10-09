@@ -30,14 +30,15 @@ async def image_get_text(
 async def image_edit_text(
     agent_state: "AgentState",
     handle: str,
-    field: Literal["caption", "description", "details"],
-    command: Literal["str_replace", "insert", "set"],
+    field: Optional[Literal["caption", "description", "details"]] = None,
+    command: Optional[Literal["str_replace", "insert", "set"]] = None,
     old_string: Optional[str] = None,
     new_string: Optional[str] = None,
     insert_text: Optional[str] = None,
     insert_line: int = -1,
+    edits: Optional[list] = None,
 ) -> str:
-    """Edit image text metadata and re-embed the image record."""
+    """Edit one or more image text tiers and re-embed the image record once."""
     raise NotImplementedError("This should never be invoked directly.")
 
 

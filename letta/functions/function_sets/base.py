@@ -5,6 +5,7 @@ if TYPE_CHECKING:
     from letta.schemas.agent import AgentState
 
 from letta.constants import CORE_MEMORY_LINE_NUMBER_WARNING
+from letta.schemas.image import ImageTextEdit
 
 
 def memory(
@@ -212,15 +213,19 @@ async def image_get_text(
 async def image_edit_text(
     self: "Agent",
     handle: str,
-    field: Literal["caption", "description", "details"],
-    command: Literal["str_replace", "insert", "set"],
+    field: Optional[Literal["caption", "description", "details"]] = None,
+    command: Optional[Literal["str_replace", "insert", "set"]] = None,
     old_string: Optional[str] = None,
     new_string: Optional[str] = None,
     insert_text: Optional[str] = None,
     insert_line: int = -1,
+    edits: Optional[List[ImageTextEdit]] = None,
 ) -> str:
     """
-    Edit caption, description, or details text for an image. Re-embeds the image record after each edit.
+    Edit one or more image text tiers in a single call. Re-embeds the image once after all edits apply.
+
+    Pass either one edit (field + command) or edits, a list of edits. Do not pass both.
+    Edits run in order. A later edit to the same field sees the earlier result. Nothing is saved if any edit fails.
 
     Send only the arguments for the command you chose. There is no path argument.
         str_replace — requires old_string and new_string (must match exactly once)
@@ -229,15 +234,20 @@ async def image_edit_text(
 
     Args:
         handle: Image record id (image-<uuid>).
-        field: Text tier to edit: caption, description, or details.
-        command: One of str_replace, insert, set.
+        field: Text tier for a single edit: caption, description, or details. Omit when passing edits.
+        command: One of str_replace, insert, set. Omit when passing edits.
         old_string: Exact text to replace. Required for str_replace. Ignored by insert and set.
         new_string: Replacement text. Required for str_replace and set. Not the insert payload.
         insert_text: Text to insert. Required for insert. Do not send this as new_string.
         insert_line: Line index for insert. -1 appends. Ignored by str_replace and set.
+        edits: Ordered edits for several tiers in one call. Each item has field, command, and that command's arguments. Omit when using field and command.
 
     Returns:
-        The updated field text.
+        The updated field text for a single edit, or handle plus the final text of each edited tier when edits is set.
+
+    Examples:
+        image_edit_text(handle="image-<uuid>", field="caption", command="set", new_string="A red barn at dusk.")
+        image_edit_text(handle="image-<uuid>", edits=[{"field": "caption", "command": "set", "new_string": "A red barn at dusk."}, {"field": "description", "command": "str_replace", "old_string": "blue sky", "new_string": "orange sky"}])
     """
     raise NotImplementedError("This should never be invoked directly. Contact Letta if you see this error message.")
 

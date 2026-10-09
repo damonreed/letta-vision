@@ -108,6 +108,32 @@ class ImageManager:
 
     @enforce_types
     @trace_method
+    async def update_text_fields_async(
+        self,
+        image_id: str,
+        actor: PydanticUser,
+        *,
+        fields: dict,
+    ) -> Optional[PydanticImage]:
+        """Write one or more text tiers in a single update. Unmentioned tiers are left unchanged."""
+        allowed = {"caption", "description", "details"}
+        unknown = set(fields) - allowed
+        if unknown:
+            raise ValueError(f"Invalid image text field(s): {', '.join(sorted(unknown))}")
+        if not fields:
+            return await self.get_by_id_async(image_id, actor)
+
+        async with db_registry.async_session() as session:
+            row = await ImageRecord.read_async(db_session=session, identifier=image_id, actor=actor)
+            if row is None:
+                return None
+            for field, value in fields.items():
+                setattr(row, field, value)
+            updated = await row.update_async(session, actor=actor)
+            return updated.to_pydantic()
+
+    @enforce_types
+    @trace_method
     async def update_metadata_async(
         self,
         image_id: str,

@@ -331,19 +331,25 @@ def pydantic_model_to_json_schema(model: Type[BaseModel]) -> dict:
             non_null_types = [t for t in prop["anyOf"] if t.get("type") != "null"]
             if len(non_null_types) == 1:
                 # Simple Optional[T] case - use the non-null type
-                return {
+                cleaned = {
                     "type": non_null_types[0]["type"],
                     "description": prop["description"],
                 }
+                if "enum" in non_null_types[0]:
+                    cleaned["enum"] = non_null_types[0]["enum"]
+                return cleaned
             else:
                 # Complex anyOf case - not supported yet
                 raise ValueError(f"Complex anyOf patterns are not supported: {prop}")
 
         # If it's a regular property with a direct type (e.g., string, number)
-        return {
+        cleaned = {
             "type": "string" if prop["type"] == "string" else prop["type"],
             "description": prop["description"],
         }
+        if "enum" in prop:
+            cleaned["enum"] = prop["enum"]
+        return cleaned
 
     def resolve_ref(ref: str, schema: dict) -> dict:
         """Resolve a $ref reference in the schema"""

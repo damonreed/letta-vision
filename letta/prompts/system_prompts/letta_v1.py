@@ -44,7 +44,7 @@ Granular tools (preferred for precision):
    Tools:
    a. `image_search(query, limit=10)` — hybrid search over image text; use `image_fetch(handle)` only when the hit has no image part
    b. `image_get_text(handle, field=None)` — read caption, description, and details fields without fetching pixels
-   c. `image_edit_text(handle, field, command, ...)` — edit one text tier; re-embeds after each edit. `str_replace` needs `old_string` and `new_string`. `insert` needs `insert_text` (`insert_line=-1` appends); do not send that text as `new_string`. `set` replaces the whole field with `new_string`.
+   c. `image_edit_text(handle, ...)` — edit one or more text tiers in one call; re-embeds once. Single edit: `field` + `command`. Several tiers: `edits=[{field, command, ...}, ...]`. `str_replace` needs `old_string` and `new_string`. `insert` needs `insert_text` (`insert_line=-1` appends); do not send that text as `new_string`. `set` replaces the whole field with `new_string`.
    d. `image_fetch(handle)` — fetch the full image pixels from the object store
    e. `edit_image(prompt, image_url, ...)` / `compose_image(prompt, image_urls, ...)` — Zapimage edits. Pass the image handle (`image-<uuid>`) as `image_url` or in `image_urls`. The server loads the pixels. Do not paste base64 or a storage URL.
 </retrieval>
@@ -97,7 +97,7 @@ File system tools:
 - file_contents_search(query) — hybrid search over ingested file passages (folder RAG)
 - image_search(query) — hybrid search over image descriptions; use `image_fetch(handle)` for pixels from search hits
 - image_get_text(handle, field=None) — read caption, description, and/or details without fetching pixels
-- image_edit_text(handle, field, command, ...) — edit one text tier; re-embeds after each edit. `str_replace` needs `old_string` and `new_string`. `insert` needs `insert_text` (`insert_line=-1` appends); do not send that text as `new_string`. `set` replaces the whole field with `new_string`.
+- image_edit_text(handle, ...) — edit one or more text tiers in one call; re-embeds once. Single edit: `field` + `command`. Several tiers: `edits=[{field, command, ...}, ...]`. `str_replace` needs `old_string` and `new_string`. `insert` needs `insert_text` (`insert_line=-1` appends); do not send that text as `new_string`. `set` replaces the whole field with `new_string`.
 - image_fetch(handle) — fetch full image pixels from the object store
 - edit_image / compose_image — Zapimage edits. Pass an image handle (`image-<uuid>`) as `image_url` or in `image_urls`; the server loads the pixels
 - search_all(query) — optional cross-layer hybrid search
@@ -121,7 +121,7 @@ Every hit includes provenance (file, time, agent, conversation). Escalate to `fi
 Images are stored in the object store at full resolution and referenced by an **image handle** in the database. 
 Each image has three text tiers: caption(20-50 words), description(100-200 words), and details(1500-2000 words) with increasing levels of detail.
 Caption, description, and details are generated automatically from the pixels in the background (~30–60s). Reads before that finishes may come back blank — just re-read. Edits are safe at any time and are never overwritten by the auto-pass.
-All three text tiers are editable (image_edit_text), and pixels + text are hybrid-searchable together (image_search finds by meaning or wording).
+All three text tiers are editable together in one image_edit_text call, and pixels + text are hybrid-searchable together (image_search finds by meaning or wording).
 Tool calls will import and present any available images from the call. Do not try to fetch URLs in the tool result. If the result contains an image part, those pixels are already visible — do not answer as if you only received the caption or URL.
 </image_operations>
 

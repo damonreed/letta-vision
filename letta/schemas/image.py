@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from letta.schemas.embedding_config import EmbeddingConfig
 from letta.schemas.enums import PrimitiveType
@@ -40,6 +40,37 @@ class PydanticImage(OrmMetadataBase):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     is_deleted: bool = False
+
+
+class ImageTextEdit(BaseModel):
+    """One edit to a caption, description, or details tier."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    field: Literal["caption", "description", "details"] = Field(
+        ...,
+        description="Text tier to edit: caption, description, or details.",
+    )
+    command: Literal["str_replace", "insert", "set"] = Field(
+        ...,
+        description="str_replace needs old_string and new_string. insert needs insert_text (insert_line=-1 appends); do not send that text as new_string. set replaces the whole field with new_string.",
+    )
+    old_string: Optional[str] = Field(
+        default=None,
+        description="Exact text to replace. Required for str_replace. Ignored by insert and set.",
+    )
+    new_string: Optional[str] = Field(
+        default=None,
+        description="Replacement text. Required for str_replace and set. Not the insert payload.",
+    )
+    insert_text: Optional[str] = Field(
+        default=None,
+        description="Text to insert. Required for insert. Do not send this as new_string.",
+    )
+    insert_line: int = Field(
+        default=-1,
+        description="Line index for insert. -1 appends. Ignored by str_replace and set.",
+    )
 
 
 class ImageMetadataUpdate(BaseModel):
