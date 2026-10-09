@@ -126,6 +126,7 @@ def test_tool_images_move_to_one_user_row_after_tool_run():
     assert out[1]["content"] == [{"type": "text", "text": "note"}]
     assert out[2]["content"] == [{"type": "text", "text": ""}]
     assert out[3].content[1:] == [img, img]
+    assert out[3].model_dump(exclude_unset=True)["role"] == "user"
 
 
 def test_final_step_notice_is_hidden_user_heartbeat():

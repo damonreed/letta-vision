@@ -1894,7 +1894,7 @@ def move_tool_images_to_user_messages(rows: List[Any]) -> List[Any]:
 
     def flush():
         if pending:
-            out.append(UserMessage(content=[{"type": "text", "text": _TOOL_IMAGES_USER_CAPTION}, *pending]))
+            out.append(UserMessage(role="user", content=[{"type": "text", "text": _TOOL_IMAGES_USER_CAPTION}, *pending]))
             pending.clear()
 
     for row in rows:
