@@ -762,11 +762,15 @@ class OpenAIClient(LLMClientBase):
                 if message.content is None:
                     message.content = ""
 
+        request_rows = fill_image_content_in_messages(
+            openai_message_list, messages, image_render_decisions=image_render_decisions
+        )
+        if is_openrouter and "gemini" in (model or "").lower():
+            request_rows = move_tool_images_to_user_messages(request_rows)
+
         data = ChatCompletionRequest(
             model=model,
-            messages=fill_image_content_in_messages(
-                openai_message_list, messages, image_render_decisions=image_render_decisions
-            ),
+            messages=request_rows,
             tools=[OpenAITool(type="function", function=f) for f in tools] if tools else None,
             tool_choice=tool_choice,
             user=str(),
@@ -1871,6 +1875,43 @@ def fill_image_content_in_messages(
             new_message_list[idx] = _openai_row_with_content(row, multimodal)
 
     return new_message_list
+
+
+_TOOL_IMAGES_USER_CAPTION = "[Image(s) returned by the tool result(s) above, attached here so you can see them.]"
+
+
+def move_tool_images_to_user_messages(rows: List[Any]) -> List[Any]:
+    """Move image parts out of tool rows into one user row after each run of tool rows.
+
+    OpenRouter's Gemini translation rejects a tool result that carries images when the
+    calling assistant turn has a thought signature ("Requests ending with a model turn
+    are not supported"). Images in a user row after the tool results are accepted.
+    """
+    from letta.schemas.openai.chat_completion_request import UserMessage
+
+    out: List[Any] = []
+    pending: List[dict] = []
+
+    def flush():
+        if pending:
+            out.append(UserMessage(content=[{"type": "text", "text": _TOOL_IMAGES_USER_CAPTION}, *pending]))
+            pending.clear()
+
+    for row in rows:
+        if _openai_row_role(row) != "tool":
+            flush()
+            out.append(row)
+            continue
+        content = row.get("content") if isinstance(row, dict) else getattr(row, "content", None)
+        if isinstance(content, list):
+            images = [p for p in content if isinstance(p, dict) and p.get("type") == "image_url"]
+            if images:
+                rest = [p for p in content if not (isinstance(p, dict) and p.get("type") == "image_url")]
+                row = _openai_row_with_content(row, rest or [{"type": "text", "text": ""}])
+                pending.extend(images)
+        out.append(row)
+    flush()
+    return out
 
 
 def fill_image_content_in_responses_input(openai_message_list: List[dict], pydantic_message_list: List[PydanticMessage]) -> List[dict]:

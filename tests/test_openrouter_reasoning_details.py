@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from letta.agents.letta_agent_v3 import LettaAgentV3
 from letta.helpers.reasoning_details import merge_reasoning_details
 from letta.interfaces.openai_streaming_interface import SimpleOpenAIStreamingInterface
-from letta.llm_api.openai_client import OpenAIClient
+from letta.llm_api.openai_client import OpenAIClient, move_tool_images_to_user_messages
 from letta.schemas.enums import AgentType, MessageRole
 from letta.schemas.letta_message_content import ReasoningContent, TextContent
 from letta.schemas.llm_config import LLMConfig
@@ -111,6 +111,21 @@ def test_non_openrouter_request_never_sends_details():
     )
     (assistant,) = _assistant_rows(request_data)
     assert "reasoning_details" not in assistant
+
+
+def test_tool_images_move_to_one_user_row_after_tool_run():
+    img = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA", "detail": "high"}}
+    rows = [
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "a"}, {"id": "b"}]},
+        {"role": "tool", "tool_call_id": "a", "content": [{"type": "text", "text": "note"}, img]},
+        {"role": "tool", "tool_call_id": "b", "content": [img]},
+        {"role": "user", "content": "next"},
+    ]
+    out = move_tool_images_to_user_messages(rows)
+    assert [r["role"] if isinstance(r, dict) else r.role for r in out] == ["assistant", "tool", "tool", "user", "user"]
+    assert out[1]["content"] == [{"type": "text", "text": "note"}]
+    assert out[2]["content"] == [{"type": "text", "text": ""}]
+    assert out[3].content[1:] == [img, img]
 
 
 def test_final_step_notice_is_hidden_user_heartbeat():
