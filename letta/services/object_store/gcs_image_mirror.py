@@ -112,6 +112,26 @@ async def mirror_image_bytes(image_id: str, data: bytes, content_type: str) -> s
     return await mirror.put_image(image_id, data, content_type)
 
 
+async def ensure_mirrored(
+    image_id: str,
+    *,
+    minio_key: str,
+    content_type: str,
+) -> str:
+    """Ensure ``image_id`` exists in the GCS mirror; return its ``gs://`` URI."""
+    mirror = get_gcs_image_mirror()
+    if mirror is None:
+        raise RuntimeError("LETTA_IMAGE_GCS_BUCKET is not configured")
+
+    if not await mirror.exists(image_id):
+        from letta.services.object_store.client import get_object_store_client
+
+        raw = await get_object_store_client().get_bytes(minio_key)
+        await mirror.put_image(image_id, raw, content_type)
+
+    return mirror.gs_uri(image_id)
+
+
 async def ensure_mirrored_and_sign(
     image_id: str,
     *,
@@ -123,10 +143,5 @@ async def ensure_mirrored_and_sign(
     if mirror is None:
         raise RuntimeError("LETTA_IMAGE_GCS_BUCKET is not configured")
 
-    if not await mirror.exists(image_id):
-        from letta.services.object_store.client import get_object_store_client
-
-        raw = await get_object_store_client().get_bytes(minio_key)
-        await mirror.put_image(image_id, raw, content_type)
-
+    await ensure_mirrored(image_id, minio_key=minio_key, content_type=content_type)
     return await mirror.signed_get_url(image_id)

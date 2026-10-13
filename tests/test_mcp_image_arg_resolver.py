@@ -29,16 +29,24 @@ class _Image:
         self.media_type = media_type
 
 
+GS_URI = f"gs://letta-vision-images/{HANDLE}"
+
+
 def _patch_lookup(monkeypatch, image=_Image()):
     class _Mgr:
         async def get_by_id_async(self, image_id, actor):
             assert image_id == HANDLE
             return image
 
-    async def _ensure(image_id, *, minio_key, content_type):
+    async def _ensure_sign(image_id, *, minio_key, content_type):
         assert image_id == HANDLE
         assert minio_key == image.object_url_full
         return SIGNED
+
+    async def _ensure_gs(image_id, *, minio_key, content_type):
+        assert image_id == HANDLE
+        assert minio_key == image.object_url_full
+        return GS_URI
 
     monkeypatch.setattr("letta.services.mcp.image_arg_resolver.ImageManager", lambda: _Mgr())
     monkeypatch.setattr(
@@ -47,7 +55,11 @@ def _patch_lookup(monkeypatch, image=_Image()):
     )
     monkeypatch.setattr(
         "letta.services.mcp.image_arg_resolver.ensure_mirrored_and_sign",
-        _ensure,
+        _ensure_sign,
+    )
+    monkeypatch.setattr(
+        "letta.services.mcp.image_arg_resolver.ensure_mirrored",
+        _ensure_gs,
     )
 
 
@@ -61,6 +73,21 @@ async def test_edit_image_handle_becomes_signed_url(monkeypatch):
     assert resolved["image_url"] == SIGNED
     assert resolved["prompt"] == "make the sky orange"
     assert original["image_url"] == f"  {HANDLE}  "
+
+
+@pytest.mark.asyncio
+async def test_vertex_model_resolves_to_gs_uri(monkeypatch):
+    _patch_lookup(monkeypatch)
+    original = {
+        "prompt": "compose these",
+        "image_urls": [HANDLE, "https://example.com/ok.png"],
+        "model": "google/gemini-nano-banana-2.1",
+    }
+
+    resolved = await resolve_mcp_image_arguments("compose_image", original, actor=None)
+
+    assert resolved["image_urls"] == [GS_URI, "https://example.com/ok.png"]
+    assert original["image_urls"][0] == HANDLE
 
 
 @pytest.mark.asyncio
