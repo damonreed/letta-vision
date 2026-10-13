@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import json
 from typing import Any, Dict, List, Literal, Optional
 
@@ -14,6 +15,19 @@ from letta.services.tool_executor.tool_executor_base import ToolExecutor
 from letta.settings import tool_settings
 
 logger = get_logger(__name__)
+
+
+async def _load_sandbox_images(code: str, actor: Optional[User]) -> list[tuple[str, bytes]]:
+    from letta.services.tool_executor.sandbox_image_files import load_sandbox_image_files
+
+    return await load_sandbox_image_files(code, actor)
+
+
+async def _write_sandbox_images(sbx: Any, files: list[tuple[str, bytes]]) -> None:
+    for path, data in files:
+        await sbx.files.write(path, data, user="root")
+    if files:
+        logger.info("Mounted image files into sandbox: %s", [path for path, _ in files])
 
 
 class LettaBuiltinToolExecutor(ToolExecutor):
@@ -42,7 +56,11 @@ class LettaBuiltinToolExecutor(ToolExecutor):
 
         # Execute the appropriate function
         function_args_copy = function_args.copy()  # Make a copy to avoid modifying the original
-        function_response = await function_map[function_name](agent_state=agent_state, **function_args_copy)
+        function = function_map[function_name]
+        kwargs = {**function_args_copy, "agent_state": agent_state}
+        if "actor" in inspect.signature(function).parameters:
+            kwargs["actor"] = actor
+        function_response = await function(**kwargs)
 
         return ToolExecutionResult(
             status="success",
@@ -50,13 +68,15 @@ class LettaBuiltinToolExecutor(ToolExecutor):
             agent_state=agent_state,
         )
 
-    async def run_code_with_tools(self, agent_state: "AgentState", code: str) -> ToolExecutionResult:
+    async def run_code_with_tools(self, agent_state: "AgentState", code: str, actor: Optional[User] = None) -> ToolExecutionResult:
         from e2b_code_interpreter import AsyncSandbox
 
         from letta.utils import get_friendly_error_msg
 
         if tool_settings.e2b_api_key is None:
             raise ValueError("E2B_API_KEY is not set")
+
+        mounted = await _load_sandbox_images(code, actor)
 
         env = {"LETTA_AGENT_ID": agent_state.id}
         env.update(agent_state.get_agent_env_vars_as_dict())
@@ -66,6 +86,8 @@ class LettaBuiltinToolExecutor(ToolExecutor):
             sbx = await AsyncSandbox.create(tool_settings.e2b_sandbox_template_id, api_key=tool_settings.e2b_api_key, envs=env)
         else:
             sbx = await AsyncSandbox.create(api_key=tool_settings.e2b_api_key, envs=env)
+
+        await _write_sandbox_images(sbx, mounted)
 
         tool_source_code = ""
         lines = []
@@ -148,17 +170,27 @@ class LettaBuiltinToolExecutor(ToolExecutor):
             ensure_ascii=False,
         )
 
-    async def run_code(self, agent_state: "AgentState", code: str, language: Literal["python", "js", "ts", "r", "java"]) -> str:
+    async def run_code(
+        self,
+        agent_state: "AgentState",
+        code: str,
+        language: Literal["python", "js", "ts", "r", "java"],
+        actor: Optional[User] = None,
+    ) -> str:
         from e2b_code_interpreter import AsyncSandbox
 
         if tool_settings.e2b_api_key is None:
             raise ValueError("E2B_API_KEY is not set")
+
+        mounted = await _load_sandbox_images(code, actor)
 
         # Create the sandbox, using template if configured (similar to tool_execution_sandbox.py)
         if tool_settings.e2b_sandbox_template_id:
             sbx = await AsyncSandbox.create(tool_settings.e2b_sandbox_template_id, api_key=tool_settings.e2b_api_key)
         else:
             sbx = await AsyncSandbox.create(api_key=tool_settings.e2b_api_key)
+
+        await _write_sandbox_images(sbx, mounted)
 
         # Inject source code from agent's tools to enable programmatic tool calling
         # This allows Claude to compose tools in a single code execution, e.g.:

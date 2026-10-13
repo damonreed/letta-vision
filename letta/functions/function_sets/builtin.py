@@ -5,8 +5,16 @@ def run_code(code: str, language: Literal["python", "js", "ts", "r", "java"]) ->
     """
     Run code in a sandbox. Supports Python, Javascript, Typescript, R, and Java.
 
+    To read an image already stored in Letta, name its handle in the code. The server
+    loads that image from the object store and writes it at `/images/<handle>` before
+    the code runs. Open that path, for example
+    `Image.open("/images/image-<uuid>")`. Pillow does not need a file extension.
+    A handle is not a URL. A signed https URL already present in a tool result can
+    still be downloaded, but those links expire; `/images/<handle>` keeps working
+    for any image still in the store.
+
     Args:
-        code (str): The code to run.
+        code (str): The code to run. Pass a stored image by writing its handle in the code; it is mounted at `/images/<handle>`.
         language (Literal["python", "js", "ts", "r", "java"]): The language of the code.
     Returns:
         str: The output of the code, the stdout, the stderr, and error traces (if any).
