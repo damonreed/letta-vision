@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from letta.constants import DEFAULT_MESSAGE_TOOL, DEFAULT_MESSAGE_TOOL_KWARG, REQUEST_HEARTBEAT_PARAM, TOOL_CALL_ID_MAX_LEN
 from letta.helpers.datetime_helpers import get_utc_time, is_utc_datetime
 from letta.helpers.json_helpers import json_dumps
+from letta.helpers.dsml_tool_calls import contains_dsml, is_dsml_only, strip_dsml_markup
 from letta.helpers.thinking_tags import split_reasoning_at_thinking_close
 from letta.local_llm.constants import INNER_THOUGHTS_KWARG, INNER_THOUGHTS_KWARG_VERTEX
 from letta.otel.tracing import trace_method
@@ -723,16 +724,21 @@ class Message(BaseMessage):
             otid = Message.generate_otid_from_id(self.id, current_message_count + len(messages))
 
             if isinstance(content_part, TextContent):
+                text = content_part.text or ""
+                if contains_dsml(text):
+                    text = strip_dsml_markup(text).strip()
                 if text_is_assistant_message:
                     # .content is assistant message
+                    if not text:
+                        continue
                     if messages and messages[-1].message_type == MessageType.assistant_message:
-                        messages[-1].content += content_part.text
+                        messages[-1].content += text
                     else:
                         messages.append(
                             AssistantMessage(
                                 id=self.id,
                                 date=self.created_at,
-                                content=content_part.text,
+                                content=text,
                                 name=self.name,
                                 otid=otid,
                                 sender_id=self.sender_id,
@@ -743,11 +749,13 @@ class Message(BaseMessage):
                         )
                 else:
                     # .content is COT
+                    if not text:
+                        continue
                     messages.append(
                         ReasoningMessage(
                             id=self.id,
                             date=self.created_at,
-                            reasoning=content_part.text,
+                            reasoning=text,
                             name=self.name,
                             otid=otid,
                             sender_id=self.sender_id,
@@ -861,6 +869,8 @@ class Message(BaseMessage):
     ) -> AssistantMessage:
         if self.content and len(self.content) == 1 and isinstance(self.content[0], TextContent):
             text_content = self.content[0].text
+            if contains_dsml(text_content):
+                text_content = strip_dsml_markup(text_content).strip()
         else:
             raise ValueError(f"Invalid assistant message (no text object on message): {self.content}")
 
@@ -1578,14 +1588,17 @@ class Message(BaseMessage):
             }
 
         elif self.role == "assistant" or self.role == "approval":
+            if isinstance(text_content, str) and contains_dsml(text_content):
+                text_content = strip_dsml_markup(text_content).strip() or None
             try:
                 assert self.tool_calls is not None or text_content is not None, vars(self)
             except AssertionError as e:
                 # relax check if this message only contains reasoning content
                 if self.content is not None and len(self.content) > 0:
-                    # Check if all non-empty content is reasoning-related
+                    # DSML-only text is tool markup, not a reply, so it does not count as content.
                     all_reasoning = all(
                         isinstance(c, (ReasoningContent, SummarizedReasoningContent, OmittedReasoningContent, RedactedReasoningContent))
+                        or (isinstance(c, TextContent) and (not (c.text or "").strip() or is_dsml_only(c.text)))
                         for c in self.content
                     )
                     if all_reasoning:
@@ -1806,10 +1819,15 @@ class Message(BaseMessage):
                             }
                         )
                     elif isinstance(content_part, TextContent):
+                        response_text = content_part.text
+                        if contains_dsml(response_text):
+                            response_text = strip_dsml_markup(response_text).strip()
+                        if not response_text:
+                            continue
                         message_dicts.append(
                             {
                                 "role": "assistant",
-                                "content": content_part.text,
+                                "content": response_text,
                             }
                         )
                     # else skip

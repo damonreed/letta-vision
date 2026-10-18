@@ -7,6 +7,7 @@ from letta.log import get_logger
 
 logger = get_logger(__name__)
 from letta.helpers.datetime_helpers import get_utc_timestamp_ns
+from letta.helpers.dsml_tool_calls import apply_dsml_recovery
 from letta.interfaces.anthropic_parallel_tool_call_streaming_interface import SimpleAnthropicStreamingInterface
 from letta.interfaces.gemini_streaming_interface import SimpleGeminiStreamingInterface
 from letta.interfaces.openai_streaming_interface import SimpleOpenAIResponsesStreamingInterface, SimpleOpenAIStreamingInterface
@@ -230,6 +231,11 @@ class SimpleLLMStreamAdapter(LettaLLMStreamAdapter):
             except Exception:
                 self.content = []
 
+            # DeepSeek V4.1 often emits tool calls as DSML text instead of tool_calls.
+            extra_markup = getattr(self.interface, "dsml_markup", "") or ""
+            self.content, self.tool_calls = apply_dsml_recovery(self.content, self.tool_calls, extra_markup=extra_markup)
+            self.tool_call = self.tool_calls[-1] if self.tool_calls else None
+
             # Extract usage statistics from the interface
             # Each interface implements get_usage_statistics() with provider-specific logic
             try:
@@ -259,6 +265,11 @@ class SimpleLLMStreamAdapter(LettaLLMStreamAdapter):
                     self._finish_reason = incomplete_reason
                 elif getattr(resp, "status", None) == "completed":
                     self._finish_reason = "stop"
+
+            if self._finish_reason is None:
+                streamed_reason = getattr(self.interface, "finish_reason", None)
+                if streamed_reason:
+                    self._finish_reason = streamed_reason
 
             if not stream_failed:
                 self._validate_streaming_completion()

@@ -40,6 +40,7 @@ from openai.types.responses.response_stream_event import ResponseStreamEvent
 
 from letta.constants import DEFAULT_MESSAGE_TOOL, DEFAULT_MESSAGE_TOOL_KWARG
 from letta.llm_api.error_utils import is_context_window_overflow_message
+from letta.helpers.dsml_tool_calls import DsmlStreamSplitter
 from letta.helpers.reasoning_details import merge_reasoning_details
 from letta.helpers.thinking_tags import ThinkingCloseSplitBuffer, split_reasoning_at_thinking_close
 from letta.llm_api.minimax_openai import extract_reasoning_from_message_data, strip_duplicate_thinking_from_assistant_text
@@ -645,15 +646,36 @@ class SimpleOpenAIStreamingInterface:
         self.emitted_hidden_reasoning = False  # Track if we've emitted hidden reasoning message
         # Some OpenRouter models (e.g. Aion) put </thinking> + reply inside reasoning_content
         self._thinking_close_split = ThinkingCloseSplitBuffer()
+        # DeepSeek V4.1 writes tool calls as DSML markup in content. Hold that out of the reply.
+        self._dsml = DsmlStreamSplitter()
+        self.finish_reason: str | None = None
         self._reasoning_details: list[dict] = []
 
         self.requires_approval_tools = requires_approval_tools
+
+    @property
+    def dsml_markup(self) -> str:
+        """Tool-call markup withheld from assistant text during the stream."""
+        return self._dsml.markup
 
     def get_content(self) -> list[TextContent | OmittedReasoningContent | ReasoningContent]:
         shown_omitted = False
         merged_messages = []
         reasoning_content = []
         concat_content_parts: list[str] = []
+
+        # A trailing "<" that never became a DSML marker is ordinary text
+        dsml_tail = self._dsml.flush_visible()
+        if dsml_tail:
+            self.content_messages.append(
+                AssistantMessage(
+                    id=self.letta_message_id,
+                    content=dsml_tail,
+                    date=datetime.now(timezone.utc).isoformat(),
+                    run_id=self.run_id,
+                    step_id=self.step_id,
+                )
+            )
 
         # Include any held-back suffix that never completed a close tag
         held = self._thinking_close_split.flush()
@@ -930,6 +952,9 @@ class SimpleOpenAIStreamingInterface:
         if chunk.choices:
             choice = chunk.choices[0]
             message_delta = choice.delta
+            finish_reason = getattr(choice, "finish_reason", None)
+            if finish_reason:
+                self.finish_reason = finish_reason
 
             if hasattr(chunk, "choices") and len(chunk.choices) > 0 and hasattr(chunk.choices[0], "delta"):
                 delta = chunk.choices[0].delta
@@ -958,6 +983,8 @@ class SimpleOpenAIStreamingInterface:
                         self.content_messages.append(reasoning_msg)
                         prev_message_type = reasoning_msg.message_type
                         yield reasoning_msg
+                    if response_part:
+                        response_part = self._dsml.feed(response_part)
                     if response_part:
                         if prev_message_type and prev_message_type != "assistant_message":
                             message_index += 1
@@ -992,19 +1019,21 @@ class SimpleOpenAIStreamingInterface:
                     self.content_messages.append(held_msg)
                     prev_message_type = held_msg.message_type
                     yield held_msg
-                if prev_message_type and prev_message_type != "assistant_message":
-                    message_index += 1
-                assistant_msg = AssistantMessage(
-                    id=self.letta_message_id,
-                    content=message_delta.content,
-                    date=datetime.now(timezone.utc).isoformat(),
-                    otid=Message.generate_otid_from_id(self.letta_message_id, message_index),
-                    run_id=self.run_id,
-                    step_id=self.step_id,
-                )
-                self.content_messages.append(assistant_msg)
-                prev_message_type = assistant_msg.message_type
-                yield assistant_msg
+                visible_content = self._dsml.feed(message_delta.content)
+                if visible_content:
+                    if prev_message_type and prev_message_type != "assistant_message":
+                        message_index += 1
+                    assistant_msg = AssistantMessage(
+                        id=self.letta_message_id,
+                        content=visible_content,
+                        date=datetime.now(timezone.utc).isoformat(),
+                        otid=Message.generate_otid_from_id(self.letta_message_id, message_index),
+                        run_id=self.run_id,
+                        step_id=self.step_id,
+                    )
+                    self.content_messages.append(assistant_msg)
+                    prev_message_type = assistant_msg.message_type
+                    yield assistant_msg
 
             if message_delta.tool_calls is not None and len(message_delta.tool_calls) > 0:
                 # Accumulate per-index tool call fragments and emit deltas

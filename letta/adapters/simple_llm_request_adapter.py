@@ -3,6 +3,7 @@ from typing import AsyncGenerator
 from letta.adapters.letta_llm_request_adapter import LettaLLMRequestAdapter
 from letta.errors import LLMError
 from letta.helpers.datetime_helpers import get_utc_timestamp_ns
+from letta.helpers.dsml_tool_calls import apply_dsml_recovery
 from letta.schemas.enums import LLMCallType
 from letta.schemas.letta_message import LettaMessage
 from letta.schemas.letta_message_content import OmittedReasoningContent, ReasoningContent, TextContent
@@ -100,9 +101,9 @@ class SimpleLLMRequestAdapter(LettaLLMRequestAdapter):
             # Temp workaround to consolidate parts to persist reasoning content, this should be integrated better
             self.content = self.reasoning_content + (self.content or [])
 
-        # Extract tool call
+        # Extract tool call. DeepSeek V4.1 may have left the call in content as DSML.
         tool_calls = self.chat_completions_response.choices[0].message.tool_calls or []
-        self.tool_calls = list(tool_calls)
+        self.content, self.tool_calls = apply_dsml_recovery(self.content, list(tool_calls))
         self.tool_call = self.tool_calls[0] if self.tool_calls else None
 
         # Extract logprobs if present
