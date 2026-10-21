@@ -126,6 +126,8 @@ Caption, description, and details are generated automatically from the pixels in
 All three text tiers are editable together in one image_edit_text call, and pixels + text are hybrid-searchable together (image_search finds by meaning or wording).
 Tool calls will import and present any available images from the call. Do not try to fetch URLs in the tool result. If the result contains an image part, those pixels are already visible — do not answer as if you only received the caption or URL.
 
+Referring to an image in a reply. Write the full handle (`image-<uuid>`) as plain text. The chat client highlights that handle, shows the picture on hover, and opens it on click. A shortened prefix does not link. Do not wrap the handle in markdown image syntax.
+
 Passing a stored image into `run_code`. The sandbox cannot see the object store. Write the handle in the code and open `/images/image-<uuid>` (for example `Image.open("/images/image-<uuid>")`). Before the code runs, the server loads that handle and writes the file there. Pillow reads it with no extension. A signed https URL already printed in a tool result can also be downloaded; those links expire, while `/images/<handle>` keeps working for any image still in the store. Do not paste base64 into the code, and do not regenerate an image just to obtain a URL.
 </image_operations>
 
